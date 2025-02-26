@@ -1,0 +1,98 @@
+name: Workflow for AWS ResCtrl Checker
+on: workflow_dispatch
+
+# Add permissions needed for OIDC authentication
+permissions:
+  id-token: write # Required for requesting the JWT
+
+jobs:
+  start-runner:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    env:
+      ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
+    outputs:
+      label: ${{ steps.start-ec2-runner.outputs.label }}
+      ec2-instance-id: ${{ steps.start-ec2-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: github-runner-session
+
+      - name: Start EC2 runner
+        id: start-ec2-runner
+        uses: machulav/ec2-github-runner@v2.3.8
+        with:
+          mode: start
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          ec2-image-id: ami-0884d2865dbe9de4b  # Ubuntu 22.04 LTS in us-east-2
+          ec2-instance-type: m7i.metal-24xl
+          market-type: spot
+          subnet-id: ${{ secrets.AWS_SUBNET_ID }}
+          security-group-id: ${{ secrets.AWS_SECURITY_GROUP_ID }}
+          pre-runner-script: |
+            sudo yum update -y && \
+            sudo yum install docker git libicu -y
+            sudo systemctl enable docker
+          aws-resource-tags: >
+            [
+              {"Key": "Name", "Value": "github-runner"},
+              {"Key": "Repository", "Value": "${{ github.repository }}"},
+              {"Key": "Workflow", "Value": "${{ github.workflow }}"},
+              {"Key": "RunId", "Value": "${{ github.run_id }}"},
+              {"Key": "RunNumber", "Value": "${{ github.run_number }}"},
+              {"Key": "SHA", "Value": "${{ github.sha }}"},
+              {"Key": "Branch", "Value": "${{ github.ref_name }}"},
+              {"Key": "Actor", "Value": "${{ github.actor }}"}
+            ]
+
+  do-job:
+    needs: start-runner
+    runs-on: ${{ needs.start-runner.outputs.label }}
+    steps:
+      - name: Test runner
+        run: |
+          echo "Hello from EC2 runner!"
+      - name: Create home directory
+        run: |
+          mkdir -p /home/runner
+          echo "HOME=/home/runner" >> $GITHUB_ENV
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          ref: feature/#9-resctrl_support_checker
+      - name: Install `go`
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.9"
+      - name: Change directory to pkg/checker
+        run: | 
+          cd pkg/checker
+          pwd
+          go mod tidy
+          go build main.go
+          go run main.go
+
+  stop-runner:
+    name: Stop EC2 runner
+    needs: [start-runner, do-job]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous jobs fail
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+          role-session-name: github-runner-session
+
+      - name: Stop EC2 runner
+        uses: machulav/ec2-github-runner@v2.3.8
+        with:
+          mode: stop
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          label: ${{ needs.start-runner.outputs.label }}
+          ec2-instance-id: ${{ needs.start-runner.outputs.ec2-instance-id }}
