@@ -1,0 +1,174 @@
+# Copyright 2022 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- base
+
+# Patch all deployments with resource limits
+patches:
+- target:
+    kind: Deployment
+    name: loadgenerator
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/env
+      value:
+        - name: FRONTEND_ADDR
+          value: "frontend:80"
+        - name: USERS
+          value: "400000"
+        - name: RATE
+          value: "1000"
+
+- target:
+    kind: Deployment
+    name: adservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "3200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: frontend
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: productcatalogservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: cartservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: recommendationservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: shippingservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: checkoutservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: paymentservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: emailservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
+
+- target:
+    kind: Deployment
+    name: currencyservice
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/resources
+      value:
+        requests:
+          cpu: "2200m"
+          memory: "5Gi"
+        limits:
+          cpu: "3200m"
+          memory: "7Gi"
