@@ -1,0 +1,949 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://unvariance.github.io/collector/noise-generators/">
+      
+      
+        <link rel="prev" href="../devlog/">
+      
+      
+        <link rel="next" href="../s3-testing/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.12">
+    
+    
+      
+        <title>Synthetic Noise Generators - Unvariance collector docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.2afb09e1.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#synthetic-noise-generators" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Unvariance collector docs" class="md-header__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Unvariance collector docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Synthetic Noise Generators
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Unvariance collector docs" class="md-nav__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Unvariance collector docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Noisy Neighbor Collector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Collector Telemetry Strategy
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RMID Tracking Design
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Devlog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Synthetic Noise Generators
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    Synthetic Noise Generators
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conclusion
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#top-contenders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Top contenders
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Top contenders">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#intel-memory-latency-checker-intel-mlc" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intel Memory Latency Checker (Intel MLC)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pmbw-github" class="md-nav__link">
+    <span class="md-ellipsis">
+      pmbw (GitHub)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#also-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      Also considered
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Also considered">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sysbench" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sysbench
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      STREAM
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mmatyasbandwidth-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      mmatyas/bandwidth-benchmark
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cachebench" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cachebench
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ibench" class="md-nav__link">
+    <span class="md-ellipsis">
+      iBench
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s3-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    S3 Testing for Memory Collector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_1" id="__nav_7_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Decisions
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_1">
+            <span class="md-nav__icon md-icon"></span>
+            Decisions
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2024-12-21-container-notifications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2024-12-21: Notifications for container lifecycle events
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-01-02-aws-test-runners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-01-02: AWS test runners
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-02-18-getting-cmt-measurements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-02-18: Collecting Intel CMT Measurements
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Ci
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            Ci
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/aws-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AWS Setup for CI Testing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#conclusion" class="md-nav__link">
+    <span class="md-ellipsis">
+      Conclusion
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#top-contenders" class="md-nav__link">
+    <span class="md-ellipsis">
+      Top contenders
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Top contenders">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#intel-memory-latency-checker-intel-mlc" class="md-nav__link">
+    <span class="md-ellipsis">
+      Intel Memory Latency Checker (Intel MLC)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pmbw-github" class="md-nav__link">
+    <span class="md-ellipsis">
+      pmbw (GitHub)
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#also-considered" class="md-nav__link">
+    <span class="md-ellipsis">
+      Also considered
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Also considered">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#sysbench" class="md-nav__link">
+    <span class="md-ellipsis">
+      Sysbench
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stream" class="md-nav__link">
+    <span class="md-ellipsis">
+      STREAM
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mmatyasbandwidth-benchmark" class="md-nav__link">
+    <span class="md-ellipsis">
+      mmatyas/bandwidth-benchmark
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cachebench" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cachebench
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ibench" class="md-nav__link">
+    <span class="md-ellipsis">
+      iBench
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="synthetic-noise-generators">Synthetic Noise Generators</h1>
+<p>Synthetic noise generators are programs that cause noisy-neighbor stress on shared resources. In our case, this would be memory bandwidth and cache.</p>
+<p>Noise generators can be used for:
+1. Testing that metrics the collector outputs are correct
+2. When used in a cluster running a multi-service workload like <a href="https://github.com/GoogleCloudPlatform/microservices-demo">microservices-demo</a>, shows how the services behave under noisy neighbor.
+3. Can potentially be used in staging environments to get an indication how a company's real workload would behave under noisy neighbor.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Intel MLC is the best fit, given its wide configurability via the command line, and extensive documentation. The shortcoming is that it is not open source. Installing it requires accepting the license, which might be hard automatically from a CI system, so might require some investment in automation.</p>
+<h2 id="top-contenders">Top contenders</h2>
+<h3 id="intel-memory-latency-checker-intel-mlc"><a href="https://www.intel.com/content/www/us/en/developer/articles/tool/intelr-memory-latency-checker.html">Intel Memory Latency Checker (Intel MLC)</a></h3>
+<p>Binary distribution (does not seem to be OSS). Is able to gather multiple baselines:
+- Idle latency and maximum bandwidth, for each source and destination NUMA node
+- Peak memory bandwidth at different read-write ratios
+- Latencies under different bandwidth loads</p>
+<p>The binary also disables prefetches for the duration of the run for more accurate results.</p>
+<ul>
+<li>It is possible to select the delay between memory accesses in the bandwidth generators (<code>-d</code> parameter)</li>
+<li>Can specify array sizes for bandwidth generation (<code>-b</code>)</li>
+<li>A latency-measurement thread generates dependent accesses, it might be reusable to measure a histogram of latencies on a live system (without generating bandwidth noise), would need further investigation. The idle_latency mode might do exactly that.</li>
+<li>Control what CPUs allocate memory, and where latency measurements run. (<code>-i</code>, <code>-j</code>)</li>
+<li>Can specify which CPUs are used for bandwidth measurement (<code>-k</code>)</li>
+<li>Ensures entire CPUs are not put in lower frequency because all cores are idle by 100% utilizing a core on each CPU (<code>-p</code>)</li>
+<li>In AVX512, can request explicit flushing of cache lines to DRAM (<code>-P</code>, <code>-Q</code>)</li>
+<li>There is an L3 bandwidth measurement mode that tests just the bandwidth to read from L3 (<code>-u</code>)</li>
+<li>Controlling random vs sequential access, both in latency-measurement threads and bandwidth-generation threads</li>
+<li>Read to write ratio (<code>-W</code>, <code>-R</code>)</li>
+</ul>
+<h3 id="pmbw-github"><a href="https://panthema.net/2013/pmbw/">pmbw</a> (<a href="https://github.com/bingmann/pmbw?tab=readme-ov-file">GitHub</a>)</h3>
+<p>A C/C++ noise generator for cache and RAM, with the access loops coded in assembly. Tests have several configuration options, to achieve different stress patterns:
+- Sequential scanning versus walking permutations
+- Read or Write
+- Number of bits transferred per instruction, from 16 up to 256 via SSE/MMX/AVX
+- Accessing components using pointers versus index-accessing arrays
+- Regular tests, or tests with unrolled loop (I assume, to stress the instruction cache or to avoid branches on every iteration)</p>
+<p>Appears relatively easy to compile, since it only requires the <code>pthreads</code> and <code>rt</code> libraries.</p>
+<h2 id="also-considered">Also considered</h2>
+<h3 id="sysbench"><a href="https://github.com/akopytov/sysbench">Sysbench</a></h3>
+<p>Mentions it is mostly used for database benchmarks, but its README mentions <code>memory</code>, a memory access benchmark. The README also documents general purpose command line parameters like the number of threads and warmup time, but a quick scan did not generate more documentation for the <code>memory</code> benchmarks.</p>
+<p>We found it less likely to be a fit, given its database focus and lack of documentation for the memory benchmark.</p>
+<h3 id="stream"><a href="http://www.cs.virginia.edu/stream/">STREAM</a></h3>
+<p>Mature package, earliest submissions from 1991 (latest update to website benchmark 2017). Seems to be a single C and single FORTRAN source file, with a Makefile. There is very little control over the measured pattern and results are very concise: main tuning point is the size of array being measured <code>STREAM_ARRAY_SIZE</code>, and results are printed with:</p>
+<pre><code>    printf(&quot;Function    Best Rate MB/s  Avg time     Min time     Max time\n&quot;);
+</code></pre>
+<p>A <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/optimizing-memory-bandwidth-on-stream-triad.html">recent Intel mention</a> shows how to compile an optimized version of STREAM.</p>
+<p>STREAM was used in the <a href="https://dl.acm.org/doi/10.1145/3545008.3545064">Themis</a> paper.</p>
+<p>We found it less likely to be a fit, given its lack of control over the stress pattern and results.</p>
+<h3 id="mmatyasbandwidth-benchmark"><a href="https://github.com/mmatyas/bandwidth-benchmark">mmatyas/bandwidth-benchmark</a></h3>
+<p>This is a memory and network bandwidth benchmark. The source code indicates development 2005-2016, with many versions, but there is little activity on GitHub. Supports SSE/AVX and random access. Earlier tests run 5 second tests for a total of 35 minutes. CSV output.</p>
+<p>This could be a fit, but has less documentation than the alternatives.</p>
+<h3 id="cachebench"><a href="https://github.com/elijah/cachebench/tree/master">Cachebench</a></h3>
+<p>While used in <a href="https://ieeexplore.ieee.org/document/9355282/">Alita</a> as LLC polluter, the program seems to have been developed in 1998 at University of Tennessee at Knoxville and the repo has not received additional contributions since. It has a README and pdf guide.</p>
+<h3 id="ibench"><a href="https://github.com/stanford-mast/iBench">iBench</a></h3>
+<p>Appears to have been used in multiple papers <a href="http://csl.stanford.edu/~christos/publications/2013.paragon.asplos.pdf">Paragon</a>, <a href="https://dl.acm.org/doi/pdf/10.1145/3297858.3304004">Seer</a>, <a href="https://www.csl.cornell.edu/~delimitrou/papers/2014.asplos.quasar.pdf">Quasar</a>, <a href="https://www.usenix.org/system/files/osdi20-qiu.pdf">FIRM</a> (alongside <code>pmbw</code>), and <a href="https://dl.acm.org/doi/pdf/10.1145/3297858.3304005">PARTIES</a>. It is described in a <a href="http://csl.stanford.edu/~christos/publications/2013.ibench.iiswc.pdf">paper</a>.</p>
+<p>The repo appears to contain just 7 of the 15 stressors described in the iBench paper. Its memory bandwidth stressor seems to be less extensive than the memory access functions in <code>pmbw</code> (e.g., 860 lines of code in <a href="https://github.com/bingmann/pmbw/blob/master/funcs_x86_64.h">funcs_x86_64.g</a> vs. 87 lines in <a href="https://github.com/stanford-mast/iBench/blob/master/src/memBw.c">memBw.c</a>). The memory bandwidth benchmark only receives the length of the benchmark as a parameter, and it is unclear how to adjust the stress intensity.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.f8cc74c7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.c8b220af.min.js"></script>
+      
+    
+  </body>
+</html>
