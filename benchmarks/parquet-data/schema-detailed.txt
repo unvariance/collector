@@ -1,0 +1,1701 @@
+Metadata for file: collector-data/collector-parquet.parquet
+
+version: 1
+num of rows: 9469980
+created by: parquet-rs version 55.0.0
+metadata:
+  ARROW:schema: /////9gBAAAQAAAAAAAKAAwACgAJAAQACgAAABAAAAAAAQQACAAIAAAABAAIAAAABAAAAAcAAABsAQAALAEAAPQAAACwAAAAdAAAADwAAAAEAAAAwP7//xAAAAAYAAAAAAAAAhQAAACw/v//QAAAAAAAAAEAAAAACAAAAGR1cmF0aW9uAAAAAPT+//8QAAAAGAAAAAAAAAIUAAAA5P7//0AAAAAAAAABAAAAAAoAAABsbGNfbWlzc2VzAAAo////EAAAABgAAAAAAAACFAAAABj///9AAAAAAAAAAQAAAAAMAAAAaW5zdHJ1Y3Rpb25zAAAAAGD///8QAAAAGAAAAAAAAAIUAAAAUP///0AAAAAAAAABAAAAAAYAAABjeWNsZXMAABAAFAAQAA4ADwAEAAAACAAQAAAAGAAAAAwAAAAAAAEFEAAAAAAAAAAEAAQABAAAAAwAAABwcm9jZXNzX25hbWUAAAAA1P///xAAAAAYAAAAAAAAAhQAAADE////IAAAAAAAAAEAAAAAAwAAAHBpZAAQABQAEAAAAA8ABAAAAAgAEAAAABgAAAAgAAAAAAAAAhwAAAAIAAwABAALAAgAAABAAAAAAAAAAQAAAAAKAAAAc3RhcnRfdGltZQAA
+message arrow_schema {
+  REQUIRED INT64 start_time;
+  REQUIRED INT32 pid;
+  OPTIONAL BYTE_ARRAY process_name (STRING);
+  REQUIRED INT64 cycles;
+  REQUIRED INT64 instructions;
+  REQUIRED INT64 llc_misses;
+  REQUIRED INT64 duration;
+}
+
+
+num of row groups: 10
+row groups:
+
+row group 0:
+--------------------------------------------------------------------------------
+total byte size: 31027673
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 984876
+total uncompressed size (in bytes): 1179321
+data page offset: 490399
+index page offset: N/A
+dictionary page offset: 4
+statistics: {min: 159862000000, max: 241043000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190188910
+offset index length: 658
+column index offset: 190116484
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1309993
+total uncompressed size (in bytes): 1315506
+data page offset: 987590
+index page offset: N/A
+dictionary page offset: 984880
+statistics: {min: 0, max: 25269, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190189568
+offset index length: 741
+column index offset: 190117559
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 907898
+total uncompressed size (in bytes): 950068
+data page offset: 2295648
+index page offset: N/A
+dictionary page offset: 2294873
+statistics: {min: [40, 115, 112, 97, 119, 110, 41], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 122978, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190190309
+offset index length: 905
+column index offset: 190118210
+column index length: 1971
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5451403
+total uncompressed size (in bytes): 8564737
+data page offset: 3855414
+index page offset: N/A
+dictionary page offset: 3202771
+statistics: {min: 7755, max: 117685084, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190191214
+offset index length: 757
+column index offset: 190120181
+column index length: 1095
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5345716
+total uncompressed size (in bytes): 8393405
+data page offset: 9319092
+index page offset: N/A
+dictionary page offset: 8654174
+statistics: {min: 4545, max: 97646389, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190191971
+offset index length: 744
+column index offset: 190121276
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2163863
+total uncompressed size (in bytes): 2309509
+data page offset: 14163683
+index page offset: N/A
+dictionary page offset: 13999890
+statistics: {min: 0, max: 517993, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190192715
+offset index length: 744
+column index offset: 190122351
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5195117
+total uncompressed size (in bytes): 8315127
+data page offset: 16816434
+index page offset: N/A
+dictionary page offset: 16163753
+statistics: {min: 5486, max: 131427214, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190193459
+offset index length: 744
+column index offset: 190123426
+column index length: 1075
+
+row group 1:
+--------------------------------------------------------------------------------
+total byte size: 30602954
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 393072
+total uncompressed size (in bytes): 475870
+data page offset: 21616104
+index page offset: N/A
+dictionary page offset: 21358870
+statistics: {min: 241043000000, max: 283665000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190194203
+offset index length: 691
+column index offset: 190124501
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1173400
+total uncompressed size (in bytes): 1173080
+data page offset: 21753366
+index page offset: N/A
+dictionary page offset: 21751942
+statistics: {min: 0, max: 26042, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190194894
+offset index length: 744
+column index offset: 190125576
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 842974
+total uncompressed size (in bytes): 884918
+data page offset: 22925880
+index page offset: N/A
+dictionary page offset: 22925342
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 68390, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190195638
+offset index length: 905
+column index offset: 190126227
+column index length: 1975
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5548369
+total uncompressed size (in bytes): 8617955
+data page offset: 24431908
+index page offset: N/A
+dictionary page offset: 23768316
+statistics: {min: 8099, max: 116980356, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190196543
+offset index length: 744
+column index offset: 190128202
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5492493
+total uncompressed size (in bytes): 8576613
+data page offset: 29980877
+index page offset: N/A
+dictionary page offset: 29316685
+statistics: {min: 4652, max: 102556633, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190197287
+offset index length: 758
+column index offset: 190129277
+column index length: 1095
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2227171
+total uncompressed size (in bytes): 2386088
+data page offset: 34988828
+index page offset: N/A
+dictionary page offset: 34809178
+statistics: {min: 0, max: 926582, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190198045
+offset index length: 744
+column index offset: 190130372
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5342950
+total uncompressed size (in bytes): 8488430
+data page offset: 37693920
+index page offset: N/A
+dictionary page offset: 37036349
+statistics: {min: 5408, max: 141196020, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190198789
+offset index length: 757
+column index offset: 190131447
+column index length: 1095
+
+row group 2:
+--------------------------------------------------------------------------------
+total byte size: 30553442
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 307049
+total uncompressed size (in bytes): 372288
+data page offset: 42582351
+index page offset: N/A
+dictionary page offset: 42379299
+statistics: {min: 283665000000, max: 317322000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190199546
+offset index length: 691
+column index offset: 190132542
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1183455
+total uncompressed size (in bytes): 1183133
+data page offset: 42687786
+index page offset: N/A
+dictionary page offset: 42686348
+statistics: {min: 0, max: 27957, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190200237
+offset index length: 744
+column index offset: 190133617
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 841013
+total uncompressed size (in bytes): 882180
+data page offset: 43870367
+index page offset: N/A
+dictionary page offset: 43869803
+statistics: {min: [40, 119, 110, 108, 111, 97, 100, 101, 114, 41], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 56578, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190200981
+offset index length: 905
+column index offset: 190134268
+column index length: 1976
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5559298
+total uncompressed size (in bytes): 8626795
+data page offset: 45375511
+index page offset: N/A
+dictionary page offset: 44710816
+statistics: {min: 8976, max: 117361565, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190201886
+offset index length: 744
+column index offset: 190136244
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5512870
+total uncompressed size (in bytes): 8590605
+data page offset: 50933298
+index page offset: N/A
+dictionary page offset: 50270114
+statistics: {min: 4550, max: 111522576, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190202630
+offset index length: 757
+column index offset: 190137319
+column index length: 1095
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2224645
+total uncompressed size (in bytes): 2383359
+data page offset: 55962557
+index page offset: N/A
+dictionary page offset: 55782984
+statistics: {min: 0, max: 1173508, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190203387
+offset index length: 744
+column index offset: 190138414
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5351967
+total uncompressed size (in bytes): 8515082
+data page offset: 58663864
+index page offset: N/A
+dictionary page offset: 58007629
+statistics: {min: 5700, max: 108620095, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190204131
+offset index length: 744
+column index offset: 190139489
+column index length: 1075
+
+row group 3:
+--------------------------------------------------------------------------------
+total byte size: 30492577
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 255153
+total uncompressed size (in bytes): 309272
+data page offset: 63528136
+index page offset: N/A
+dictionary page offset: 63359596
+statistics: {min: 317322000000, max: 345244000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190204875
+offset index length: 691
+column index offset: 190140564
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1170906
+total uncompressed size (in bytes): 1170584
+data page offset: 63616195
+index page offset: N/A
+dictionary page offset: 63614749
+statistics: {min: 0, max: 28864, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190205566
+offset index length: 744
+column index offset: 190141639
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 840423
+total uncompressed size (in bytes): 878005
+data page offset: 64786189
+index page offset: N/A
+dictionary page offset: 64785655
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 49825, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190206310
+offset index length: 905
+column index offset: 190142290
+column index length: 1963
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5573970
+total uncompressed size (in bytes): 8631159
+data page offset: 66291306
+index page offset: N/A
+dictionary page offset: 65626078
+statistics: {min: 8525, max: 89880284, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190207215
+offset index length: 744
+column index offset: 190144253
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5529938
+total uncompressed size (in bytes): 8610068
+data page offset: 71862795
+index page offset: N/A
+dictionary page offset: 71200048
+statistics: {min: 4652, max: 93355055, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190207959
+offset index length: 744
+column index offset: 190145328
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2217971
+total uncompressed size (in bytes): 2374023
+data page offset: 76905477
+index page offset: N/A
+dictionary page offset: 76729986
+statistics: {min: 1, max: 418800, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190208703
+offset index length: 744
+column index offset: 190146403
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5371245
+total uncompressed size (in bytes): 8519466
+data page offset: 79603237
+index page offset: N/A
+dictionary page offset: 78947957
+statistics: {min: 5566, max: 122851844, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190209447
+offset index length: 744
+column index offset: 190147478
+column index length: 1075
+
+row group 4:
+--------------------------------------------------------------------------------
+total byte size: 30490596
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 227545
+total uncompressed size (in bytes): 275669
+data page offset: 84469209
+index page offset: N/A
+dictionary page offset: 84319202
+statistics: {min: 345244000000, max: 370098000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190210191
+offset index length: 691
+column index offset: 190148553
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1176007
+total uncompressed size (in bytes): 1175685
+data page offset: 84548261
+index page offset: N/A
+dictionary page offset: 84546747
+statistics: {min: 0, max: 32175, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190210882
+offset index length: 744
+column index offset: 190149628
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 839468
+total uncompressed size (in bytes): 876099
+data page offset: 85723287
+index page offset: N/A
+dictionary page offset: 85722754
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 46436, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190211626
+offset index length: 905
+column index offset: 190150279
+column index length: 1967
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5576446
+total uncompressed size (in bytes): 8636428
+data page offset: 87228230
+index page offset: N/A
+dictionary page offset: 86562222
+statistics: {min: 8535, max: 86762997, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190212531
+offset index length: 744
+column index offset: 190152246
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5540961
+total uncompressed size (in bytes): 8618364
+data page offset: 92801353
+index page offset: N/A
+dictionary page offset: 92138668
+statistics: {min: 4652, max: 90489282, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190213275
+offset index length: 744
+column index offset: 190153321
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2220221
+total uncompressed size (in bytes): 2375857
+data page offset: 97854824
+index page offset: N/A
+dictionary page offset: 97679629
+statistics: {min: 1, max: 355764, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190214019
+offset index length: 744
+column index offset: 190154396
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5361718
+total uncompressed size (in bytes): 8532494
+data page offset: 100555149
+index page offset: N/A
+dictionary page offset: 99899850
+statistics: {min: 5586, max: 105156040, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190214763
+offset index length: 744
+column index offset: 190155471
+column index length: 1075
+
+row group 5:
+--------------------------------------------------------------------------------
+total byte size: 30486652
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 209237
+total uncompressed size (in bytes): 253383
+data page offset: 105399201
+index page offset: N/A
+dictionary page offset: 105261568
+statistics: {min: 370098000000, max: 392902000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190215507
+offset index length: 691
+column index offset: 190156546
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1180839
+total uncompressed size (in bytes): 1180517
+data page offset: 105472171
+index page offset: N/A
+dictionary page offset: 105470805
+statistics: {min: 0, max: 35003, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190216198
+offset index length: 744
+column index offset: 190157621
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 841294
+total uncompressed size (in bytes): 873947
+data page offset: 106652183
+index page offset: N/A
+dictionary page offset: 106651644
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 45296, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190216942
+offset index length: 905
+column index offset: 190158272
+column index length: 1955
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5592364
+total uncompressed size (in bytes): 8637486
+data page offset: 108159620
+index page offset: N/A
+dictionary page offset: 107492938
+statistics: {min: 10786, max: 170058350, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190217847
+offset index length: 744
+column index offset: 190160227
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5537581
+total uncompressed size (in bytes): 8623233
+data page offset: 113747805
+index page offset: N/A
+dictionary page offset: 113085302
+statistics: {min: 4649, max: 170432314, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190218591
+offset index length: 744
+column index offset: 190161302
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2215058
+total uncompressed size (in bytes): 2369073
+data page offset: 118795459
+index page offset: N/A
+dictionary page offset: 118622883
+statistics: {min: 1, max: 446764, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190219335
+offset index length: 744
+column index offset: 190162377
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5417836
+total uncompressed size (in bytes): 8549013
+data page offset: 121491804
+index page offset: N/A
+dictionary page offset: 120837941
+statistics: {min: 6432, max: 100288115, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190220079
+offset index length: 744
+column index offset: 190163452
+column index length: 1075
+
+row group 6:
+--------------------------------------------------------------------------------
+total byte size: 30483787
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 206937
+total uncompressed size (in bytes): 250561
+data page offset: 126391804
+index page offset: N/A
+dictionary page offset: 126255777
+statistics: {min: 392902000000, max: 415449000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190220823
+offset index length: 691
+column index offset: 190164527
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1155763
+total uncompressed size (in bytes): 1155441
+data page offset: 126464032
+index page offset: N/A
+dictionary page offset: 126462714
+statistics: {min: 0, max: 33747, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190221514
+offset index length: 744
+column index offset: 190165602
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 843831
+total uncompressed size (in bytes): 876303
+data page offset: 127618966
+index page offset: N/A
+dictionary page offset: 127618477
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 45176, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190222258
+offset index length: 905
+column index offset: 190166253
+column index length: 1969
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5596997
+total uncompressed size (in bytes): 8642836
+data page offset: 129129069
+index page offset: N/A
+dictionary page offset: 128462308
+statistics: {min: 8457, max: 87182907, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190223163
+offset index length: 744
+column index offset: 190168222
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5530372
+total uncompressed size (in bytes): 8618568
+data page offset: 134720884
+index page offset: N/A
+dictionary page offset: 134059305
+statistics: {min: 4550, max: 79016058, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190223907
+offset index length: 797
+column index offset: 190169297
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2207058
+total uncompressed size (in bytes): 2358692
+data page offset: 139759258
+index page offset: N/A
+dictionary page offset: 139589677
+statistics: {min: 1, max: 511085, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190224704
+offset index length: 797
+column index offset: 190170372
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5448689
+total uncompressed size (in bytes): 8581386
+data page offset: 142452111
+index page offset: N/A
+dictionary page offset: 141796735
+statistics: {min: 5615, max: 62562868, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190225501
+offset index length: 812
+column index offset: 190171447
+column index length: 1095
+
+row group 7:
+--------------------------------------------------------------------------------
+total byte size: 30432232
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 202707
+total uncompressed size (in bytes): 245430
+data page offset: 147378664
+index page offset: N/A
+dictionary page offset: 147245424
+statistics: {min: 415449000000, max: 437527000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190226313
+offset index length: 744
+column index offset: 190172542
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1183551
+total uncompressed size (in bytes): 1183228
+data page offset: 147449674
+index page offset: N/A
+dictionary page offset: 147448131
+statistics: {min: 0, max: 39475, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190227057
+offset index length: 797
+column index offset: 190173617
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 843639
+total uncompressed size (in bytes): 875444
+data page offset: 148632222
+index page offset: N/A
+dictionary page offset: 148631682
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 76, 105, 115, 116, 101, 110, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 44698, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190227854
+offset index length: 958
+column index offset: 190174268
+column index length: 1959
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5587359
+total uncompressed size (in bytes): 8637274
+data page offset: 150139809
+index page offset: N/A
+dictionary page offset: 149475321
+statistics: {min: 8426, max: 128788968, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190228812
+offset index length: 797
+column index offset: 190176227
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5532393
+total uncompressed size (in bytes): 8620363
+data page offset: 155724520
+index page offset: N/A
+dictionary page offset: 155062680
+statistics: {min: 4581, max: 110833861, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190229609
+offset index length: 797
+column index offset: 190177302
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2199923
+total uncompressed size (in bytes): 2350283
+data page offset: 160762472
+index page offset: N/A
+dictionary page offset: 160595073
+statistics: {min: 1, max: 449208, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190230406
+offset index length: 797
+column index offset: 190178377
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5414513
+total uncompressed size (in bytes): 8520210
+data page offset: 163448389
+index page offset: N/A
+dictionary page offset: 162794996
+statistics: {min: 5556, max: 47437006, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190231203
+offset index length: 797
+column index offset: 190179452
+column index length: 1075
+
+row group 8:
+--------------------------------------------------------------------------------
+total byte size: 30527105
+num of rows: 1048576
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 213774
+total uncompressed size (in bytes): 258866
+data page offset: 168350052
+index page offset: N/A
+dictionary page offset: 168209509
+statistics: {min: 437527000000, max: 460827000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190232000
+offset index length: 744
+column index offset: 190180527
+column index length: 1075
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 1176029
+total uncompressed size (in bytes): 1175708
+data page offset: 168424808
+index page offset: N/A
+dictionary page offset: 168423283
+statistics: {min: 0, max: 42988, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190232744
+offset index length: 797
+column index offset: 190181602
+column index length: 651
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 844118
+total uncompressed size (in bytes): 876867
+data page offset: 169599924
+index page offset: N/A
+dictionary page offset: 169599312
+statistics: {min: [46, 78, 69, 84, 32, 84, 80, 32, 87, 111, 114, 107, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 45357, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190233541
+offset index length: 958
+column index offset: 190182253
+column index length: 1962
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5602141
+total uncompressed size (in bytes): 8641970
+data page offset: 171109799
+index page offset: N/A
+dictionary page offset: 170443430
+statistics: {min: 8313, max: 97109624, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190234499
+offset index length: 797
+column index offset: 190184215
+column index length: 1075
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5548456
+total uncompressed size (in bytes): 8618928
+data page offset: 176707088
+index page offset: N/A
+dictionary page offset: 176045571
+statistics: {min: 4652, max: 90867157, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190235296
+offset index length: 797
+column index offset: 190185290
+column index length: 1075
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 2216888
+total uncompressed size (in bytes): 2374725
+data page offset: 181770861
+index page offset: N/A
+dictionary page offset: 181594027
+statistics: {min: 1, max: 295743, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190236093
+offset index length: 797
+column index offset: 190186365
+column index length: 1075
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 1048576
+compression: SNAPPY
+total compressed size (in bytes): 5439030
+total uncompressed size (in bytes): 8580041
+data page offset: 184465972
+index page offset: N/A
+dictionary page offset: 183810915
+statistics: {min: 5553, max: 59630879, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190236890
+offset index length: 812
+column index offset: 190187440
+column index length: 1095
+
+row group 9:
+--------------------------------------------------------------------------------
+total byte size: 1215523
+num of rows: 32796
+
+num of columns: 7
+columns: 
+
+column 0:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "start_time"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 6901
+total uncompressed size (in bytes): 8339
+data page offset: 189254484
+index page offset: N/A
+dictionary page offset: 189249945
+statistics: {min: 460827000000, max: 461572000000, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237702
+offset index length: 29
+column index offset: 190188535
+column index length: 51
+
+
+column 1:
+--------------------------------------------------------------------------------
+column type: INT32
+column path: "pid"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 38203
+total uncompressed size (in bytes): 38187
+data page offset: 189257988
+index page offset: N/A
+dictionary page offset: 189256846
+statistics: {min: 0, max: 43251, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237731
+offset index length: 31
+column index offset: 190188586
+column index length: 35
+
+
+column 2:
+--------------------------------------------------------------------------------
+column type: BYTE_ARRAY
+column path: "process_name"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 24636
+total uncompressed size (in bytes): 25561
+data page offset: 189295482
+index page offset: N/A
+dictionary page offset: 189295049
+statistics: {min: [82, 117, 110, 110, 101, 114, 46, 87, 111, 114, 107, 101, 114], max: [118, 97, 108, 107, 101, 121, 45, 115, 101, 114, 118, 101, 114], distinct_count: N/A, null_count: 1495, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237762
+offset index length: 39
+column index offset: 190188621
+column index length: 85
+
+
+column 3:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "cycles"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 228125
+total uncompressed size (in bytes): 322502
+data page offset: 189486132
+index page offset: N/A
+dictionary page offset: 189319685
+statistics: {min: 13604, max: 48318144, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237801
+offset index length: 31
+column index offset: 190188706
+column index length: 51
+
+
+column 4:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "instructions"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 224934
+total uncompressed size (in bytes): 320374
+data page offset: 189711066
+index page offset: N/A
+dictionary page offset: 189547810
+statistics: {min: 4659, max: 46677130, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237832
+offset index length: 31
+column index offset: 190188757
+column index length: 51
+
+
+column 5:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "llc_misses"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 122057
+total uncompressed size (in bytes): 182698
+data page offset: 189837223
+index page offset: N/A
+dictionary page offset: 189772744
+statistics: {min: 4, max: 135744, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237863
+offset index length: 31
+column index offset: 190188808
+column index length: 51
+
+
+column 6:
+--------------------------------------------------------------------------------
+column type: INT64
+column path: "duration"
+encodings: PLAIN RLE RLE_DICTIONARY
+file path: N/A
+file offset: 0
+num of values: 32796
+compression: SNAPPY
+total compressed size (in bytes): 221683
+total uncompressed size (in bytes): 317862
+data page offset: 190054806
+index page offset: N/A
+dictionary page offset: 189894801
+statistics: {min: 7026, max: 24018561, distinct_count: N/A, null_count: 0, min_max_deprecated: false, max_value_exact: true, min_value_exact: true}
+bloom filter offset: N/A
+bloom filter length: N/A
+offset index offset: 190237894
+offset index length: 31
+column index offset: 190188859
+column index length: 51
+
