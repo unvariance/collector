@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use env_logger;
-use log::info;
+use log::{debug, error, info};
 use object_store::ObjectStore;
 use timeslot::MinTracker;
 use tokio::signal::unix::{signal, SignalKind};
@@ -208,24 +208,24 @@ impl PerfEventProcessor {
         };
 
         // Timer migration detected - this is a critical error that invalidates measurements
-        eprintln!("CRITICAL ERROR: Timer migration detected!");
-        eprintln!(
-            "Expected CPU: {}, Actual CPU: {}",
+        error!(
+            r#"CRITICAL ERROR: Timer migration detected!
+Expected CPU: {}, Actual CPU: {}
+Timer pinning failed - measurements are no longer reliable.
+This indicates either:
+  1. Kernel version doesn't support BPF timer CPU pinning (requires 6.7+)
+  2. Legacy fallback timer migration control failed
+  This case should never happen, please report this as a bug with the distribution and kernel version.
+Exiting to prevent incorrect performance measurements."#,
             event.expected_cpu, event.actual_cpu
         );
-        eprintln!("Timer pinning failed - measurements are no longer reliable.");
-        eprintln!("This indicates either:");
-        eprintln!("  1. Kernel version doesn't support BPF timer CPU pinning (requires 6.7+)");
-        eprintln!("  2. Legacy fallback timer migration control failed");
-        eprintln!("This case should never happen, please report this as a bug with the distribution and kernel version.");
-        eprintln!("Exiting to prevent incorrect performance measurements.");
 
         std::process::exit(1);
     }
 
     // Handle lost events
     fn handle_lost_events(&self, ring_index: usize, _data: &[u8]) {
-        eprintln!("Lost events notification on ring {}", ring_index);
+        error!("Lost events notification on ring {}", ring_index);
     }
 }
 
@@ -233,12 +233,12 @@ impl PerfEventProcessor {
 fn create_object_storage(storage_type: &str) -> Result<Arc<dyn ObjectStore>> {
     match storage_type.to_lowercase().as_str() {
         "s3" => {
-            info!("Creating S3 object store from environment variables");
+            debug!("Creating S3 object store from environment variables");
             let s3 = object_store::aws::AmazonS3Builder::from_env().build()?;
             Ok(Arc::new(s3))
         }
         "local" | _ => {
-            info!("Creating local filesystem object store");
+            debug!("Creating local filesystem object store");
             let local = object_store::local::LocalFileSystem::new();
             Ok(Arc::new(local))
         }
@@ -264,7 +264,7 @@ fn main() -> Result<()> {
 
     let opts = Command::parse();
 
-    info!("Starting collector with options: {:?}", opts);
+    debug!("Starting collector with options: {:?}", opts);
 
     // Initialize tokio runtime for async operations
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -290,7 +290,7 @@ fn main() -> Result<()> {
     };
 
     // Create the ParquetWriter with the store and config
-    info!(
+    debug!(
         "Writing metrics to {} storage with prefix: {}",
         &opts.storage_type, &config.storage_prefix
     );
@@ -299,7 +299,7 @@ fn main() -> Result<()> {
     // Create ParquetWriterTask with a buffer of 1000 items
     let mut writer_task = runtime.block_on(async { ParquetWriterTask::new(writer, 1000) });
 
-    info!("Parquet writer task initialized and ready to receive data");
+    debug!("Parquet writer task initialized and ready to receive data");
 
     // Get sender from the writer task
     let object_writer_sender = writer_task.sender();
@@ -333,7 +333,7 @@ fn main() -> Result<()> {
                 if now.duration_since(*last_report).as_secs() >= 1 {
                     // Report accumulated errors
                     if *error_counter.borrow() > 0 {
-                        eprintln!("Error sending timeslots to object writer: {} errors in the last 1 seconds", *error_counter.borrow());
+                        error!("Error sending timeslots to object writer: {} errors in the last 1 seconds", *error_counter.borrow());
                         *error_counter.borrow_mut() = 0;
                     }
                     *last_report = now;
@@ -360,7 +360,7 @@ fn main() -> Result<()> {
                     .borrow_mut()
                     .handle_task_metadata(ring_index, data)
                 {
-                    eprintln!("Error handling task metadata: {:?}", e);
+                    error!("Error handling task metadata: {:?}", e);
                 }
             },
         );
@@ -373,7 +373,7 @@ fn main() -> Result<()> {
                     .borrow_mut()
                     .handle_task_free(ring_index, data)
                 {
-                    eprintln!("Error handling task free: {:?}", e);
+                    error!("Error handling task free: {:?}", e);
                 }
             },
         );
@@ -387,7 +387,7 @@ fn main() -> Result<()> {
                     .borrow_mut()
                     .handle_perf_measurement(ring_index, data)
                 {
-                    eprintln!("Error handling perf measurement: {:?}", e);
+                    error!("Error handling perf measurement: {:?}", e);
                 }
             },
         );
@@ -401,7 +401,7 @@ fn main() -> Result<()> {
                     .borrow_mut()
                     .handle_timer_finished_processing(ring_index, data)
                 {
-                    eprintln!("Error handling timer finished: {:?}", e);
+                    error!("Error handling timer finished: {:?}", e);
                 }
             },
         );
@@ -415,7 +415,7 @@ fn main() -> Result<()> {
                     .borrow_mut()
                     .handle_timer_migration(ring_index, data)
                 {
-                    eprintln!("Error handling timer migration: {:?}", e);
+                    error!("Error handling timer migration: {:?}", e);
                 }
             },
         );
@@ -431,9 +431,7 @@ fn main() -> Result<()> {
     // Attach BPF programs
     bpf_loader.attach()?;
 
-    println!("Successfully started! Tracing and aggregating task performance...");
-    println!("Metrics will be reported at the end of each timeslot.");
-    println!("{}", "-".repeat(60));
+    info!("Successfully started! Tracing and aggregating task performance...");
 
     // Create a channel for BPF error communication and shutdown signaling
     let (bpf_error_tx, mut bpf_error_rx) = oneshot::channel();
@@ -460,27 +458,27 @@ fn main() -> Result<()> {
                         std::future::pending::<bool>().await
                     }
                 } => {
-                    info!("Duration timeout reached");
+                    debug!("Duration timeout reached");
                     break;
                 },
 
                 // SIGTERM received
                 _ = sigterm.recv() => {
-                    info!("Received SIGTERM");
+                    debug!("Received SIGTERM");
                     break;
                 },
 
                 // SIGINT received
                 _ = sigint.recv() => {
-                    info!("Received SIGINT");
+                    debug!("Received SIGINT");
                     break;
                 },
 
                 // SIGUSR1 received - trigger file rotation
                 _ = sigusr1.recv() => {
-                    info!("Received SIGUSR1, rotating parquet file");
+                    debug!("Received SIGUSR1, rotating parquet file");
                     if let Err(e) = writer_task.rotate().await {
-                        log::error!("Failed to rotate parquet file: {}", e);
+                        error!("Failed to rotate parquet file: {}", e);
                     }
                     // Continue running, don't break
                 },
@@ -489,10 +487,10 @@ fn main() -> Result<()> {
                 error = &mut bpf_error_rx => {
                     match error {
                         Ok(error_msg) => {
-                            log::error!("{}", error_msg);
+                            error!("{}", error_msg);
                         },
                         Err(_) => {
-                            log::error!("BPF polling channel closed unexpectedly");
+                            error!("BPF polling channel closed unexpectedly");
                         }
                     }
                     break;
@@ -503,11 +501,11 @@ fn main() -> Result<()> {
                     let shutdown_reason = match result {
                         Ok(Ok(_)) => "Writer task returned unexpectedly",
                         Ok(Err(e)) => {
-                            log::error!("Writer task error: {}", e);
+                            error!("Writer task error: {}", e);
                             "Writer task failed with error"
                         },
                         Err(e) => {
-                            log::error!("Writer task panicked: {}", e);
+                            error!("Writer task panicked: {}", e);
                             "Writer task panicked"
                         }
                     };
@@ -517,15 +515,15 @@ fn main() -> Result<()> {
             };
         }
 
-        info!("Shutting down...");
+        debug!("Shutting down...");
 
         // Signal the main thread to shutdown BPF polling
         let _ = shutdown_tx.send(());
 
-        info!("Waiting for writer task to complete...");
+        debug!("Waiting for writer task to complete...");
         let writer_task_result = writer_task.shutdown().await;
         if let Err(e) = writer_task_result {
-            log::error!("Writer task error: {}", e);
+            error!("Writer task error: {}", e);
             return Result::<_>::Err(anyhow::anyhow!("Writer task error: {}", e));
         }
 
@@ -554,7 +552,7 @@ fn main() -> Result<()> {
 
     // Clean up: wait for monitoring task to complete
     if let Err(e) = runtime.block_on(monitoring_handle) {
-        log::error!("Error in monitoring task: {:?}", e);
+        error!("Error in monitoring task: {:?}", e);
     }
 
     info!("Shutdown complete");
