@@ -1,5 +1,12 @@
 name: Get Resctrl and Perf info
-on: workflow_dispatch  # Manual trigger for testing
+on: 
+  workflow_dispatch:  # Manual trigger for testing
+    inputs:
+      machine-type:
+        description: 'EC2 instance type to use'
+        required: false
+        default: 'm7i.metal-24xl'
+        type: string
 
 # Add permissions needed for OIDC authentication
 permissions:
@@ -23,7 +30,7 @@ jobs:
         with:
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-          instance-type: 'm7i.metal-24xl'
+          instance-type: ${{ inputs.machine-type }}
           image-type: 'ubuntu-24.04'
           pre-runner-script: |
             sudo yum update -y && \
