@@ -38,7 +38,7 @@ jobs:
           # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
           image-version: '6.12-20250507.063028'
           host-mount: ./
-          images-folder-parent: "/tmp"
+          images-folder-parent: "/tmp/lvh-images"
           cpu: 2
           mem: 4G
           cpu-kind: 'host'
@@ -166,8 +166,13 @@ jobs:
             echo "=== Displaying cluster status ==="
             kubectl get nodes -o wide
             kubectl get pods -A
-            echo "=== NRI Setup Complete ==="
-            
+            echo "=== K3s with NRI Setup Complete ==="
+
+      - name: Build and run NRI integration test
+        uses: yonch/little-vm-helper@main
+        with:
+          provision: 'false'
+          cmd: |
             echo "=== Installing Rust and building NRI integration test ==="
             cd /host
             
@@ -221,4 +226,9 @@ jobs:
             echo "=== Verifying test pods cleanup ==="
             kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
             
-            echo "=== NRI Integration Test Complete ===" 
+            echo "=== NRI Integration Test Complete ==="
+
+      - name: Stop qemu
+        if: always()
+        run: |
+          sudo pkill -f qemu-system-x86_64 || true
