@@ -22,7 +22,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Provision LVH VM and run NRI integration test
+      - name: Cache LVH VM images
+        uses: actions/cache@v4
+        with:
+          path: /tmp/lvh-images
+          key: lvh-images-${{ runner.os }}-6.12-20250507.063028
+          restore-keys: |
+            lvh-images-${{ runner.os }}-
+
+      - name: Provision LVH VM and setup K3s with NRI
         uses: yonch/little-vm-helper@main
         with:
           test-name: nri-integration-test
@@ -68,13 +76,31 @@ jobs:
             CONTAINERD_EOF
             
             echo "=== Installing K3s with NRI support ==="
-            curl -sfL https://get.k3s.io | sh -s - \
-              --kubelet-arg="config=/etc/rancher/k3s/kubelet.yaml" \
-              --kubelet-arg="kubeconfig=/etc/rancher/k3s/k3s.yaml"
+            curl -sfL https://get.k3s.io | sh -s - || {
+              echo "K3s installation failed, checking logs..."
+              systemctl status k3s || true
+              journalctl -xeu k3s.service --no-pager | tail -50 || true
+              exit 1
+            }
             
-            echo "=== Waiting for K3s to start ==="
-            sleep 10
+            echo "=== Checking K3s service status after installation ==="
             systemctl status k3s || true
+            
+            # If service failed, let's see the logs and try to restart
+            if ! systemctl is-active --quiet k3s; then
+              echo "K3s service is not active, checking logs..."
+              journalctl -xeu k3s.service --no-pager | tail -50
+              
+              echo "Attempting to restart K3s service..."
+              systemctl restart k3s || true
+              sleep 5
+              
+              echo "Checking status after restart..."
+              systemctl status k3s || true
+            fi
+            
+            echo "=== Waiting for K3s to be ready ==="
+            sleep 10
             
             echo "=== Restarting K3s to apply NRI configuration ==="
             systemctl restart k3s
