@@ -102,14 +102,57 @@ jobs:
             echo "=== Waiting for K3s to be ready ==="
             sleep 10
             
+            echo "=== Checking if NRI config was applied ==="
+            if [ -f "/var/lib/rancher/k3s/agent/etc/containerd/config.toml" ]; then
+              echo "Generated containerd config:"
+              cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+            else
+              echo "No generated containerd config found yet"
+            fi
+            
             echo "=== Restarting K3s to apply NRI configuration ==="
             systemctl restart k3s
-            sleep 15
             
-            echo "=== Checking K3s status ==="
-            systemctl status k3s
-            echo "K3s logs:"
-            journalctl -u k3s --no-pager -l | tail -30
+            # Wait a bit and check if it's starting properly
+            sleep 10
+            
+            echo "=== Checking K3s status after restart ==="
+            systemctl status k3s || true
+            
+            # If it's failing, get detailed logs
+            if ! systemctl is-active --quiet k3s; then
+              echo "=== K3s service failed after restart, checking detailed logs ==="
+              journalctl -u k3s --no-pager -l | tail -50
+              
+              echo "=== Checking containerd config syntax ==="
+              # Test if containerd config is valid
+              if command -v containerd &> /dev/null; then
+                containerd config dump || echo "containerd config dump failed"
+              fi
+              
+              echo "=== Attempting to start K3s without restart (fresh start) ==="
+              systemctl stop k3s || true
+              sleep 5
+              systemctl start k3s || true
+              sleep 10
+              
+              echo "=== Final status check ==="
+              systemctl status k3s || true
+              
+              if ! systemctl is-active --quiet k3s; then
+                echo "=== K3s still failing, will continue with basic K3s (without NRI) ==="
+                # Remove the NRI config and try again
+                rm -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+                systemctl restart k3s || true
+                sleep 10
+                systemctl status k3s || true
+              fi
+            fi
+            
+            echo "=== Final K3s status and logs ==="
+            systemctl status k3s || true
+            echo "Recent K3s logs:"
+            journalctl -u k3s --no-pager -l | tail -20
             
             echo "=== Waiting for Kubernetes API ==="
             export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
@@ -135,10 +178,12 @@ jobs:
             ls -la /var/run/nri/ || echo "NRI directory not found"
             
             # Wait for NRI socket to be created
+            NRI_SOCKET_FOUND=false
             for i in {1..30}; do
               if [ -S "/var/run/nri/nri.sock" ]; then
                 echo "✅ NRI socket found at /var/run/nri/nri.sock"
                 ls -la /var/run/nri/nri.sock
+                NRI_SOCKET_FOUND=true
                 break
               else
                 echo "Waiting for NRI socket... (attempt $i/30)"
@@ -146,11 +191,17 @@ jobs:
               fi
             done
             
-            if [ ! -S "/var/run/nri/nri.sock" ]; then
+            if [ "$NRI_SOCKET_FOUND" = "false" ]; then
               echo "❌ NRI socket not found after waiting"
-              echo "Containerd logs:"
+              echo "This might mean NRI is not supported or configured properly"
+              echo "Containerd logs (looking for NRI references):"
               journalctl -u k3s --no-pager | grep -i nri || echo "No NRI logs found"
-              exit 1
+              
+              echo "⚠️  Continuing without NRI socket - integration test may fail"
+              echo "This could indicate that:"
+              echo "  1. K3s version doesn't support NRI"
+              echo "  2. NRI configuration was rejected"
+              echo "  3. K3s reverted to basic configuration"
             fi
             
             echo "=== Verifying containerd NRI configuration ==="
@@ -212,16 +263,32 @@ jobs:
             echo "User: $(whoami)"
             kubectl get nodes
             kubectl get pods -A
-            test -S "$NRI_SOCKET_PATH" && echo "✅ NRI socket exists" || echo "❌ NRI socket missing"
             
-            # Run the integration test
-            $TEST_BIN --ignored --nocapture || {
-              echo "=== Test failed, checking logs ==="
-              echo "Containerd/K3s logs:"
-              journalctl -u k3s --no-pager -l | tail -100
-              echo "=== End of logs ==="
+            if [ -S "$NRI_SOCKET_PATH" ]; then
+              echo "✅ NRI socket exists - proceeding with NRI integration test"
+              # Run the integration test
+              $TEST_BIN --ignored --nocapture || {
+                echo "=== Test failed, checking logs ==="
+                echo "Containerd/K3s logs:"
+                journalctl -u k3s --no-pager -l | tail -100
+                echo "=== End of logs ==="
+                exit 1
+              }
+            else
+              echo "❌ NRI socket missing - cannot run NRI integration test"
+              echo "This indicates that NRI is not properly configured or supported"
+              echo "Checking system state:"
+              echo "- K3s status: $(systemctl is-active k3s)"
+              echo "- K3s logs:"
+              journalctl -u k3s --no-pager -l | tail -20
+              echo "- NRI directory contents:"
+              ls -la /var/run/nri/ || echo "NRI directory not found"
+              echo "- Containerd config:"
+              cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml || echo "No containerd config found"
+              
+              echo "=== Skipping NRI integration test due to missing NRI socket ==="
               exit 1
-            }
+            fi
             
             echo "=== Verifying test pods cleanup ==="
             kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
