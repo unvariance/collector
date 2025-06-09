@@ -4,17 +4,13 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures::{ready, Future, FutureExt};
-use log::{debug, error, warn};
+use log::{debug, error};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
-use tokio::sync::{
-    mpsc::{self, Permit, Receiver, Sender},
-    oneshot,
-};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
 
 /// Connection ID uniquely identifies a logical connection within a Mux.
 pub type ConnID = u32;
@@ -436,9 +432,10 @@ impl Mux {
     /// This method only sends the shutdown signal but doesn't wait for tasks to complete.
     pub async fn shutdown(&self) -> Result<()> {
         // Clear all connections to stop receiving data
-        let mut guard = self.connections.lock().map_err(|_| MuxError::LockError)?;
-        guard.clear();
-        drop(guard); // Release the lock before proceeding
+        self.connections
+            .lock()
+            .map_err(|_| MuxError::LockError)?
+            .clear();
 
         // Signal shutdown to all tasks through the monitor
         let _ = self.shutdown_tx.send(()).await;
@@ -454,7 +451,7 @@ impl Mux {
     ///
     /// # Example
     /// ```
-    /// use nri::Mux;
+    /// use nri::multiplex::Mux;
     /// # async fn example(mux: &mut Mux) {
     /// // Get the monitor handle
     /// let mut handle = mux.monitor_handle();
