@@ -51,7 +51,7 @@ jobs:
             mkdir -p /opt/nri/plugins
             
             echo "=== Creating containerd config template with NRI support ==="
-            cat > /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl << 'EOF'
+            tee /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl > /dev/null << 'CONTAINERD_EOF'
             {{ template "base" . }}
 
             [plugins."io.containerd.nri.v1.nri"]
@@ -65,7 +65,7 @@ jobs:
               plugin_config_path = "/etc/nri/conf.d"
               # Directory to search for plugins to launch on startup
               plugin_path = "/opt/nri/plugins"
-            EOF
+            CONTAINERD_EOF
             
             echo "=== Installing K3s with NRI support ==="
             curl -sfL https://get.k3s.io | sh -s - \
