@@ -178,7 +178,7 @@ jobs:
             echo "✅ NRI socket exists - proceeding with NRI integration test"
             
             # Run the integration test
-            $TEST_BINARY_PATH --ignored --nocapture || {
+            sudo $TEST_BINARY_PATH --ignored --nocapture || {
               echo "=== Test failed, checking logs ==="
               echo "KIND container logs:"
               docker logs nri-test-control-plane 2>&1 | tail -100
