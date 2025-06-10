@@ -674,7 +674,7 @@ jobs:
           # Check output
           ls -la visualization_results/
 
-      - name: Generate LLC Misses Plots
+      - name: Generate Memory Usage Plots
         run: |
           # The collector is ready TIME_DIFF seconds before the load generator is ready
           TIME_DIFF=${TIME_DIFF:-0}
@@ -686,10 +686,10 @@ jobs:
           echo "Using adjusted start times: $START_TIME_1 and $START_TIME_2 seconds after collector is ready"
           echo "Time difference between collector and load generator ready states: ${TIME_DIFF} seconds"
           
-          # Generate LLC misses plots with the adjusted start times
+          # Generate memory usage plots (LLC misses and cache references) with the adjusted start times
           for i in 0.3 0.5 1 3 10; do
-            Rscript scripts/plot_llc_misses.R collector_data/collector-parquet.parquet $START_TIME_1 $i visualization_results/llc_misses_20sec_$i || true
-            Rscript scripts/plot_llc_misses.R collector_data/collector-parquet.parquet $START_TIME_2 $i visualization_results/llc_misses_180sec_$i || true
+            Rscript scripts/plot_memory_usage.R collector_data/collector-parquet.parquet $START_TIME_1 $i visualization_results/memory_usage_20sec_$i || true
+            Rscript scripts/plot_memory_usage.R collector_data/collector-parquet.parquet $START_TIME_2 $i visualization_results/memory_usage_180sec_$i || true
           done
 
           # Check output

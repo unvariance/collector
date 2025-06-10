@@ -166,9 +166,9 @@ The script generates three types of visualizations:
 
 Additionally, the script prints summary statistics including mean and peak CPU utilization for both the target process and other processes. 
 
-## LLC Misses Plotting
+## Memory Usage Plotting
 
-The `plot_llc_misses.R` script generates a stacked area graph showing Last Level Cache (LLC) misses per process at millisecond granularity.
+The `plot_memory_usage.R` script generates a stacked area graph showing both Last Level Cache (LLC) misses and cache references per process at millisecond granularity.
 
 ### Prerequisites
 
@@ -187,80 +187,67 @@ install.packages(c("nanoparquet", "ggplot2", "dplyr", "tidyr"))
 ### Usage
 
 ```bash
-Rscript plot_llc_misses.R [parquet_file] [start_time_offset] [window_size] [output_file]
+Rscript plot_memory_usage.R [parquet_file] [start_time_offset] [window_size] [output_file] [top_n_processes]
 ```
 
-- `[parquet_file]`: Path to the parquet file containing collector data (default: "scripts/collector-parquet.parquet")
+- `[parquet_file]`: Path to the parquet file containing collector data (default: "collector-parquet.parquet")
 - `[start_time_offset]`: Seconds after experiment start to begin analysis (default: 110)
 - `[window_size]`: Duration in seconds to analyze (default: 1)
-- `[output_file]`: Base name for output files (default: "llc_misses")
+- `[output_file]`: Base name for output files (default: "memory_usage")
+- `[top_n_processes]`: Number of top processes to show (default: 15)
 
 ### Examples
 
 #### Example 1: Using default settings
 
 ```bash
-Rscript plot_llc_misses.R scripts/collector-parquet.parquet
+Rscript plot_memory_usage.R collector-parquet.parquet
 ```
 
 This command will:
-1. Parse the LLC miss data from `scripts/collector-parquet.parquet`
+1. Parse the memory usage data from `collector-parquet.parquet`
 2. Filter for data at 110 seconds after experiment start, with a 1-second window
-3. Create a stacked area graph showing LLC misses by process
-4. Save the plot as `llc_misses.png` and `llc_misses.pdf`
+3. Create both a combined plot and LLC misses plot
+4. Save the plots as `memory_usage_combined.png`, `memory_usage.png`, and PDF versions
 
 #### Example 2: Specifying time window and output name
 
 ```bash
-Rscript plot_llc_misses.R scripts/collector-parquet.parquet 120 2 high_load_llc
+Rscript plot_memory_usage.R collector-parquet.parquet 120 2 high_load_memory 20
 ```
 
-This will analyze a 2-second window starting at 120 seconds into the experiment and save the output as `high_load_llc.png` and `high_load_llc.pdf`.
+This will analyze a 2-second window starting at 120 seconds into the experiment, show the top 20 processes, and save the output as `high_load_memory_combined.png` and `high_load_memory.png` (plus PDF versions).
 
 ### Output
 
-The script generates:
-- A PNG image of the stacked area plot
-- A PDF version of the plot
+The script generates multiple visualizations:
 
-The plot shows:
-- The top 10 processes by LLC misses, with all others grouped as "other"
-- Stacked LLC misses by process on the Y-axis
+1. **Combined Memory Usage Plot**:
+   - Faceted plot with LLC misses on top and cache references on bottom
+   - Both metrics normalized to gigabytes per second
+   - Same legend and process selection across both facets
+   - 16:9 aspect ratio optimized for slide presentations
+   - Output: `<output_file>_combined.png` and `<output_file>_combined.pdf`
+
+2. **LLC Misses Plot** (for backward compatibility):
+   - Stacked area graph showing LLC misses by process
+   - Normalized to gigabytes per second
+   - Output: `<output_file>.png` and `<output_file>.pdf`
+
+**Key Features**:
+- Process filtering based on total memory usage (LLC misses + cache references)
+- Top N processes shown individually, others grouped as "other"
+- 16:9 aspect ratio with large fonts suitable for presentations
 - Time in milliseconds on the X-axis (within the selected window)
-- A title and subtitle indicating the time window being visualized
+- Both plots use consistent process selection and coloring
 
-### Working with Sample Data
+### Process Selection Logic
 
-For working with smaller sample datasets, a specialized script `plot_llc_misses_sample.R` is provided. This script creates visualizations without requiring specific time windows.
-
-#### Usage for Sample Data
-
-```bash
-Rscript plot_llc_misses_sample.R [parquet_file] [output_file]
-```
-
-- `[parquet_file]`: Path to the sample parquet file (default: "scripts/collector-parquet-sample.parquet")
-- `[output_file]`: Base name for output files (default: "llc_misses_sample")
-
-#### Output for Sample Data
-
-The sample script generates two types of visualizations:
-
-1. **Stacked Area Plot**:
-   - Shows LLC misses over time, stacked by process
-   - Uses all available time points in the sample data
-   - Output: `<output_file>_area.png` and `<output_file>_area.pdf`
-
-2. **Bar Plot**:
-   - Shows total LLC misses by process for the top 15 processes
-   - Provides a clearer view of which processes contribute most to LLC misses
-   - Output: `<output_file>_bar.png` and `<output_file>_bar.pdf`
-
-Example:
-
-```bash
-Rscript plot_llc_misses_sample.R scripts/collector-parquet-sample.parquet custom_output
-```
+The script uses intelligent process selection based on total memory usage:
+- Calculates total memory usage as the sum of LLC misses and cache references for each process
+- Selects the top N processes by this combined metric
+- Groups remaining processes as "other" for cleaner visualization
+- This approach ensures that processes with high cache hit rates (high cache references but low LLC misses) are still prominently displayed
 
 ## Workload Performance Visualization
 

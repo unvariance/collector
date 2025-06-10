@@ -84,7 +84,7 @@ jobs:
           cp artifacts/visualizations/memory_utilization.png benchmarks/memory_utilization.png
           
           # LLC misses - 180 second variant with 0.5 second length
-          cp artifacts/visualizations/llc_misses_180sec_0.5.png benchmarks/llc_misses.png
+          cp artifacts/visualizations/memory_usage_180sec_0.5.png benchmarks/llc_misses.png
           
           # CPI by LLC misses - prefer non-capped version, but use capped if necessary
           # For top5 vs mid45-55 slowdown
