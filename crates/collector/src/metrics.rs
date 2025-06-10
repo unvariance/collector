@@ -29,7 +29,13 @@ impl Metric {
     }
 
     /// Create a metric from the raw performance counter deltas
-    pub fn from_deltas(cycles: u64, instructions: u64, llc_misses: u64, cache_references: u64, time_ns: u64) -> Self {
+    pub fn from_deltas(
+        cycles: u64,
+        instructions: u64,
+        llc_misses: u64,
+        cache_references: u64,
+        time_ns: u64,
+    ) -> Self {
         Self {
             cycles,
             instructions,
