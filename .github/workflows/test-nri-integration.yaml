@@ -22,280 +22,219 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Cache LVH VM images
-        uses: actions/cache@v4
-        with:
-          path: /tmp/lvh-images
-          key: lvh-images-${{ runner.os }}-6.12-20250507.063028
-          restore-keys: |
-            lvh-images-${{ runner.os }}-
+      - name: Set up Docker
+        run: |
+          # Ensure Docker is running (should already be on ubuntu-latest)
+          sudo systemctl start docker
+          sudo systemctl enable docker
+          docker --version
+          
+          # Add current user to docker group to avoid sudo
+          sudo usermod -aG docker $USER
+          # Note: In GitHub Actions, this change takes effect in subsequent steps
 
-      - name: Provision LVH VM and setup K3s with NRI
-        uses: yonch/little-vm-helper@main
-        with:
-          test-name: nri-integration-test
-          image: 'complexity-test'
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          image-version: '6.12-20250507.063028'
-          host-mount: ./
-          images-folder-parent: "/tmp/lvh-images"
-          cpu: 2
-          mem: 4G
-          cpu-kind: 'host'
-          lvh-version: "v0.0.23"
-          install-dependencies: 'true'
-          verbose: 'true'
-          cmd: |
-            # Wait for networking to be ready
-            for i in {1..5}; do curl "https://golang.org" > /dev/null 2>&1 && break || sleep 5; echo "Waiting for systemd-resolved to be ready..."; done
-            
-            git config --global --add safe.directory /host
-            uname -a
-            
-            echo "=== Setting up NRI directories ==="
-            mkdir -p /var/lib/rancher/k3s/agent/etc/containerd
-            mkdir -p /var/run/nri
-            mkdir -p /etc/nri/conf.d
-            mkdir -p /opt/nri/plugins
-            
-            echo "=== Creating containerd config template with NRI support ==="
-            tee /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl > /dev/null << 'CONTAINERD_EOF'
-            {{ template "base" . }}
+      - name: Install KIND and kubectl
+        run: |
+          # Install KIND
+          [ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+          
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
 
+      - name: Create KIND cluster with NRI support
+        run: |
+          # Create KIND cluster config with NRI support
+          cat > kind-config.yaml << 'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: nri-test
+          nodes:
+          - role: control-plane
+            extraMounts:
+            - hostPath: /tmp/nri
+              containerPath: /var/run/nri
+            - hostPath: /tmp/nri-conf
+              containerPath: /etc/nri/conf.d
+            - hostPath: /tmp/nri-plugins
+              containerPath: /opt/nri/plugins
+            kubeadmConfigPatches:
+            - |
+              kind: InitConfiguration
+              nodeRegistration:
+                criSocket: unix:///var/run/containerd/containerd.sock
+                kubeletExtraArgs:
+                  container-runtime: remote
+                  container-runtime-endpoint: unix:///var/run/containerd/containerd.sock
+            - |
+              kind: ClusterConfiguration
+              controllerManager:
+                extraArgs:
+                  bind-address: 0.0.0.0
+              scheduler:
+                extraArgs:
+                  bind-address: 0.0.0.0
+              etcd:
+                local:
+                  extraArgs:
+                    listen-metrics-urls: http://0.0.0.0:2381
+            - |
+              kind: KubeletConfiguration
+              serverTLSBootstrap: true
+          containerdConfigPatches:
+          - |-
             [plugins."io.containerd.nri.v1.nri"]
-              # Enable NRI support in containerd
               disable = false
-              # Allow connections from externally launched NRI plugins
-              disable_connections = false  
-              # Path to NRI socket
+              disable_connections = false
               socket_path = "/var/run/nri/nri.sock"
-              # Directory to search for plugin-specific configuration
-              plugin_config_path = "/etc/nri/conf.d"
-              # Directory to search for plugins to launch on startup
+              plugin_config_path = "/etc/nri/conf.d" 
               plugin_path = "/opt/nri/plugins"
-            CONTAINERD_EOF
+          EOF
+          
+          # Create directories for NRI on host that will be mounted
+          sudo mkdir -p /tmp/nri /tmp/nri-conf /tmp/nri-plugins
+          sudo chmod 777 /tmp/nri /tmp/nri-conf /tmp/nri-plugins
+          
+          echo "=== Creating KIND cluster with NRI support ==="
+          kind create cluster --config kind-config.yaml --wait 300s
+          
+          echo "=== Cluster created, checking status ==="
+          kubectl cluster-info --context kind-nri-test
+          kubectl get nodes
+          kubectl get pods -A
+
+      - name: Verify NRI setup
+        run: |
+          echo "=== Verifying NRI socket and configuration ==="
+          
+          # Check if NRI socket exists in the mounted directory
+          for i in {1..30}; do
+            if [ -S "/tmp/nri/nri.sock" ]; then
+              echo "✅ NRI socket found at /tmp/nri/nri.sock"
+              ls -la /tmp/nri/nri.sock
+              break
+            else
+              echo "Waiting for NRI socket... (attempt $i/30)"
+              sleep 2
+            fi
+          done
+          
+          if [ ! -S "/tmp/nri/nri.sock" ]; then
+            echo "❌ NRI socket not found after waiting"
+            echo "Checking KIND container logs..."
+            docker logs nri-test-control-plane 2>&1 | grep -i nri || echo "No NRI logs found"
             
-            echo "=== Installing K3s with NRI support ==="
-            curl -sfL https://get.k3s.io | sh -s - || {
-              echo "K3s installation failed, checking logs..."
-              systemctl status k3s || true
-              journalctl -xeu k3s.service --no-pager | tail -50 || true
+            echo "Checking containerd config in KIND container..."
+            docker exec nri-test-control-plane cat /etc/containerd/config.toml
+            
+            echo "Checking if containerd is running with NRI..."
+            docker exec nri-test-control-plane ps aux | grep containerd
+            
+            echo "⚠️  Continuing without NRI socket - this may indicate configuration issues"
+          fi
+          
+          echo "=== Verifying cluster readiness ==="
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          kubectl wait --namespace kube-system --for=condition=Ready pods --all --timeout=300s
+          
+          echo "=== Final cluster status ==="
+          kubectl get nodes -o wide
+          kubectl get pods -A
+
+      - name: Install Rust and build tools
+        run: |
+          echo "=== Installing Rust toolchain ==="
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source ~/.cargo/env
+          
+          echo "=== Installing build dependencies ==="
+          sudo apt-get update
+          sudo apt-get install -y clang libelf-dev build-essential pkg-config
+          
+          echo "=== Rust version info ==="
+          rustc --version
+          cargo --version
+
+      - name: Build NRI integration test
+        run: |
+          source ~/.cargo/env
+          
+          echo "=== Building NRI integration test ==="
+          cargo test --package nri --test integration_test --no-run --verbose
+          
+          # Find the test binary
+          TEST_BIN=$(find target/debug/deps -name "integration_test-*" -type f -executable | head -1)
+          
+          if [ -z "$TEST_BIN" ]; then
+            echo "Error: Could not find integration test binary."
+            find target -name "*integration_test*" -type f
+            exit 1
+          fi
+          
+          echo "Found test binary at: $TEST_BIN"
+          echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
+
+      - name: Run NRI Integration Test
+        run: |
+          source ~/.cargo/env
+          
+          echo "=== Running NRI Integration Test ==="
+          export KUBECONFIG="$(kind get kubeconfig-path --name nri-test)"
+          export NRI_SOCKET_PATH=/tmp/nri/nri.sock
+          export RUST_LOG=debug
+          
+          echo "Test binary: $TEST_BINARY_PATH"
+          echo "Socket path: $NRI_SOCKET_PATH"
+          echo "Kubernetes config: $KUBECONFIG"
+          
+          echo "=== Pre-test environment check ==="
+          echo "User: $(whoami)"
+          kubectl get nodes
+          kubectl get pods -A
+          
+          if [ -S "$NRI_SOCKET_PATH" ]; then
+            echo "✅ NRI socket exists - proceeding with NRI integration test"
+            
+            # Run the integration test
+            $TEST_BINARY_PATH --ignored --nocapture || {
+              echo "=== Test failed, checking logs ==="
+              echo "KIND container logs:"
+              docker logs nri-test-control-plane 2>&1 | tail -100
+              echo "=== End of logs ==="
               exit 1
             }
+          else
+            echo "❌ NRI socket missing - cannot run NRI integration test"
+            echo "This indicates that NRI is not properly configured in KIND"
+            echo "Checking system state:"
+            echo "- KIND container status:"
+            docker ps | grep nri-test
+            echo "- KIND logs:"
+            docker logs nri-test-control-plane 2>&1 | tail -50
+            echo "- NRI directory contents:"
+            ls -la /tmp/nri/ || echo "NRI directory not found"
+            echo "- Containerd config in KIND:"
+            docker exec nri-test-control-plane cat /etc/containerd/config.toml
             
-            echo "=== Checking K3s service status after installation ==="
-            systemctl status k3s || true
-            
-            # If service failed, let's see the logs and try to restart
-            if ! systemctl is-active --quiet k3s; then
-              echo "K3s service is not active, checking logs..."
-              journalctl -xeu k3s.service --no-pager | tail -50
-              
-              echo "Attempting to restart K3s service..."
-              systemctl restart k3s || true
-              sleep 5
-              
-              echo "Checking status after restart..."
-              systemctl status k3s || true
-            fi
-            
-            echo "=== Waiting for K3s to be ready ==="
-            sleep 10
-            
-            echo "=== Checking if NRI config was applied ==="
-            if [ -f "/var/lib/rancher/k3s/agent/etc/containerd/config.toml" ]; then
-              echo "Generated containerd config:"
-              cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml
-            else
-              echo "No generated containerd config found yet"
-            fi
-            
-            echo "=== Restarting K3s to apply NRI configuration ==="
-            systemctl restart k3s
-            
-            # Wait a bit and check if it's starting properly
-            sleep 10
-            
-            echo "=== Checking K3s status after restart ==="
-            systemctl status k3s || true
-            
-            # If it's failing, get detailed logs
-            if ! systemctl is-active --quiet k3s; then
-              echo "=== K3s service failed after restart, checking detailed logs ==="
-              journalctl -u k3s --no-pager -l | tail -50
-              
-              echo "=== Checking containerd config syntax ==="
-              # Test if containerd config is valid
-              if command -v containerd &> /dev/null; then
-                containerd config dump || echo "containerd config dump failed"
-              fi
-              
-              echo "=== Attempting to start K3s without restart (fresh start) ==="
-              systemctl stop k3s || true
-              sleep 5
-              systemctl start k3s || true
-              sleep 10
-              
-              echo "=== Final status check ==="
-              systemctl status k3s || true
-              
-              if ! systemctl is-active --quiet k3s; then
-                echo "=== K3s still failing, will continue with basic K3s (without NRI) ==="
-                # Remove the NRI config and try again
-                rm -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-                systemctl restart k3s || true
-                sleep 10
-                systemctl status k3s || true
-              fi
-            fi
-            
-            echo "=== Final K3s status and logs ==="
-            systemctl status k3s || true
-            echo "Recent K3s logs:"
-            journalctl -u k3s --no-pager -l | tail -20
-            
-            echo "=== Waiting for Kubernetes API ==="
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-            until kubectl get nodes &>/dev/null; do
-              sleep 2
-              echo "Still waiting for API..."
-            done
-            echo "Kubernetes API is available!"
-            
-            echo "=== Waiting for nodes to be ready ==="
-            echo "Waiting for at least one node to be registered..."
-            until [ $(kubectl get nodes --no-headers | wc -l) -gt 0 ]; do
-              sleep 2
-              echo "Still waiting for node registration..."
-            done
-            echo "Node(s) registered, waiting for Ready status..."
-            kubectl wait --for=condition=Ready nodes --all --timeout=300s
-            
-            echo "=== Waiting for kube-system pods ==="
-            kubectl wait --namespace kube-system --for=condition=Ready pods --all --timeout=300s
-            
-            echo "=== Verifying NRI socket availability ==="
-            ls -la /var/run/nri/ || echo "NRI directory not found"
-            
-            # Wait for NRI socket to be created
-            NRI_SOCKET_FOUND=false
-            for i in {1..30}; do
-              if [ -S "/var/run/nri/nri.sock" ]; then
-                echo "✅ NRI socket found at /var/run/nri/nri.sock"
-                ls -la /var/run/nri/nri.sock
-                NRI_SOCKET_FOUND=true
-                break
-              else
-                echo "Waiting for NRI socket... (attempt $i/30)"
-                sleep 2
-              fi
-            done
-            
-            if [ "$NRI_SOCKET_FOUND" = "false" ]; then
-              echo "❌ NRI socket not found after waiting"
-              echo "This might mean NRI is not supported or configured properly"
-              echo "Containerd logs (looking for NRI references):"
-              journalctl -u k3s --no-pager | grep -i nri || echo "No NRI logs found"
-              
-              echo "⚠️  Continuing without NRI socket - integration test may fail"
-              echo "This could indicate that:"
-              echo "  1. K3s version doesn't support NRI"
-              echo "  2. NRI configuration was rejected"
-              echo "  3. K3s reverted to basic configuration"
-            fi
-            
-            echo "=== Verifying containerd NRI configuration ==="
-            if [ -f "/var/lib/rancher/k3s/agent/etc/containerd/config.toml" ]; then
-              echo "Containerd config:"
-              cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml
-              echo "---"
-              grep -A 10 -B 2 nri /var/lib/rancher/k3s/agent/etc/containerd/config.toml || echo "No NRI config found in generated config"
-            else
-              echo "Containerd config file not found"
-            fi
-            
-            echo "=== Displaying cluster status ==="
-            kubectl get nodes -o wide
-            kubectl get pods -A
-            echo "=== K3s with NRI Setup Complete ==="
+            echo "=== Skipping NRI integration test due to missing NRI socket ==="
+            exit 1
+          fi
+          
+          echo "=== Verifying test pods cleanup ==="
+          kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
+          
+          echo "=== NRI Integration Test Complete ==="
 
-      - name: Build and run NRI integration test
-        uses: yonch/little-vm-helper@main
-        with:
-          provision: 'false'
-          cmd: |
-            echo "=== Installing Rust and building NRI integration test ==="
-            cd /host
-            
-            # Install Rust
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-            source ~/.cargo/env
-            
-            # Install build dependencies
-            apt-get update
-            apt-get install -y clang libelf-dev build-essential
-            
-            echo "=== Building NRI integration test ==="
-            cargo test --package nri --test integration_test --no-run --verbose
-            
-            # Find the test binary
-            TEST_BIN=$(find target/debug/deps -name "integration_test-*" -type f -executable | head -1)
-            
-            if [ -z "$TEST_BIN" ]; then
-              echo "Error: Could not find integration test binary."
-              find target -name "*integration_test*" -type f
-              exit 1
-            fi
-            
-            echo "Found test binary at: $TEST_BIN"
-            
-            echo "=== Running NRI Integration Test ==="
-            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-            export NRI_SOCKET_PATH=/var/run/nri/nri.sock
-            export RUST_LOG=debug
-            
-            echo "Test binary: $TEST_BIN"
-            echo "Socket path: $NRI_SOCKET_PATH"
-            echo "Kubernetes config: $KUBECONFIG"
-            
-            # Verify environment before running test
-            echo "=== Pre-test environment check ==="
-            echo "User: $(whoami)"
-            kubectl get nodes
-            kubectl get pods -A
-            
-            if [ -S "$NRI_SOCKET_PATH" ]; then
-              echo "✅ NRI socket exists - proceeding with NRI integration test"
-              # Run the integration test
-              $TEST_BIN --ignored --nocapture || {
-                echo "=== Test failed, checking logs ==="
-                echo "Containerd/K3s logs:"
-                journalctl -u k3s --no-pager -l | tail -100
-                echo "=== End of logs ==="
-                exit 1
-              }
-            else
-              echo "❌ NRI socket missing - cannot run NRI integration test"
-              echo "This indicates that NRI is not properly configured or supported"
-              echo "Checking system state:"
-              echo "- K3s status: $(systemctl is-active k3s)"
-              echo "- K3s logs:"
-              journalctl -u k3s --no-pager -l | tail -20
-              echo "- NRI directory contents:"
-              ls -la /var/run/nri/ || echo "NRI directory not found"
-              echo "- Containerd config:"
-              cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml || echo "No containerd config found"
-              
-              echo "=== Skipping NRI integration test due to missing NRI socket ==="
-              exit 1
-            fi
-            
-            echo "=== Verifying test pods cleanup ==="
-            kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
-            
-            echo "=== NRI Integration Test Complete ==="
-
-      - name: Stop qemu
+      - name: Cleanup
         if: always()
         run: |
-          sudo pkill -f qemu-system-x86_64 || true
+          echo "=== Cleaning up KIND cluster ==="
+          kind delete cluster --name nri-test || true
+          
+          echo "=== Cleaning up NRI directories ==="
+          sudo rm -rf /tmp/nri /tmp/nri-conf /tmp/nri-plugins || true
