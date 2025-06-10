@@ -63,36 +63,13 @@ jobs:
               containerPath: /etc/nri/conf.d
             - hostPath: /tmp/nri-plugins
               containerPath: /opt/nri/plugins
-            kubeadmConfigPatches:
-            - |
-              kind: InitConfiguration
-              nodeRegistration:
-                criSocket: unix:///var/run/containerd/containerd.sock
-                kubeletExtraArgs:
-                  container-runtime: remote
-                  container-runtime-endpoint: unix:///var/run/containerd/containerd.sock
-            - |
-              kind: ClusterConfiguration
-              controllerManager:
-                extraArgs:
-                  bind-address: 0.0.0.0
-              scheduler:
-                extraArgs:
-                  bind-address: 0.0.0.0
-              etcd:
-                local:
-                  extraArgs:
-                    listen-metrics-urls: http://0.0.0.0:2381
-            - |
-              kind: KubeletConfiguration
-              serverTLSBootstrap: true
           containerdConfigPatches:
           - |-
             [plugins."io.containerd.nri.v1.nri"]
               disable = false
               disable_connections = false
               socket_path = "/var/run/nri/nri.sock"
-              plugin_config_path = "/etc/nri/conf.d" 
+              plugin_config_path = "/etc/nri/conf.d"
               plugin_path = "/opt/nri/plugins"
           EOF
           
