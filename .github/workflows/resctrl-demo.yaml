@@ -258,19 +258,20 @@ jobs:
           # Throttle to 20% of memory bandwidth
           echo "Throttling high priority group to 20% memory bandwidth"
           
-          # Create new schemata with bandwidth restriction
+          # Read current schemata
           ORIGINAL_SCHEMATA=$(cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "")
-          echo "Original schemata: $ORIGINAL_SCHEMATA"
+          echo "Original schemata:"
+          echo "$ORIGINAL_SCHEMATA"
           
-          # Apply bandwidth throttling (20% on all domains)
-          # Note: This assumes domains 0 and 1 exist, adjust as needed
-          echo "MB:0=20;1=20" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not apply MB throttling"
+          # Create modified schemata with bandwidth restriction
+          # We need to modify only the MB line while preserving L2 and L3 settings
+          MODIFIED_SCHEMATA=$(echo "$ORIGINAL_SCHEMATA" | sed 's/MB:0=[[:space:]]*[0-9]*/MB:0=20/')
           
-          # If that fails, try with just domain 0
-          if [ $? -ne 0 ]; then
-            echo "Trying with single domain..."
-            echo "MB:0=20" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not apply single domain MB throttling"
-          fi
+          echo "Modified schemata:"
+          echo "$MODIFIED_SCHEMATA"
+          
+          # Apply the modified schemata
+          echo "$MODIFIED_SCHEMATA" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not apply MB throttling"
           
           echo "New schemata after throttling:"
           cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "Could not read throttled schemata"
@@ -350,7 +351,19 @@ jobs:
           
           # Restore full bandwidth
           echo "Restoring full memory bandwidth access..."
-          cat /sys/fs/resctrl/schemata 2>/dev/null | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not restore full bandwidth"
+          
+          # Get the default schemata and modify just the MB setting to 100%
+          DEFAULT_SCHEMATA=$(cat /sys/fs/resctrl/schemata 2>/dev/null || echo "")
+          CURRENT_SCHEMATA=$(cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "")
+          
+          # Extract the MB setting from default schemata and apply to current
+          DEFAULT_MB=$(echo "$DEFAULT_SCHEMATA" | grep "^MB:" || echo "MB:0=100")
+          RESTORED_SCHEMATA=$(echo "$CURRENT_SCHEMATA" | sed "s/^MB:.*/$DEFAULT_MB/")
+          
+          echo "Restoring with schemata:"
+          echo "$RESTORED_SCHEMATA"
+          
+          echo "$RESTORED_SCHEMATA" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not restore full bandwidth"
           
           echo "Restored schemata:"
           cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "Could not read restored schemata"
