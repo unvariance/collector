@@ -237,18 +237,32 @@ jobs:
           
           echo "Running measurement for phase: $PHASE"
           
-          # Calculate cache size per core (0.5MB per core for cache sensitive group)
+          # Calculate cache workload parameters for realistic simulation
           CACHE_CPUS=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
           CACHE_CPU_COUNT=$(echo "$CACHE_CPUS" | tr ',-' ' ' | wc -w)
-          CACHE_SIZE_PER_CPU_KB=$((512))  # 0.5MB = 512KB per CPU
           
-          echo "Cache workload will use ${CACHE_SIZE_PER_CPU_KB}KB per CPU on $CACHE_CPU_COUNT CPUs"
+          # Use 1/8 of available cache CPUs (round down)
+          CACHE_THREADS=$((CACHE_CPU_COUNT / 8))
+          if [ "$CACHE_THREADS" -lt "1" ]; then
+            CACHE_THREADS=1  # Ensure at least 1 thread
+          fi
+          
+          # Calculate cache size per thread: (total_cpus * 1MB) / num_threads
+          TOTAL_CACHE_SIZE_MB=$((CACHE_CPU_COUNT * 1))  # 1MB per available CPU
+          CACHE_SIZE_PER_THREAD_MB=$((TOTAL_CACHE_SIZE_MB / CACHE_THREADS))
+          
+          echo "Cache workload configuration:"
+          echo "  Available cache CPUs: $CACHE_CPU_COUNT"
+          echo "  Cache threads to use: $CACHE_THREADS (1/8 of available)"
+          echo "  Total cache footprint: ${TOTAL_CACHE_SIZE_MB}MB"
+          echo "  Cache size per thread: ${CACHE_SIZE_PER_THREAD_MB}MB"
+          echo "  This simulates occasional memory access patterns (less aggressive)"
           
           # Start cache sensitive workload with perf counters for 9 seconds
           # (2s warmup + 5s measurement + 2s buffer = 9s total)
           echo "Starting cache measurement workload for 9 seconds..."
           CACHE_CPUS_TASKSET=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
-          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_CPU_COUNT --cache-size "${CACHE_SIZE_PER_CPU_KB}K" --perf --metrics-brief -t 9s > /tmp/cache_perf_output.txt 2>&1 &
+          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_THREADS --cache-size "${CACHE_SIZE_PER_THREAD_MB}M" --perf --metrics-brief -t 9s > /tmp/cache_perf_output.txt 2>&1 &
           CACHE_PID=$!
           
           # Assign cache workload to its group
