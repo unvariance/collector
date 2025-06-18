@@ -151,21 +151,70 @@ jobs:
         run: |
           echo "=== Configuring CPU Assignments ==="
           
-          # Get total CPUs and split them
+          # Get total CPUs and split them into quarters
           TOTAL_CPUS=$(nproc)
-          HALF_CPUS=$((TOTAL_CPUS / 2))
+          QUARTER_CPUS=$((TOTAL_CPUS / 4))
           
           echo "Total CPUs: $TOTAL_CPUS"
-          echo "Assigning CPUs 0-$((HALF_CPUS-1)) to memory bandwidth group"
-          echo "Assigning CPUs $HALF_CPUS-$((TOTAL_CPUS-1)) to cache sensitive group"
+          echo "Quarter size: $QUARTER_CPUS CPUs"
+          
+          # Calculate CPU ranges for each quarter
+          Q1_START=0
+          Q1_END=$((QUARTER_CPUS - 1))
+          Q2_START=$QUARTER_CPUS
+          Q2_END=$((2 * QUARTER_CPUS - 1))
+          Q3_START=$((2 * QUARTER_CPUS))
+          Q3_END=$((3 * QUARTER_CPUS - 1))
+          Q4_START=$((3 * QUARTER_CPUS))
+          Q4_END=$((TOTAL_CPUS - 1))
+          
+          echo "CPU quarters:"
+          echo "  Q1: $Q1_START-$Q1_END"
+          echo "  Q2: $Q2_START-$Q2_END" 
+          echo "  Q3: $Q3_START-$Q3_END"
+          echo "  Q4: $Q4_START-$Q4_END"
+          
+          # Memory bandwidth group gets Q1 and Q3 (first and third quarters)
+          # Cache sensitive group gets Q2 and Q4 (second and fourth quarters)
+          # This ensures hyperthreads of the same physical core stay together
+          
+          echo "Assigning Q1 ($Q1_START-$Q1_END) and Q3 ($Q3_START-$Q3_END) to memory bandwidth group"
+          echo "Assigning Q2 ($Q2_START-$Q2_END) and Q4 ($Q4_START-$Q4_END) to cache sensitive group"
+          
+          # Create CPU lists for each group
+          if [ $Q1_END -ge $Q1_START ] && [ $Q3_END -ge $Q3_START ]; then
+            MB_CPU_LIST="${Q1_START}-${Q1_END},${Q3_START}-${Q3_END}"
+          else
+            # Handle edge case where quarters might be empty
+            MB_CPU_LIST="${Q1_START}-${Q1_END}"
+          fi
+          
+          if [ $Q2_END -ge $Q2_START ] && [ $Q4_END -ge $Q4_START ]; then
+            CACHE_CPU_LIST="${Q2_START}-${Q2_END},${Q4_START}-${Q4_END}"
+          else
+            # Handle edge case where quarters might be empty
+            CACHE_CPU_LIST="${Q2_START}-${Q2_END}"
+          fi
           
           # Assign CPUs to groups
-          echo "0-$((HALF_CPUS-1))" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/cpus_list >/dev/null
-          echo "$HALF_CPUS-$((TOTAL_CPUS-1))" | sudo tee /sys/fs/resctrl/cache_sensitive_group/cpus_list >/dev/null
+          echo "$MB_CPU_LIST" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/cpus_list >/dev/null
+          echo "$CACHE_CPU_LIST" | sudo tee /sys/fs/resctrl/cache_sensitive_group/cpus_list >/dev/null
           
-          echo "CPU assignments:"
+          echo "Final CPU assignments:"
           echo "  Memory bandwidth group: $(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)"
           echo "  Cache sensitive group: $(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)"
+          
+          # Display hyperthreading information if available
+          echo ""
+          echo "Hyperthreading topology information:"
+          if [ -f /sys/devices/system/cpu/cpu0/topology/thread_siblings_list ]; then
+            echo "Example physical core 0 hyperthreads: $(cat /sys/devices/system/cpu/cpu0/topology/thread_siblings_list)"
+            if [ -f /sys/devices/system/cpu/cpu1/topology/thread_siblings_list ]; then
+              echo "Example physical core 1 hyperthreads: $(cat /sys/devices/system/cpu/cpu1/topology/thread_siblings_list)"
+            fi
+          else
+            echo "Hyperthreading topology files not available"
+          fi
           echo ""
 
       - name: Initial Resource Allocation
