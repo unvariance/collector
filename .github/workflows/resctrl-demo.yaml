@@ -295,9 +295,35 @@ jobs:
           wait $CACHE_PID || true
           
           # Extract cache performance metrics from stress-ng output
-          CACHE_BOGO_OPS=$(grep "cache" /tmp/cache_perf_output.txt | awk '{print $2}' | head -1 || echo "0")
-          CACHE_REFERENCES=$(grep "Cache References" /tmp/cache_perf_output.txt | awk '{print $1}' | tr -d ',' || echo "0")
-          CACHE_MISSES=$(grep "Cache Misses" /tmp/cache_perf_output.txt | awk '{print $1}' | tr -d ',' || echo "0")
+          # Debug: show the actual output for troubleshooting
+          echo "Debug - stress-ng output:"
+          cat /tmp/cache_perf_output.txt
+          echo "End of stress-ng output"
+          
+          # Parse bogo ops from the metrics line (format: "cache    12345     30.00 ...")
+          CACHE_BOGO_OPS=$(grep -E "^\s*cache\s+" /tmp/cache_perf_output.txt | awk '{print $2}' | head -1 || echo "0")
+          
+          # Parse cache references - try multiple formats
+          # Format 1: "stress-ng: info: [pid]      1,234,567 Cache References"
+          # Format 2: "                 1,234,567 Cache References"
+          CACHE_REFERENCES=$(grep "Cache References" /tmp/cache_perf_output.txt | sed -E 's/.*[[:space:]]+([0-9,]+)[[:space:]]+Cache References.*/\1/' | tr -d ',' | head -1 || echo "0")
+          
+          # Parse cache misses - try multiple formats  
+          CACHE_MISSES=$(grep "Cache Misses" /tmp/cache_perf_output.txt | sed -E 's/.*[[:space:]]+([0-9,]+)[[:space:]]+Cache Misses.*/\1/' | tr -d ',' | head -1 || echo "0")
+          
+          # Alternative parsing if the above doesn't work - extract just the number before "Cache References/Misses"
+          if [[ ! "$CACHE_REFERENCES" =~ ^[0-9]+$ ]]; then
+            CACHE_REFERENCES=$(grep "Cache References" /tmp/cache_perf_output.txt | grep -oE '[0-9,]+[[:space:]]+Cache References' | grep -oE '^[0-9,]+' | tr -d ',' | head -1 || echo "0")
+          fi
+          
+          if [[ ! "$CACHE_MISSES" =~ ^[0-9]+$ ]]; then
+            CACHE_MISSES=$(grep "Cache Misses" /tmp/cache_perf_output.txt | grep -oE '[0-9,]+[[:space:]]+Cache Misses' | grep -oE '^[0-9,]+' | tr -d ',' | head -1 || echo "0")
+          fi
+          
+          echo "Debug - Parsed values:"
+          echo "  CACHE_BOGO_OPS: '$CACHE_BOGO_OPS'"
+          echo "  CACHE_REFERENCES: '$CACHE_REFERENCES'"
+          echo "  CACHE_MISSES: '$CACHE_MISSES'"
           
           # Calculate rates (bytes/second)
           MB_TOTAL_RATE=0
@@ -325,12 +351,19 @@ jobs:
             CACHE_LOCAL_RATE=$((CACHE_LOCAL_RATE / 5))
           fi
           
-          # Calculate cache hit rate
+          # Calculate cache hit rate (validate inputs are numeric first)
           CACHE_HIT_RATE="0"
-          if [ "$CACHE_REFERENCES" -gt "0" ]; then
+          if [[ "$CACHE_REFERENCES" =~ ^[0-9]+$ ]] && [[ "$CACHE_MISSES" =~ ^[0-9]+$ ]] && [ "$CACHE_REFERENCES" -gt "0" ]; then
             CACHE_HITS=$((CACHE_REFERENCES - CACHE_MISSES))
-            CACHE_HIT_RATE=$(echo "scale=2; $CACHE_HITS * 100 / $CACHE_REFERENCES" | bc -l 2>/dev/null || echo "0")
+            if [ "$CACHE_HITS" -ge "0" ]; then
+              CACHE_HIT_RATE=$(echo "scale=2; $CACHE_HITS * 100 / $CACHE_REFERENCES" | bc -l 2>/dev/null || echo "0")
+            fi
           fi
+          
+          # Ensure all values are numeric for CSV output
+          [[ "$CACHE_BOGO_OPS" =~ ^[0-9]+$ ]] || CACHE_BOGO_OPS="0"
+          [[ "$CACHE_REFERENCES" =~ ^[0-9]+$ ]] || CACHE_REFERENCES="0"
+          [[ "$CACHE_MISSES" =~ ^[0-9]+$ ]] || CACHE_MISSES="0"
           
           # Write to CSV
           # Format: phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references,cache_misses,cache_hit_rate,bogo_ops
