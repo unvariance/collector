@@ -38,14 +38,22 @@ jobs:
           instance-type: ${{ inputs.machine-type }}
           image-type: 'ubuntu-24.04'
           pre-runner-script: |
-            sudo yum update -y && \
-            sudo yum install docker git libicu stress-ng -y
+            sudo apt-get update -y && \
+            sudo apt-get install docker git libicu -y
             sudo systemctl enable docker
 
   resctrl-demo:
     needs: setup-runner
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     steps:
+      - name: Install Dependencies
+        run: |
+          echo "=== Installing Dependencies ==="
+          sudo apt-get update || true
+          sudo apt-get install -y stress-ng trace-cmd || true
+          echo "stress-ng version: $(stress-ng --version 2>/dev/null || echo 'Not installed')"
+          echo ""
+
       - name: System Information
         run: |
           echo "=== System Information ==="
