@@ -1,0 +1,100 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Git: Create Feature Branch",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/git/create-branch.sh",
+            "args": ["${input:branchName}"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Sync with Upstream",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/git/sync-upstream.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Clean Merged Branches",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/git/clean-branches.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Clean Squashed Branches",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/git/clean-squashed-branches.sh",
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Git: Full Workflow - New Branch",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Git: Sync with Upstream",
+                "Git: Clean Merged Branches",
+                "Git: Create Feature Branch"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Git: Post-Merge Cleanup",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Git: Sync with Upstream",
+                "Git: Clean Squashed Branches"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "branchName",
+            "description": "Enter the branch name",
+            "default": "feature/",
+            "type": "promptString"
+        }
+    ]
+} 
