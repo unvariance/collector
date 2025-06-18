@@ -238,22 +238,25 @@ jobs:
           echo "Running measurement for phase: $PHASE"
           
           # Calculate cache workload parameters for realistic simulation
-          CACHE_CPUS=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
-          CACHE_CPU_COUNT=$(echo "$CACHE_CPUS" | tr ',-' ' ' | wc -w)
           
-          # Use 1/8 of available cache CPUs (round down)
+          # Use quarter of total system CPUs for cache calculation (like CPU assignment logic)
+          TOTAL_SYSTEM_CPUS=$(nproc)
+          CACHE_CPU_COUNT=$((TOTAL_SYSTEM_CPUS / 4))
+          
+          # Use 1/8 of the quarter (round down)
           CACHE_THREADS=$((CACHE_CPU_COUNT / 8))
           if [ "$CACHE_THREADS" -lt "1" ]; then
             CACHE_THREADS=1  # Ensure at least 1 thread
           fi
           
-          # Calculate cache size per thread: (total_cpus * 1MB) / num_threads
-          TOTAL_CACHE_SIZE_MB=$((CACHE_CPU_COUNT * 1))  # 1MB per available CPU
+          # Calculate cache size per thread: (quarter_cpus * 1MB) / num_threads
+          TOTAL_CACHE_SIZE_MB=$((CACHE_CPU_COUNT * 1))  # 1MB per quarter CPU
           CACHE_SIZE_PER_THREAD_MB=$((TOTAL_CACHE_SIZE_MB / CACHE_THREADS))
           
           echo "Cache workload configuration:"
-          echo "  Available cache CPUs: $CACHE_CPU_COUNT"
-          echo "  Cache threads to use: $CACHE_THREADS (1/8 of available)"
+          echo "  Total system CPUs: $TOTAL_SYSTEM_CPUS"
+          echo "  Quarter of system CPUs: $CACHE_CPU_COUNT (used for cache calculation)"
+          echo "  Cache threads to use: $CACHE_THREADS (1/8 of quarter)"
           echo "  Total cache footprint: ${TOTAL_CACHE_SIZE_MB}MB"
           echo "  Cache size per thread: ${CACHE_SIZE_PER_THREAD_MB}MB"
           echo "  This simulates occasional memory access patterns (less aggressive)"
