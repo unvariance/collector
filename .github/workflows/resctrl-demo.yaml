@@ -259,18 +259,18 @@ jobs:
           echo "  This simulates occasional memory access patterns (less aggressive)"
           
           # Start cache sensitive workload with perf counters for 9 seconds
-          # (2s warmup + 5s measurement + 2s buffer = 9s total)
-          echo "Starting cache measurement workload for 9 seconds..."
+          # (10s warmup + 5s measurement + 2s buffer = 17s total)
+          echo "Starting cache measurement workload for 17 seconds..."
           CACHE_CPUS_TASKSET=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
-          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_THREADS --cache-size "${CACHE_SIZE_PER_THREAD_MB}M" --perf --metrics-brief -t 9s > /tmp/cache_perf_output.txt 2>&1 &
+          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_THREADS --cache-size "${CACHE_SIZE_PER_THREAD_MB}M" --perf --metrics-brief -t 17s > /tmp/cache_perf_output.txt 2>&1 &
           CACHE_PID=$!
           
           # Assign cache workload to its group
           echo $CACHE_PID | sudo tee /sys/fs/resctrl/cache_sensitive_group/tasks >/dev/null
           
           # Wait for cache workload to warm up (2 seconds)
-          echo "Waiting 2 seconds for cache workload to warm up..."
-          sleep 2
+          echo "Waiting 10 seconds for cache workload to warm up..."
+          sleep 10
           
           # Verify cache workload is still running
           if ! kill -0 $CACHE_PID 2>/dev/null; then
