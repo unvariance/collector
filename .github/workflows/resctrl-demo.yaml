@@ -46,8 +46,9 @@ jobs:
         run: |
           echo "=== Installing Dependencies ==="
           sudo apt-get update
-          sudo apt-get install -y stress-ng trace-cmd
+          sudo apt-get install -y stress-ng trace-cmd bc
           echo "stress-ng version: $(stress-ng --version)"
+          echo "bc version: $(bc --version | head -1)"
           echo ""
 
       - name: System Information
@@ -136,14 +137,14 @@ jobs:
         run: |
           echo "=== Creating Resource Control Groups ==="
           
-          # Create high priority group for our demo
-          sudo mkdir -p /sys/fs/resctrl/demo_high_priority
+          # Create memory bandwidth stressor group
+          sudo mkdir -p /sys/fs/resctrl/memory_bandwidth_group
           
-          # Create low priority group for comparison
-          sudo mkdir -p /sys/fs/resctrl/demo_low_priority
+          # Create cache sensitive workload group
+          sudo mkdir -p /sys/fs/resctrl/cache_sensitive_group
           
           echo "Created resource groups:"
-          ls /sys/fs/resctrl/ | grep demo
+          ls /sys/fs/resctrl/ | grep -E "(memory_bandwidth|cache_sensitive)"
           echo ""
 
       - name: Configure CPU Assignments
@@ -155,386 +156,445 @@ jobs:
           HALF_CPUS=$((TOTAL_CPUS / 2))
           
           echo "Total CPUs: $TOTAL_CPUS"
-          echo "Assigning CPUs 0-$((HALF_CPUS-1)) to high priority group"
-          echo "Assigning CPUs $HALF_CPUS-$((TOTAL_CPUS-1)) to low priority group"
+          echo "Assigning CPUs 0-$((HALF_CPUS-1)) to memory bandwidth group"
+          echo "Assigning CPUs $HALF_CPUS-$((TOTAL_CPUS-1)) to cache sensitive group"
           
           # Assign CPUs to groups
-          echo "0-$((HALF_CPUS-1))" | sudo tee /sys/fs/resctrl/demo_high_priority/cpus_list >/dev/null
-          echo "$HALF_CPUS-$((TOTAL_CPUS-1))" | sudo tee /sys/fs/resctrl/demo_low_priority/cpus_list >/dev/null
+          echo "0-$((HALF_CPUS-1))" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/cpus_list >/dev/null
+          echo "$HALF_CPUS-$((TOTAL_CPUS-1))" | sudo tee /sys/fs/resctrl/cache_sensitive_group/cpus_list >/dev/null
           
           echo "CPU assignments:"
-          echo "  High priority: $(cat /sys/fs/resctrl/demo_high_priority/cpus_list)"
-          echo "  Low priority: $(cat /sys/fs/resctrl/demo_low_priority/cpus_list)"
+          echo "  Memory bandwidth group: $(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)"
+          echo "  Cache sensitive group: $(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)"
           echo ""
 
       - name: Initial Resource Allocation
         run: |
           echo "=== Setting Initial Resource Allocation ==="
           
-          # Give high priority group full resources initially
-          echo "Setting high priority group to full resources"
-          cat /sys/fs/resctrl/schemata | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null
-          cat /sys/fs/resctrl/schemata | sudo tee /sys/fs/resctrl/demo_low_priority/schemata >/dev/null
+          # Give both groups full resources initially
+          echo "Setting both groups to full resources initially"
+          cat /sys/fs/resctrl/schemata | sudo tee /sys/fs/resctrl/memory_bandwidth_group/schemata >/dev/null
+          cat /sys/fs/resctrl/schemata | sudo tee /sys/fs/resctrl/cache_sensitive_group/schemata >/dev/null
           
           echo "Initial resource allocation:"
-          echo "High priority schemata:"
-          cat /sys/fs/resctrl/demo_high_priority/schemata
-          echo "Low priority schemata:"
-          cat /sys/fs/resctrl/demo_low_priority/schemata
+          echo "Memory bandwidth group schemata:"
+          cat /sys/fs/resctrl/memory_bandwidth_group/schemata
+          echo "Cache sensitive group schemata:"
+          cat /sys/fs/resctrl/cache_sensitive_group/schemata
           echo ""
 
-      - name: Start Memory Stress Test
+      - name: Create Measurement Script
         run: |
-          echo "=== Starting Memory Stress Test ==="
+          echo "=== Creating Measurement Script ==="
+          
+          cat > /tmp/measure_workloads.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          PHASE="$1"
+          CSV_FILE="$2"
+          
+          echo "Running measurement for phase: $PHASE"
+          
+          # Calculate cache size per core (1MB per core for cache sensitive group)
+          CACHE_CPUS=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
+          CACHE_CPU_COUNT=$(echo "$CACHE_CPUS" | tr ',-' ' ' | wc -w)
+          CACHE_SIZE_MB=$((CACHE_CPU_COUNT * 1))
+          
+          echo "Cache workload will use ${CACHE_SIZE_MB}MB total (1MB per core)"
+          
+          # Start cache sensitive workload with perf counters for 5 seconds
+          echo "Starting cache measurement workload..."
+          CACHE_CPUS_TASKSET=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
+          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache 1 --cache-size "${CACHE_SIZE_MB}M" --perf --metrics-brief -t 5s > /tmp/cache_perf_output.txt 2>&1 &
+          CACHE_PID=$!
+          
+          # Assign cache workload to its group
+          echo $CACHE_PID | sudo tee /sys/fs/resctrl/cache_sensitive_group/tasks >/dev/null
+          
+          # Take initial measurements
+          echo "Taking initial measurements..."
+          
+          # Memory bandwidth group measurements
+          MB_LLC_1=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
+          MB_MBM_TOTAL_1=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          MB_MBM_LOCAL_1=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          
+          # Cache sensitive group measurements
+          CACHE_LLC_1=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
+          CACHE_MBM_TOTAL_1=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          CACHE_MBM_LOCAL_1=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          
+          # Wait 5 seconds
+          sleep 5
+          
+          # Take final measurements
+          echo "Taking final measurements..."
+          
+          # Memory bandwidth group measurements
+          MB_LLC_2=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
+          MB_MBM_TOTAL_2=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          MB_MBM_LOCAL_2=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          
+          # Cache sensitive group measurements
+          CACHE_LLC_2=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
+          CACHE_MBM_TOTAL_2=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          CACHE_MBM_LOCAL_2=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          
+          # Wait for cache workload to finish
+          wait $CACHE_PID || true
+          
+          # Extract cache performance metrics from stress-ng output
+          CACHE_BOGO_OPS=$(grep "cache" /tmp/cache_perf_output.txt | awk '{print $2}' | head -1 || echo "0")
+          CACHE_REFERENCES=$(grep "Cache References" /tmp/cache_perf_output.txt | awk '{print $1}' | tr -d ',' || echo "0")
+          CACHE_MISSES=$(grep "Cache Misses" /tmp/cache_perf_output.txt | awk '{print $1}' | tr -d ',' || echo "0")
+          
+          # Calculate rates (bytes/second)
+          MB_TOTAL_RATE=0
+          MB_LOCAL_RATE=0
+          CACHE_TOTAL_RATE=0
+          CACHE_LOCAL_RATE=0
+          
+          if [ "$MB_MBM_TOTAL_2" -gt "$MB_MBM_TOTAL_1" ]; then
+            MB_TOTAL_RATE=$((MB_MBM_TOTAL_2 - MB_MBM_TOTAL_1))
+            MB_TOTAL_RATE=$((MB_TOTAL_RATE / 5))
+          fi
+          
+          if [ "$MB_MBM_LOCAL_2" -gt "$MB_MBM_LOCAL_1" ]; then
+            MB_LOCAL_RATE=$((MB_MBM_LOCAL_2 - MB_MBM_LOCAL_1))
+            MB_LOCAL_RATE=$((MB_LOCAL_RATE / 5))
+          fi
+          
+          if [ "$CACHE_MBM_TOTAL_2" -gt "$CACHE_MBM_TOTAL_1" ]; then
+            CACHE_TOTAL_RATE=$((CACHE_MBM_TOTAL_2 - CACHE_MBM_TOTAL_1))
+            CACHE_TOTAL_RATE=$((CACHE_TOTAL_RATE / 5))
+          fi
+          
+          if [ "$CACHE_MBM_LOCAL_2" -gt "$CACHE_MBM_LOCAL_1" ]; then
+            CACHE_LOCAL_RATE=$((CACHE_MBM_LOCAL_2 - CACHE_MBM_LOCAL_1))
+            CACHE_LOCAL_RATE=$((CACHE_LOCAL_RATE / 5))
+          fi
+          
+          # Calculate cache hit rate
+          CACHE_HIT_RATE="0"
+          if [ "$CACHE_REFERENCES" -gt "0" ]; then
+            CACHE_HITS=$((CACHE_REFERENCES - CACHE_MISSES))
+            CACHE_HIT_RATE=$(echo "scale=2; $CACHE_HITS * 100 / $CACHE_REFERENCES" | bc -l 2>/dev/null || echo "0")
+          fi
+          
+          # Write to CSV
+          # Format: phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references,cache_misses,cache_hit_rate,bogo_ops
+          echo "$PHASE,memory_bandwidth,$MB_LLC_2,$MB_TOTAL_RATE,$MB_LOCAL_RATE,0,0,0,0" >> "$CSV_FILE"
+          echo "$PHASE,cache_sensitive,$CACHE_LLC_2,$CACHE_TOTAL_RATE,$CACHE_LOCAL_RATE,$CACHE_REFERENCES,$CACHE_MISSES,$CACHE_HIT_RATE,$CACHE_BOGO_OPS" >> "$CSV_FILE"
+          
+          echo "Measurements complete for phase: $PHASE"
+          echo "Memory bandwidth group - LLC: $MB_LLC_2, Total rate: $MB_TOTAL_RATE bytes/s, Local rate: $MB_LOCAL_RATE bytes/s"
+          echo "Cache sensitive group - LLC: $CACHE_LLC_2, Total rate: $CACHE_TOTAL_RATE bytes/s, Local rate: $CACHE_LOCAL_RATE bytes/s"
+          echo "Cache performance - References: $CACHE_REFERENCES, Misses: $CACHE_MISSES, Hit rate: $CACHE_HIT_RATE%, Bogo ops: $CACHE_BOGO_OPS"
+          EOF
+          
+          chmod +x /tmp/measure_workloads.sh
+          
+          # Initialize CSV file with header
+          echo "phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references,cache_misses,cache_hit_rate,bogo_ops" > /tmp/resctrl_measurements.csv
+          
+          echo "Measurement script created"
+
+      - name: Start Memory Bandwidth Workload
+        run: |
+          echo "=== Starting Memory Bandwidth Workload ==="
           
           # Get CPU assignments for taskset
-          HIGH_CPUS=$(cat /sys/fs/resctrl/demo_high_priority/cpus_list)
-          echo "Starting stress-ng on CPUs: $HIGH_CPUS"
+          MB_CPUS=$(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)
+          echo "Starting memory bandwidth stress-ng on CPUs: $MB_CPUS"
           
-          # Start stress-ng in background for entire experiment (1 hour)
-          # Using the recommended memory bandwidth test from the guide
-          taskset -c "$HIGH_CPUS" stress-ng --vm 4 --vm-bytes 75% -t 3600s &
-          STRESS_PID=$!
-          echo "Started stress-ng with PID: $STRESS_PID"
+          # Start long-running memory bandwidth workload (30 minutes)
+          taskset -c "$MB_CPUS" stress-ng --vm 4 --vm-bytes 75% -t 1800s &
+          MB_STRESS_PID=$!
+          echo "Started memory bandwidth stress-ng with PID: $MB_STRESS_PID"
           
           # Save PID for later use
-          echo $STRESS_PID > /tmp/stress_pid
+          echo $MB_STRESS_PID > /tmp/mb_stress_pid
           
           # Give it a moment to start
           sleep 2
           
           # Verify stress-ng is running
-          if kill -0 $STRESS_PID 2>/dev/null; then
-            echo "stress-ng is running (PID: $STRESS_PID)"
+          if kill -0 $MB_STRESS_PID 2>/dev/null; then
+            echo "Memory bandwidth stress-ng is running (PID: $MB_STRESS_PID)"
           else
-            echo "ERROR: stress-ng failed to start"
+            echo "ERROR: Memory bandwidth stress-ng failed to start"
             exit 1
           fi
+          
+          # Assign to memory bandwidth group
+          echo $MB_STRESS_PID | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
+          
+          # Also assign any child processes
+          sleep 1
+          pgrep -P $MB_STRESS_PID | while read child_pid; do
+            echo "Assigning child PID $child_pid to memory_bandwidth_group"
+            echo $child_pid | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
+          done
+          
+          echo "Memory bandwidth workload started and assigned to group"
           echo ""
 
       - name: Verify Critical Functionality
         run: |
           echo "=== Verifying Critical Functionality ==="
           
-          # Verify monitoring files exist and are readable
+          # Verify monitoring files exist and are readable for both groups
           echo "Verifying monitoring capabilities..."
-          test -r /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy
-          test -r /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes
-          test -r /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes
+          test -r /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy
+          test -r /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_total_bytes
+          test -r /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_local_bytes
+          test -r /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/llc_occupancy
+          test -r /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_total_bytes
+          test -r /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_local_bytes
           
           # Verify we can read initial values
           echo "Initial monitoring values:"
-          echo "  LLC: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy)"
-          echo "  Total: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes)"
-          echo "  Local: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes)"
+          echo "Memory bandwidth group:"
+          echo "  LLC: $(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy)"
+          echo "  Total: $(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_total_bytes)"
+          echo "  Local: $(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/mbm_local_bytes)"
+          echo "Cache sensitive group:"
+          echo "  LLC: $(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/llc_occupancy)"
+          echo "  Total: $(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_total_bytes)"
+          echo "  Local: $(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_local_bytes)"
           
           # Verify schemata is readable and writable
-          test -r /sys/fs/resctrl/demo_high_priority/schemata
-          test -w /sys/fs/resctrl/demo_high_priority/schemata
+          test -r /sys/fs/resctrl/memory_bandwidth_group/schemata
+          test -w /sys/fs/resctrl/memory_bandwidth_group/schemata
+          test -r /sys/fs/resctrl/cache_sensitive_group/schemata
+          test -w /sys/fs/resctrl/cache_sensitive_group/schemata
           
           echo "All critical functionality verified!"
           echo ""
 
-      - name: Assign Stress Process to CLOS
+      - name: Phase 1 - Baseline Cache Performance (No Memory Workload)
         run: |
-          echo "=== Assigning Stress Process to High Priority CLOS ==="
+          echo "=== Phase 1: Baseline Cache Performance (No Memory Workload) ==="
           
-          STRESS_PID=$(cat /tmp/stress_pid)
-          echo "Assigning PID $STRESS_PID to demo_high_priority group"
-          echo $STRESS_PID | sudo tee /sys/fs/resctrl/demo_high_priority/tasks >/dev/null
-          
-          # Also assign any child processes
-          pgrep -P $STRESS_PID | while read child_pid; do
-            echo "Assigning child PID $child_pid to demo_high_priority group"
-            echo $child_pid | sudo tee /sys/fs/resctrl/demo_high_priority/tasks >/dev/null
-          done
-          
-          echo "Tasks in high priority group:"
-          wc -l /sys/fs/resctrl/demo_high_priority/tasks
-          echo ""
-
-      - name: Phase 1 - Monitor Unthrottled Performance
-        run: |
-          set -e  # Exit on any error
-          echo "=== Phase 1: Monitoring Unthrottled Performance ==="
-          
-          # Wait for stress to ramp up
-          echo "Waiting 10 seconds for stress-ng to ramp up..."
-          sleep 10
-          
-          # Take first measurement
-          echo "Taking first measurement..."
-          LLC_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
-          
-          echo "Measurement 1 (before 5s sleep):"
-          echo "  LLC occupancy: $LLC_1 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_1 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_1 bytes"
-          
-          # Wait 5 seconds
+          # Wait for system to stabilize
+          echo "Waiting 5 seconds for system to stabilize..."
           sleep 5
           
-          # Take second measurement
-          echo "Taking second measurement..."
-          LLC_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          # Run measurement script
+          /tmp/measure_workloads.sh "baseline_cache_only" "/tmp/resctrl_measurements.csv"
           
-          echo "Measurement 2 (after 5s sleep):"
-          echo "  LLC occupancy: $LLC_2 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_2 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_2 bytes"
-          
-          # Calculate rates
-          if [ "$MBM_TOTAL_2" -gt "$MBM_TOTAL_1" ]; then
-            TOTAL_RATE=$((MBM_TOTAL_2 - MBM_TOTAL_1))
-            TOTAL_RATE_MBS=$((TOTAL_RATE / 5 / 1024 / 1024))
-            echo "  Total bandwidth rate: $((TOTAL_RATE / 5)) bytes/sec ($TOTAL_RATE_MBS MB/s)"
-          fi
-          
-          if [ "$MBM_LOCAL_2" -gt "$MBM_LOCAL_1" ]; then
-            LOCAL_RATE=$((MBM_LOCAL_2 - MBM_LOCAL_1))
-            LOCAL_RATE_MBS=$((LOCAL_RATE / 5 / 1024 / 1024))
-            echo "  Local bandwidth rate: $((LOCAL_RATE / 5)) bytes/sec ($LOCAL_RATE_MBS MB/s)"
-          fi
-          
-          echo "Phase 1 (Unthrottled) complete."
+          echo "Phase 1 complete - baseline cache performance measured"
           echo ""
 
-      - name: Apply Memory Bandwidth Throttling
+      - name: Phase 2 - Both Workloads Unthrottled  
         run: |
-          set -e  # Exit on any error
-          echo "=== Applying Memory Bandwidth Throttling ==="
+          echo "=== Phase 2: Both Workloads Running Unthrottled ==="
           
-          # Throttle to 20% of memory bandwidth
-          echo "Throttling high priority group to 20% memory bandwidth"
+          # Wait for memory bandwidth workload to ramp up
+          echo "Waiting 10 seconds for memory bandwidth workload to ramp up..."
+          sleep 10
           
-          # Read current schemata
-          ORIGINAL_SCHEMATA=$(cat /sys/fs/resctrl/demo_high_priority/schemata)
-          echo "Original schemata:"
+          # Run measurement script
+          /tmp/measure_workloads.sh "both_unthrottled" "/tmp/resctrl_measurements.csv"
+          
+          echo "Phase 2 complete - both workloads measured unthrottled"
+          echo ""
+
+      - name: Phase 3 - Memory Bandwidth Throttled to 20%
+        run: |
+          set -e
+          echo "=== Phase 3: Memory Bandwidth Throttled to 20% ==="
+          
+          # Throttle memory bandwidth group to 20%
+          echo "Throttling memory bandwidth group to 20% memory bandwidth"
+          
+          ORIGINAL_SCHEMATA=$(cat /sys/fs/resctrl/memory_bandwidth_group/schemata)
+          echo "Original memory bandwidth schemata:"
           echo "$ORIGINAL_SCHEMATA"
           
-          # Create modified schemata with bandwidth restriction
-          # We need to modify only the MB line while preserving L2 and L3 settings
+          # Modify MB line to 20%
           MODIFIED_SCHEMATA=$(echo "$ORIGINAL_SCHEMATA" | sed 's/MB:0=[[:space:]]*[0-9]*/MB:0=20/')
           
           echo "Modified schemata:"
           echo "$MODIFIED_SCHEMATA"
           
           # Apply the modified schemata
-          echo "$MODIFIED_SCHEMATA" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null
+          echo "$MODIFIED_SCHEMATA" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/schemata >/dev/null
           
-          echo "New schemata after throttling:"
-          cat /sys/fs/resctrl/demo_high_priority/schemata
-          
-          echo "Throttling applied. Waiting for effect..."
-          sleep 3
-          echo ""
-
-      - name: Phase 2 - Monitor Throttled Performance
-        run: |
-          set -e  # Exit on any error
-          echo "=== Phase 2: Monitoring Throttled Performance ==="
+          echo "New memory bandwidth group schemata after throttling:"
+          cat /sys/fs/resctrl/memory_bandwidth_group/schemata
           
           # Wait for throttling to take effect
           echo "Waiting 10 seconds for throttling to take effect..."
           sleep 10
           
-          # Take first measurement
-          echo "Taking first measurement..."
-          LLC_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          # Run measurement script
+          /tmp/measure_workloads.sh "memory_throttled_20pct" "/tmp/resctrl_measurements.csv"
           
-          echo "Measurement 1 (before 5s sleep):"
-          echo "  LLC occupancy: $LLC_1 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_1 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_1 bytes"
-          
-          # Wait 5 seconds
-          sleep 5
-          
-          # Take second measurement
-          echo "Taking second measurement..."
-          LLC_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
-          
-          echo "Measurement 2 (after 5s sleep):"
-          echo "  LLC occupancy: $LLC_2 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_2 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_2 bytes"
-          
-          # Calculate rates
-          if [ "$MBM_TOTAL_2" -gt "$MBM_TOTAL_1" ]; then
-            TOTAL_RATE=$((MBM_TOTAL_2 - MBM_TOTAL_1))
-            TOTAL_RATE_MBS=$((TOTAL_RATE / 5 / 1024 / 1024))
-            echo "  Total bandwidth rate: $((TOTAL_RATE / 5)) bytes/sec ($TOTAL_RATE_MBS MB/s)"
-          fi
-          
-          if [ "$MBM_LOCAL_2" -gt "$MBM_LOCAL_1" ]; then
-            LOCAL_RATE=$((MBM_LOCAL_2 - MBM_LOCAL_1))
-            LOCAL_RATE_MBS=$((LOCAL_RATE / 5 / 1024 / 1024))
-            echo "  Local bandwidth rate: $((LOCAL_RATE / 5)) bytes/sec ($LOCAL_RATE_MBS MB/s)"
-          fi
-          
-          # Check if stress is still running
-          STRESS_PID=$(cat /tmp/stress_pid 2>/dev/null || echo "")
-          if [ -n "$STRESS_PID" ] && kill -0 $STRESS_PID 2>/dev/null; then
-            echo "stress-ng still running (PID: $STRESS_PID)"
-          else
-            echo "Warning: stress-ng appears to have finished"
-          fi
-          
-          echo "Phase 2 (Throttled to 20%) complete."
+          echo "Phase 3 complete - memory bandwidth throttled to 20%"
           echo ""
 
-      - name: Fix Memory Bandwidth Restoration
+      - name: Phase 4 - Memory Throttled + Cache Allocation Restricted
         run: |
-          set -e  # Exit on any error
-          echo "=== Fixing Memory Bandwidth Restoration ==="
+          set -e
+          echo "=== Phase 4: Memory Throttled + Cache Allocation Restricted ==="
           
-          # The issue is that the restoration logic isn't working correctly
-          # Let's extract the default MB value more carefully
-          DEFAULT_SCHEMATA=$(cat /sys/fs/resctrl/schemata)
-          echo "Default schemata from root:"
-          echo "$DEFAULT_SCHEMATA"
+          # Get the cache mask to calculate first 4 cache ways
+          CACHE_MASK=$(cat /sys/fs/resctrl/info/L3/cbm_mask)
+          echo "Full cache mask: $CACHE_MASK"
           
-          # Extract the MB line, handling whitespace properly
-          DEFAULT_MB_LINE=$(echo "$DEFAULT_SCHEMATA" | grep "^[[:space:]]*MB:" | head -1)
-          echo "Extracted default MB line: '$DEFAULT_MB_LINE'"
+          # Calculate first 4 cache ways (assuming 20-way cache, first 4 ways = 0xf)
+          # For safety, we'll use 0xf which represents the first 4 cache ways
+          RESTRICTED_CACHE_MASK="f"
           
-          # Get current schemata
-          CURRENT_SCHEMATA=$(cat /sys/fs/resctrl/demo_high_priority/schemata)
-          echo "Current schemata (before fix):"
+          echo "Restricting memory bandwidth group to first 4 cache ways: $RESTRICTED_CACHE_MASK"
+          
+          # Get current schemata and modify L3 line
+          CURRENT_SCHEMATA=$(cat /sys/fs/resctrl/memory_bandwidth_group/schemata)
+          echo "Current memory bandwidth schemata:"
           echo "$CURRENT_SCHEMATA"
           
-          # Replace the MB line properly
-          if [ -n "$DEFAULT_MB_LINE" ]; then
-            # Remove leading/trailing whitespace from default MB line
-            DEFAULT_MB_CLEAN=$(echo "$DEFAULT_MB_LINE" | xargs)
-            echo "Clean default MB line: '$DEFAULT_MB_CLEAN'"
-            
-            # Replace MB line in current schemata
-            FIXED_SCHEMATA=$(echo "$CURRENT_SCHEMATA" | sed "s/^[[:space:]]*MB:.*/$DEFAULT_MB_CLEAN/")
-            
-            echo "Fixed schemata:"
-            echo "$FIXED_SCHEMATA"
-            
-            # Apply the fixed schemata
-            echo "$FIXED_SCHEMATA" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null
-          else
-            echo "ERROR: Could not extract default MB line"
-            exit 1
-          fi
+          # Modify L3 line to restrict cache ways while keeping MB at 20%
+          MODIFIED_SCHEMATA=$(echo "$CURRENT_SCHEMATA" | sed "s/L3:0=[[:space:]]*[0-9a-fA-F]*/L3:0=$RESTRICTED_CACHE_MASK/")
           
-          echo "Final schemata after fix:"
-          cat /sys/fs/resctrl/demo_high_priority/schemata
-          echo ""
-
-      - name: Phase 3 - Monitor Unthrottled Recovery
-        run: |
-          set -e  # Exit on any error
-          echo "=== Phase 3: Monitoring Unthrottled Recovery ==="
+          echo "Modified schemata with cache restriction:"
+          echo "$MODIFIED_SCHEMATA"
           
-          # Wait for restoration to take effect
-          echo "Waiting 10 seconds for bandwidth restoration to take effect..."
+          # Apply the modified schemata
+          echo "$MODIFIED_SCHEMATA" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/schemata >/dev/null
+          
+          echo "New memory bandwidth group schemata after cache restriction:"
+          cat /sys/fs/resctrl/memory_bandwidth_group/schemata
+          
+          # Wait for cache allocation to take effect
+          echo "Waiting 10 seconds for cache allocation to take effect..."
           sleep 10
           
-          # Take first measurement
-          echo "Taking first measurement..."
-          LLC_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_1=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
+          # Run measurement script
+          /tmp/measure_workloads.sh "memory_throttled_cache_restricted" "/tmp/resctrl_measurements.csv"
           
-          echo "Measurement 1 (before 5s sleep):"
-          echo "  LLC occupancy: $LLC_1 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_1 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_1 bytes"
-          
-          # Wait 5 seconds
-          sleep 5
-          
-          # Take second measurement
-          echo "Taking second measurement..."
-          LLC_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
-          MBM_TOTAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
-          MBM_LOCAL_2=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
-          
-          echo "Measurement 2 (after 5s sleep):"
-          echo "  LLC occupancy: $LLC_2 bytes"
-          echo "  Memory bandwidth total: $MBM_TOTAL_2 bytes"
-          echo "  Memory bandwidth local: $MBM_LOCAL_2 bytes"
-          
-          # Calculate rates
-          if [ "$MBM_TOTAL_2" -gt "$MBM_TOTAL_1" ]; then
-            TOTAL_RATE=$((MBM_TOTAL_2 - MBM_TOTAL_1))
-            TOTAL_RATE_MBS=$((TOTAL_RATE / 5 / 1024 / 1024))
-            echo "  Total bandwidth rate: $((TOTAL_RATE / 5)) bytes/sec ($TOTAL_RATE_MBS MB/s)"
-          fi
-          
-          if [ "$MBM_LOCAL_2" -gt "$MBM_LOCAL_1" ]; then
-            LOCAL_RATE=$((MBM_LOCAL_2 - MBM_LOCAL_1))
-            LOCAL_RATE_MBS=$((LOCAL_RATE / 5 / 1024 / 1024))
-            echo "  Local bandwidth rate: $((LOCAL_RATE / 5)) bytes/sec ($LOCAL_RATE_MBS MB/s)"
-          fi
-          
-          # Check if stress is still running
-          STRESS_PID=$(cat /tmp/stress_pid 2>/dev/null || echo "")
-          if [ -n "$STRESS_PID" ] && kill -0 $STRESS_PID 2>/dev/null; then
-            echo "stress-ng still running (PID: $STRESS_PID)"
-          else
-            echo "Warning: stress-ng appears to have finished"
-          fi
-          
-          echo "Phase 3 (Restored to 100%) complete."
+          echo "Phase 4 complete - memory throttled and cache restricted"
           echo ""
 
-      - name: Demonstration Summary
+      - name: Phase 5 - Restore Full Resources
         run: |
-          echo "=== Resource Control Demonstration Summary ==="
-          echo "This demonstration showed:"
-          echo "1. ✅ Hardware RDT support detection"
-          echo "2. ✅ resctrl filesystem mounting and capabilities"
-          echo "3. ✅ CLOS (Class of Service) creation and CPU assignment"
-          echo "4. ✅ Process assignment to resource control groups"
-          echo "5. ✅ Memory bandwidth monitoring using RMIDs"
-          echo "6. ✅ Memory bandwidth throttling via MBA (Memory Bandwidth Allocation)"
-          echo "7. ✅ Real-time monitoring of cache occupancy and bandwidth usage"
-          echo "8. ✅ Demonstration of throttling effects on memory-intensive workloads"
+          set -e
+          echo "=== Phase 5: Restore Full Resources ==="
+          
+          # Restore full resources to both groups
+          echo "Restoring full resources to both groups"
+          
+          DEFAULT_SCHEMATA=$(cat /sys/fs/resctrl/schemata)
+          echo "Default schemata:"
+          echo "$DEFAULT_SCHEMATA"
+          
+          # Apply default schemata to both groups
+          echo "$DEFAULT_SCHEMATA" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/schemata >/dev/null
+          echo "$DEFAULT_SCHEMATA" | sudo tee /sys/fs/resctrl/cache_sensitive_group/schemata >/dev/null
+          
+          echo "Resources restored. Current schemata:"
+          echo "Memory bandwidth group:"
+          cat /sys/fs/resctrl/memory_bandwidth_group/schemata
+          echo "Cache sensitive group:"
+          cat /sys/fs/resctrl/cache_sensitive_group/schemata
+          
+          # Wait for restoration to take effect
+          echo "Waiting 10 seconds for restoration to take effect..."
+          sleep 10
+          
+          # Run final measurement
+          /tmp/measure_workloads.sh "resources_restored" "/tmp/resctrl_measurements.csv"
+          
+          echo "Phase 5 complete - resources restored"
+          echo ""
+
+      - name: Display Results and Summary
+        run: |
+          echo "=== Resource Control Demonstration Results ==="
+          
+          echo "Complete CSV results:"
+          cat /tmp/resctrl_measurements.csv
+          echo ""
+          
+          echo "Results Summary:"
+          echo "1. ✅ Hardware RDT support detection and verification"
+          echo "2. ✅ Two-workload resource control demonstration:"
+          echo "   - Memory bandwidth intensive workload (stress-ng --vm)"
+          echo "   - Cache sensitive workload (stress-ng --cache with perf counters)"
+          echo "3. ✅ Five-phase experiment conducted:"
+          echo "   - Phase 1: Baseline cache performance (no memory workload)"
+          echo "   - Phase 2: Both workloads unthrottled"
+          echo "   - Phase 3: Memory bandwidth throttled to 20%"
+          echo "   - Phase 4: Memory throttled + cache allocation restricted to 4 ways"
+          echo "   - Phase 5: Resources restored to full allocation"
+          echo "4. ✅ Comprehensive measurements collected:"
+          echo "   - LLC occupancy for both workload groups"
+          echo "   - Memory bandwidth rates (total and local)"
+          echo "   - Cache references, cache misses, and hit rates"
+          echo "   - Cache workload throughput (bogo operations)"
           echo ""
           echo "Key technologies demonstrated:"
           echo "- Intel RDT (Resource Director Technology)"
-          echo "- Cache Monitoring Technology (CMT)"
+          echo "- Cache Monitoring Technology (CMT) with RMID allocation"
           echo "- Memory Bandwidth Monitoring (MBM)"
           echo "- Memory Bandwidth Allocation (MBA)"
           echo "- Cache Allocation Technology (CAT)"
+          echo "- Performance counter integration with stress-ng --perf"
+          echo ""
+          
+          # Show some key insights from the data
+          echo "Key Insights from Measurements:"
+          echo "Analyzing cache performance across phases..."
+          
+          # Extract cache hit rates for comparison
+          BASELINE_CACHE_HIT=$(grep "baseline_cache_only,cache_sensitive" /tmp/resctrl_measurements.csv | cut -d, -f8)
+          UNTHROTTLED_CACHE_HIT=$(grep "both_unthrottled,cache_sensitive" /tmp/resctrl_measurements.csv | cut -d, -f8)
+          THROTTLED_CACHE_HIT=$(grep "memory_throttled_20pct,cache_sensitive" /tmp/resctrl_measurements.csv | cut -d, -f8)
+          RESTRICTED_CACHE_HIT=$(grep "memory_throttled_cache_restricted,cache_sensitive" /tmp/resctrl_measurements.csv | cut -d, -f8)
+          RESTORED_CACHE_HIT=$(grep "resources_restored,cache_sensitive" /tmp/resctrl_measurements.csv | cut -d, -f8)
+          
+          echo "Cache hit rates across phases:"
+          echo "  Baseline (cache only): ${BASELINE_CACHE_HIT}%"
+          echo "  Both unthrottled: ${UNTHROTTLED_CACHE_HIT}%"
+          echo "  Memory throttled: ${THROTTLED_CACHE_HIT}%"
+          echo "  Cache restricted: ${RESTRICTED_CACHE_HIT}%"
+          echo "  Resources restored: ${RESTORED_CACHE_HIT}%"
           echo ""
           echo "The demonstration is complete!"
 
-      - name: Kill Long-Running Stress Test
+      - name: Upload Results as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: resctrl-demo-results
+          path: |
+            /tmp/resctrl_measurements.csv
+            /tmp/cache_perf_output.txt
+          retention-days: 30
+
+      - name: Kill Long-Running Workloads
         run: |
-          echo "=== Killing Long-Running Stress Test ==="
+          echo "=== Killing Long-Running Workloads ==="
           
-          # Kill the specific stress-ng process we started
-          STRESS_PID=$(cat /tmp/stress_pid 2>/dev/null || echo "")
-          if [ -n "$STRESS_PID" ] && kill -0 $STRESS_PID 2>/dev/null; then
-            echo "Killing stress-ng PID: $STRESS_PID"
-            kill $STRESS_PID || echo "Could not kill stress-ng with TERM signal"
+          # Kill the memory bandwidth stress-ng process
+          MB_STRESS_PID=$(cat /tmp/mb_stress_pid 2>/dev/null || echo "")
+          if [ -n "$MB_STRESS_PID" ] && kill -0 $MB_STRESS_PID 2>/dev/null; then
+            echo "Killing memory bandwidth stress-ng PID: $MB_STRESS_PID"
+            kill $MB_STRESS_PID || echo "Could not kill memory bandwidth stress-ng with TERM signal"
             sleep 2
-            if kill -0 $STRESS_PID 2>/dev/null; then
+            if kill -0 $MB_STRESS_PID 2>/dev/null; then
               echo "Process still running, using KILL signal"
-              kill -9 $STRESS_PID || echo "Could not kill stress-ng with KILL signal"
+              kill -9 $MB_STRESS_PID || echo "Could not kill memory bandwidth stress-ng with KILL signal"
             fi
-            echo "stress-ng terminated"
+            echo "Memory bandwidth stress-ng terminated"
           else
-            echo "stress-ng not running or PID not found"
+            echo "Memory bandwidth stress-ng not running or PID not found"
           fi
           
           # Kill any other remaining stress processes
           pkill stress-ng || echo "No other stress-ng processes found"
+          echo "All workloads terminated"
           echo ""
 
       - name: Cleanup
@@ -542,15 +602,16 @@ jobs:
           echo "=== Cleanup ==="
           
           # Remove resource groups (this moves tasks back to default)
-          sudo rmdir /sys/fs/resctrl/demo_high_priority/mon_groups/* 2>/dev/null || true
-          sudo rmdir /sys/fs/resctrl/demo_high_priority 2>/dev/null || echo "Could not remove demo_high_priority"
-          sudo rmdir /sys/fs/resctrl/demo_low_priority/mon_groups/* 2>/dev/null || true
-          sudo rmdir /sys/fs/resctrl/demo_low_priority 2>/dev/null || echo "Could not remove demo_low_priority"
+          sudo rmdir /sys/fs/resctrl/memory_bandwidth_group/mon_groups/* 2>/dev/null || true
+          sudo rmdir /sys/fs/resctrl/memory_bandwidth_group 2>/dev/null || echo "Could not remove memory_bandwidth_group"
+          sudo rmdir /sys/fs/resctrl/cache_sensitive_group/mon_groups/* 2>/dev/null || true
+          sudo rmdir /sys/fs/resctrl/cache_sensitive_group 2>/dev/null || echo "Could not remove cache_sensitive_group"
           
-          # Clean up temp files
-          rm -f /tmp/stress_pid /tmp/initial_mbm_total || true
+          # Clean up temp files (keep CSV and results for artifact)
+          rm -f /tmp/mb_stress_pid /tmp/measure_workloads.sh || true
           
           echo "Cleanup completed. All processes moved back to default resource group."
+          echo "Results preserved in /tmp/resctrl_measurements.csv for artifact upload"
           echo "To unmount resctrl: sudo umount /sys/fs/resctrl"
 
       - name: Power off
