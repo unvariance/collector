@@ -1,0 +1,433 @@
+name: Resource Control Demo
+on: 
+  workflow_dispatch:  # Manual trigger for testing
+    inputs:
+      machine-type:
+        description: 'EC2 instance type to use'
+        required: false
+        default: 'm7i.metal-24xl'
+        type: string
+      stress-duration:
+        description: 'Duration for stress tests (seconds)'
+        required: false
+        default: '30'
+        type: string
+
+# Add permissions needed for OIDC authentication
+permissions:
+  id-token: write # Required for requesting the JWT
+
+jobs:
+  setup-runner:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          instance-type: ${{ inputs.machine-type }}
+          image-type: 'ubuntu-24.04'
+          pre-runner-script: |
+            sudo yum update -y && \
+            sudo yum install docker git libicu stress-ng -y
+            sudo systemctl enable docker
+
+  resctrl-demo:
+    needs: setup-runner
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    steps:
+      - name: System Information
+        run: |
+          echo "=== System Information ==="
+          echo "CPU Model: $(grep 'model name' /proc/cpuinfo | head -1 | cut -d: -f2 | xargs)" || true
+          echo "CPU Count: $(nproc)" || true
+          echo "Memory: $(free -h | grep Mem)" || true
+          echo "Kernel: $(uname -r)" || true
+          echo ""
+
+      - name: Check Hardware RDT Support
+        run: |
+          echo "=== Checking Hardware RDT Support ==="
+          echo "CPU RDT Features:"
+          grep -E "rdt_a|cat_l3|cqm_llc|cqm_occup_llc|cqm_mbm_total|cqm_mbm_local|mba" /proc/cpuinfo | head -5 || echo "No RDT features found in /proc/cpuinfo"
+          echo ""
+          echo "Kernel resctrl support:"
+          cat /proc/filesystems | grep resctrl || echo "resctrl not found in /proc/filesystems"
+          echo ""
+
+      - name: Mount resctrl Filesystem
+        run: |
+          echo "=== Mounting resctrl Filesystem ==="
+          sudo mkdir -p /sys/fs/resctrl || true
+          sudo mount -t resctrl resctrl /sys/fs/resctrl || echo "Failed to mount resctrl (might already be mounted)"
+          
+          echo "Mount verification:"
+          mount | grep resctrl || echo "resctrl not found in mount output"
+          
+          echo "resctrl directory contents:"
+          ls -la /sys/fs/resctrl/ || echo "Could not list /sys/fs/resctrl/"
+          echo ""
+
+      - name: Check resctrl Capabilities
+        run: |
+          echo "=== resctrl Hardware Capabilities ==="
+          
+          echo "Available info directories:"
+          ls /sys/fs/resctrl/info/ || echo "Could not list info directory"
+          
+          echo "L3 Cache capabilities:"
+          echo "  CLOSIDs: $(cat /sys/fs/resctrl/info/L3/num_closids 2>/dev/null || echo 'N/A')"
+          echo "  Cache mask: $(cat /sys/fs/resctrl/info/L3/cbm_mask 2>/dev/null || echo 'N/A')"
+          
+          echo "L3 Monitoring capabilities:"
+          echo "  RMIDs: $(cat /sys/fs/resctrl/info/L3_MON/num_rmids 2>/dev/null || echo 'N/A')"
+          echo "  Monitoring features: $(cat /sys/fs/resctrl/info/L3_MON/mon_features 2>/dev/null || echo 'N/A')"
+          
+          echo "Memory Bandwidth capabilities:"
+          echo "  MBA CLOSIDs: $(cat /sys/fs/resctrl/info/MB/num_closids 2>/dev/null || echo 'N/A')"
+          echo "  Min bandwidth: $(cat /sys/fs/resctrl/info/MB/min_bandwidth 2>/dev/null || echo 'N/A')%"
+          echo "  Bandwidth granularity: $(cat /sys/fs/resctrl/info/MB/bandwidth_gran 2>/dev/null || echo 'N/A')%"
+          echo ""
+
+      - name: Show Baseline Resource Usage
+        run: |
+          echo "=== Baseline Resource Usage ==="
+          echo "Default group CPU assignment:"
+          cat /sys/fs/resctrl/cpus_list 2>/dev/null || echo "Could not read default cpus_list"
+          
+          echo "Default group tasks:"
+          wc -l /sys/fs/resctrl/tasks 2>/dev/null || echo "Could not count default tasks"
+          
+          echo "Default schemata:"
+          cat /sys/fs/resctrl/schemata 2>/dev/null || echo "Could not read default schemata"
+          
+          echo "Baseline monitoring (domain 0):"
+          echo "  LLC occupancy: $(cat /sys/fs/resctrl/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo 'N/A') bytes"
+          echo "  Memory bandwidth total: $(cat /sys/fs/resctrl/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo 'N/A')"
+          echo "  Memory bandwidth local: $(cat /sys/fs/resctrl/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo 'N/A')"
+          echo ""
+
+      - name: Create Resource Control Groups
+        run: |
+          echo "=== Creating Resource Control Groups ==="
+          
+          # Create high priority group for our demo
+          sudo mkdir -p /sys/fs/resctrl/demo_high_priority || echo "Could not create demo_high_priority group"
+          
+          # Create low priority group for comparison
+          sudo mkdir -p /sys/fs/resctrl/demo_low_priority || echo "Could not create demo_low_priority group"
+          
+          echo "Created resource groups:"
+          ls /sys/fs/resctrl/ | grep demo || echo "No demo groups found"
+          echo ""
+
+      - name: Configure CPU Assignments
+        run: |
+          echo "=== Configuring CPU Assignments ==="
+          
+          # Get total CPUs and split them
+          TOTAL_CPUS=$(nproc)
+          HALF_CPUS=$((TOTAL_CPUS / 2))
+          
+          echo "Total CPUs: $TOTAL_CPUS"
+          echo "Assigning CPUs 0-$((HALF_CPUS-1)) to high priority group"
+          echo "Assigning CPUs $HALF_CPUS-$((TOTAL_CPUS-1)) to low priority group"
+          
+          # Assign CPUs to groups
+          echo "0-$((HALF_CPUS-1))" | sudo tee /sys/fs/resctrl/demo_high_priority/cpus_list >/dev/null || echo "Failed to assign CPUs to high priority"
+          echo "$HALF_CPUS-$((TOTAL_CPUS-1))" | sudo tee /sys/fs/resctrl/demo_low_priority/cpus_list >/dev/null || echo "Failed to assign CPUs to low priority"
+          
+          echo "CPU assignments:"
+          echo "  High priority: $(cat /sys/fs/resctrl/demo_high_priority/cpus_list 2>/dev/null || echo 'N/A')"
+          echo "  Low priority: $(cat /sys/fs/resctrl/demo_low_priority/cpus_list 2>/dev/null || echo 'N/A')"
+          echo ""
+
+      - name: Initial Resource Allocation
+        run: |
+          echo "=== Setting Initial Resource Allocation ==="
+          
+          # Give high priority group full resources initially
+          echo "Setting high priority group to full resources"
+          # Note: Using || true to continue even if commands fail
+          cat /sys/fs/resctrl/schemata 2>/dev/null | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not copy default schemata to high priority"
+          cat /sys/fs/resctrl/schemata 2>/dev/null | sudo tee /sys/fs/resctrl/demo_low_priority/schemata >/dev/null || echo "Could not copy default schemata to low priority"
+          
+          echo "Initial resource allocation:"
+          echo "High priority schemata:"
+          cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "Could not read high priority schemata"
+          echo "Low priority schemata:"
+          cat /sys/fs/resctrl/demo_low_priority/schemata 2>/dev/null || echo "Could not read low priority schemata"
+          echo ""
+
+      - name: Start Memory Stress Test
+        run: |
+          echo "=== Starting Memory Stress Test ==="
+          
+          # Get CPU assignments for taskset
+          HIGH_CPUS=$(cat /sys/fs/resctrl/demo_high_priority/cpus_list 2>/dev/null || echo "0-3")
+          echo "Starting stress-ng on CPUs: $HIGH_CPUS"
+          
+          # Start stress-ng in background
+          # Using the recommended memory bandwidth test from the guide
+          taskset -c "$HIGH_CPUS" stress-ng --vm 4 --vm-bytes 75% -t ${{ inputs.stress-duration }}s &
+          STRESS_PID=$!
+          echo "Started stress-ng with PID: $STRESS_PID"
+          
+          # Save PID for later use
+          echo $STRESS_PID > /tmp/stress_pid
+          
+          # Give it a moment to start
+          sleep 2
+          
+          # Verify stress-ng is running
+          if kill -0 $STRESS_PID 2>/dev/null; then
+            echo "stress-ng is running (PID: $STRESS_PID)"
+          else
+            echo "Warning: stress-ng may not be running"
+          fi
+          echo ""
+
+      - name: Assign Stress Process to CLOS
+        run: |
+          echo "=== Assigning Stress Process to High Priority CLOS ==="
+          
+          STRESS_PID=$(cat /tmp/stress_pid 2>/dev/null || echo "")
+          if [ -n "$STRESS_PID" ]; then
+            echo "Assigning PID $STRESS_PID to demo_high_priority group"
+            echo $STRESS_PID | sudo tee /sys/fs/resctrl/demo_high_priority/tasks >/dev/null || echo "Could not assign PID to high priority group"
+            
+            # Also assign any child processes
+            pgrep -P $STRESS_PID | while read child_pid; do
+              echo "Assigning child PID $child_pid to demo_high_priority group"
+              echo $child_pid | sudo tee /sys/fs/resctrl/demo_high_priority/tasks >/dev/null || echo "Could not assign child PID"
+            done
+            
+            echo "Tasks in high priority group:"
+            wc -l /sys/fs/resctrl/demo_high_priority/tasks 2>/dev/null || echo "Could not count tasks"
+          else
+            echo "No stress PID found, skipping task assignment"
+          fi
+          echo ""
+
+      - name: Monitor Initial Resource Usage
+        run: |
+          echo "=== Monitoring Initial Resource Usage (Unrestricted) ==="
+          
+          # Wait a few seconds for stress to ramp up
+          sleep 5
+          
+          echo "Resource usage after 5 seconds of unrestricted stress:"
+          
+          # Monitor high priority group
+          echo "High Priority Group:"
+          echo "  LLC occupancy: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo 'N/A') bytes"
+          echo "  Memory bandwidth total: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo 'N/A')"
+          echo "  Memory bandwidth local: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo 'N/A')"
+          
+          # Save initial values for comparison
+          cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null > /tmp/initial_mbm_total || echo "0" > /tmp/initial_mbm_total
+          
+          # Monitor system memory usage
+          echo "System memory usage:"
+          free -h | grep -E "(Mem|Swap)" || echo "Could not get memory info"
+          
+          echo ""
+
+      - name: Apply Memory Bandwidth Throttling
+        run: |
+          echo "=== Applying Memory Bandwidth Throttling ==="
+          
+          # Throttle to 20% of memory bandwidth
+          echo "Throttling high priority group to 20% memory bandwidth"
+          
+          # Create new schemata with bandwidth restriction
+          ORIGINAL_SCHEMATA=$(cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "")
+          echo "Original schemata: $ORIGINAL_SCHEMATA"
+          
+          # Apply bandwidth throttling (20% on all domains)
+          # Note: This assumes domains 0 and 1 exist, adjust as needed
+          echo "MB:0=20;1=20" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not apply MB throttling"
+          
+          # If that fails, try with just domain 0
+          if [ $? -ne 0 ]; then
+            echo "Trying with single domain..."
+            echo "MB:0=20" | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not apply single domain MB throttling"
+          fi
+          
+          echo "New schemata after throttling:"
+          cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "Could not read throttled schemata"
+          
+          echo "Throttling applied. Waiting for effect..."
+          sleep 3
+          echo ""
+
+      - name: Monitor Throttled Resource Usage
+        run: |
+          echo "=== Monitoring Throttled Resource Usage ==="
+          
+          # Wait additional time for throttling to take effect
+          sleep 5
+          
+          echo "Resource usage after throttling (20% memory bandwidth):"
+          
+          # Monitor high priority group after throttling
+          echo "High Priority Group (Throttled):"
+          echo "  LLC occupancy: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo 'N/A') bytes"
+          
+          # Get current and initial bandwidth for comparison
+          CURRENT_MBM=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          INITIAL_MBM=$(cat /tmp/initial_mbm_total 2>/dev/null || echo "0")
+          
+          echo "  Memory bandwidth total: $CURRENT_MBM"
+          echo "  Initial bandwidth: $INITIAL_MBM"
+          
+          # Calculate bandwidth rate if possible
+          if [ "$CURRENT_MBM" != "N/A" ] && [ "$INITIAL_MBM" != "N/A" ] && [ "$CURRENT_MBM" -gt "$INITIAL_MBM" ]; then
+            BANDWIDTH_DIFF=$((CURRENT_MBM - INITIAL_MBM))
+            echo "  Bandwidth used during test: $BANDWIDTH_DIFF bytes"
+          fi
+          
+          # Monitor system resources
+          echo "System resources under throttling:"
+          free -h | grep -E "(Mem|Swap)" || echo "Could not get memory info"
+          
+          # Check if stress is still running
+          STRESS_PID=$(cat /tmp/stress_pid 2>/dev/null || echo "")
+          if [ -n "$STRESS_PID" ] && kill -0 $STRESS_PID 2>/dev/null; then
+            echo "stress-ng still running (PID: $STRESS_PID)"
+          else
+            echo "stress-ng appears to have finished"
+          fi
+          
+          echo ""
+
+      - name: Bandwidth Rate Calculation
+        run: |
+          echo "=== Memory Bandwidth Rate Calculation ==="
+          
+          # Take two snapshots 5 seconds apart to calculate rate
+          echo "Taking bandwidth measurement snapshots..."
+          
+          MBM_START=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          echo "Snapshot 1: $MBM_START bytes"
+          
+          sleep 5
+          
+          MBM_END=$(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
+          echo "Snapshot 2: $MBM_END bytes"
+          
+          if [ "$MBM_END" -gt "$MBM_START" ]; then
+            BANDWIDTH_RATE=$((MBM_END - MBM_START))
+            BANDWIDTH_RATE_MB=$((BANDWIDTH_RATE / 1024 / 1024))
+            echo "Bandwidth rate over 5 seconds: $BANDWIDTH_RATE bytes ($BANDWIDTH_RATE_MB MB)"
+            echo "Average bandwidth rate: $((BANDWIDTH_RATE / 5)) bytes/second ($((BANDWIDTH_RATE_MB / 5)) MB/s)"
+          else
+            echo "Could not calculate bandwidth rate (end <= start)"
+          fi
+          echo ""
+
+      - name: Remove Throttling and Monitor Recovery
+        run: |
+          echo "=== Removing Throttling and Monitoring Recovery ==="
+          
+          # Restore full bandwidth
+          echo "Restoring full memory bandwidth access..."
+          cat /sys/fs/resctrl/schemata 2>/dev/null | sudo tee /sys/fs/resctrl/demo_high_priority/schemata >/dev/null || echo "Could not restore full bandwidth"
+          
+          echo "Restored schemata:"
+          cat /sys/fs/resctrl/demo_high_priority/schemata 2>/dev/null || echo "Could not read restored schemata"
+          
+          # Start a new stress test to show recovery
+          echo "Starting new stress test to demonstrate recovery..."
+          TOTAL_CPUS=$(nproc)
+          HALF_CPUS=$((TOTAL_CPUS / 2))
+          HIGH_CPUS="0-$((HALF_CPUS-1))"
+          
+          taskset -c "$HIGH_CPUS" stress-ng --vm 4 --vm-bytes 75% -t 15s &
+          RECOVERY_PID=$!
+          echo "Started recovery stress-ng with PID: $RECOVERY_PID"
+          
+          # Assign to high priority group
+          echo $RECOVERY_PID | sudo tee /sys/fs/resctrl/demo_high_priority/tasks >/dev/null || echo "Could not assign recovery PID"
+          
+          sleep 10
+          
+          echo "Resource usage after removing throttling:"
+          echo "  LLC occupancy: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo 'N/A') bytes"
+          echo "  Memory bandwidth total: $(cat /sys/fs/resctrl/demo_high_priority/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo 'N/A')"
+          
+          wait $RECOVERY_PID || echo "Recovery stress test completed"
+          echo ""
+
+      - name: Demonstration Summary
+        run: |
+          echo "=== Resource Control Demonstration Summary ==="
+          echo "This demonstration showed:"
+          echo "1. ✅ Hardware RDT support detection"
+          echo "2. ✅ resctrl filesystem mounting and capabilities"
+          echo "3. ✅ CLOS (Class of Service) creation and CPU assignment"
+          echo "4. ✅ Process assignment to resource control groups"
+          echo "5. ✅ Memory bandwidth monitoring using RMIDs"
+          echo "6. ✅ Memory bandwidth throttling via MBA (Memory Bandwidth Allocation)"
+          echo "7. ✅ Real-time monitoring of cache occupancy and bandwidth usage"
+          echo "8. ✅ Demonstration of throttling effects on memory-intensive workloads"
+          echo ""
+          echo "Key technologies demonstrated:"
+          echo "- Intel RDT (Resource Director Technology)"
+          echo "- Cache Monitoring Technology (CMT)"
+          echo "- Memory Bandwidth Monitoring (MBM)"
+          echo "- Memory Bandwidth Allocation (MBA)"
+          echo "- Cache Allocation Technology (CAT)"
+          echo ""
+          echo "The demonstration is complete!"
+
+      - name: Cleanup
+        run: |
+          echo "=== Cleanup ==="
+          
+          # Kill any remaining stress processes
+          pkill stress-ng || echo "No stress-ng processes to kill"
+          
+          # Remove resource groups (this moves tasks back to default)
+          sudo rmdir /sys/fs/resctrl/demo_high_priority/mon_groups/* 2>/dev/null || true
+          sudo rmdir /sys/fs/resctrl/demo_high_priority 2>/dev/null || echo "Could not remove demo_high_priority"
+          sudo rmdir /sys/fs/resctrl/demo_low_priority/mon_groups/* 2>/dev/null || true
+          sudo rmdir /sys/fs/resctrl/demo_low_priority 2>/dev/null || echo "Could not remove demo_low_priority"
+          
+          # Clean up temp files
+          rm -f /tmp/stress_pid /tmp/initial_mbm_total || true
+          
+          echo "Cleanup completed. All processes moved back to default resource group."
+          echo "To unmount resctrl: sudo umount /sys/fs/resctrl"
+
+      - name: Power off
+        run: |
+          shutdown --poweroff now
+
+  cleanup-runner:
+    name: Stop EC2 runner
+    needs: [setup-runner, resctrl-demo]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous jobs fail
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region || secrets.AWS_REGION }} 
