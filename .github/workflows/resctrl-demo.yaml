@@ -260,9 +260,10 @@ jobs:
           
           # Start cache sensitive workload with perf counters for 9 seconds
           # (10s warmup + 5s measurement + 2s buffer = 17s total)
-          echo "Starting cache measurement workload for 17 seconds..."
+          CACHE_DURATION_SECONDS=17
+          echo "Starting cache measurement workload for $CACHE_DURATION_SECONDS seconds..."
           CACHE_CPUS_TASKSET=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
-          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_THREADS --cache-size "${CACHE_SIZE_PER_THREAD_MB}M" --perf --metrics-brief -t 17s > /tmp/cache_perf_output.txt 2>&1 &
+          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_THREADS --cache-size "${CACHE_SIZE_PER_THREAD_MB}M" --perf --metrics-brief -t ${CACHE_DURATION_SECONDS}s > /tmp/cache_perf_output.txt 2>&1 &
           CACHE_PID=$!
           
           # Assign cache workload to its group
@@ -373,6 +374,24 @@ jobs:
             CACHE_LOCAL_RATE=$((CACHE_LOCAL_RATE / 5))
           fi
           
+          # Convert cache references and misses to GB/s
+          # Formula: (count * 64 bytes/cacheline) / (17 seconds * 1024^3 bytes/GB)
+          CACHE_LINE_SIZE_BYTES=64
+          BYTES_PER_GB=$((1024 * 1024 * 1024))
+          
+          CACHE_REFERENCES_GBPS="0"
+          CACHE_MISSES_GBPS="0"
+          
+          if [[ "$CACHE_REFERENCES" =~ ^[0-9]+$ ]] && [ "$CACHE_REFERENCES" -gt "0" ]; then
+            # Calculate: (references * 64) / (17 * 1024^3)
+            CACHE_REFERENCES_GBPS=$(echo "scale=3; $CACHE_REFERENCES * $CACHE_LINE_SIZE_BYTES / ($CACHE_DURATION_SECONDS * $BYTES_PER_GB)" | bc -l 2>/dev/null || echo "0")
+          fi
+          
+          if [[ "$CACHE_MISSES" =~ ^[0-9]+$ ]] && [ "$CACHE_MISSES" -gt "0" ]; then
+            # Calculate: (misses * 64) / (17 * 1024^3)
+            CACHE_MISSES_GBPS=$(echo "scale=3; $CACHE_MISSES * $CACHE_LINE_SIZE_BYTES / ($CACHE_DURATION_SECONDS * $BYTES_PER_GB)" | bc -l 2>/dev/null || echo "0")
+          fi
+          
           # Calculate cache hit rate (validate inputs are numeric first)
           CACHE_HIT_RATE="0"
           if [[ "$CACHE_REFERENCES" =~ ^[0-9]+$ ]] && [[ "$CACHE_MISSES" =~ ^[0-9]+$ ]] && [ "$CACHE_REFERENCES" -gt "0" ]; then
@@ -387,21 +406,27 @@ jobs:
           [[ "$CACHE_REFERENCES" =~ ^[0-9]+$ ]] || CACHE_REFERENCES="0"
           [[ "$CACHE_MISSES" =~ ^[0-9]+$ ]] || CACHE_MISSES="0"
           
+          echo "Debug - Cache metrics converted to GB/s:"
+          echo "  Raw cache references: $CACHE_REFERENCES"
+          echo "  Raw cache misses: $CACHE_MISSES"
+          echo "  Cache references: ${CACHE_REFERENCES_GBPS} GB/s"
+          echo "  Cache misses: ${CACHE_MISSES_GBPS} GB/s"
+          
           # Write to CSV
-          # Format: phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references,cache_misses,cache_hit_rate,bogo_ops
+          # Format: phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references_gbps,cache_misses_gbps,cache_hit_rate,bogo_ops
           echo "$PHASE,memory_bandwidth,$MB_LLC_2,$MB_TOTAL_RATE,$MB_LOCAL_RATE,0,0,0,0" >> "$CSV_FILE"
-          echo "$PHASE,cache_sensitive,$CACHE_LLC_2,$CACHE_TOTAL_RATE,$CACHE_LOCAL_RATE,$CACHE_REFERENCES,$CACHE_MISSES,$CACHE_HIT_RATE,$CACHE_BOGO_OPS" >> "$CSV_FILE"
+          echo "$PHASE,cache_sensitive,$CACHE_LLC_2,$CACHE_TOTAL_RATE,$CACHE_LOCAL_RATE,$CACHE_REFERENCES_GBPS,$CACHE_MISSES_GBPS,$CACHE_HIT_RATE,$CACHE_BOGO_OPS" >> "$CSV_FILE"
           
           echo "Measurements complete for phase: $PHASE"
           echo "Memory bandwidth group - LLC: $MB_LLC_2, Total rate: $MB_TOTAL_RATE bytes/s, Local rate: $MB_LOCAL_RATE bytes/s"
           echo "Cache sensitive group - LLC: $CACHE_LLC_2, Total rate: $CACHE_TOTAL_RATE bytes/s, Local rate: $CACHE_LOCAL_RATE bytes/s"
-          echo "Cache performance - References: $CACHE_REFERENCES, Misses: $CACHE_MISSES, Hit rate: $CACHE_HIT_RATE%, Bogo ops: $CACHE_BOGO_OPS"
+          echo "Cache performance - References: ${CACHE_REFERENCES_GBPS} GB/s, Misses: ${CACHE_MISSES_GBPS} GB/s, Hit rate: $CACHE_HIT_RATE%, Bogo ops: $CACHE_BOGO_OPS"
           EOF
           
           chmod +x /tmp/measure_workloads.sh
           
           # Initialize CSV file with header
-          echo "phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references,cache_misses,cache_hit_rate,bogo_ops" > /tmp/resctrl_measurements.csv
+          echo "phase,workload_type,llc_occupancy,memory_bandwidth_total,memory_bandwidth_local,cache_references_gbps,cache_misses_gbps,cache_hit_rate,bogo_ops" > /tmp/resctrl_measurements.csv
           
           echo "Measurement script created"
 
