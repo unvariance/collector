@@ -174,27 +174,18 @@ jobs:
           echo "  Q3: $Q3_START-$Q3_END"
           echo "  Q4: $Q4_START-$Q4_END"
           
-          # Memory bandwidth group gets Q1 and Q3 (first and third quarters)
-          # Cache sensitive group gets Q2 and Q4 (second and fourth quarters)
-          # This ensures hyperthreads of the same physical core stay together
+          # Memory bandwidth group gets Q1 (first quarter only)
+          # Cache sensitive group gets Q2 (second quarter only)  
+          # Q3 and Q4 remain unassigned for isolation
+          # This ensures one workload per physical core with proper isolation
           
-          echo "Assigning Q1 ($Q1_START-$Q1_END) and Q3 ($Q3_START-$Q3_END) to memory bandwidth group"
-          echo "Assigning Q2 ($Q2_START-$Q2_END) and Q4 ($Q4_START-$Q4_END) to cache sensitive group"
+          echo "Assigning Q1 ($Q1_START-$Q1_END) to memory bandwidth group"
+          echo "Assigning Q2 ($Q2_START-$Q2_END) to cache sensitive group"
+          echo "Q3 ($Q3_START-$Q3_END) and Q4 ($Q4_START-$Q4_END) left unassigned for isolation"
           
-          # Create CPU lists for each group
-          if [ $Q1_END -ge $Q1_START ] && [ $Q3_END -ge $Q3_START ]; then
-            MB_CPU_LIST="${Q1_START}-${Q1_END},${Q3_START}-${Q3_END}"
-          else
-            # Handle edge case where quarters might be empty
-            MB_CPU_LIST="${Q1_START}-${Q1_END}"
-          fi
-          
-          if [ $Q2_END -ge $Q2_START ] && [ $Q4_END -ge $Q4_START ]; then
-            CACHE_CPU_LIST="${Q2_START}-${Q2_END},${Q4_START}-${Q4_END}"
-          else
-            # Handle edge case where quarters might be empty
-            CACHE_CPU_LIST="${Q2_START}-${Q2_END}"
-          fi
+          # Create CPU lists for each group (single quarter each)
+          MB_CPU_LIST="${Q1_START}-${Q1_END}"
+          CACHE_CPU_LIST="${Q2_START}-${Q2_END}"
           
           # Assign CPUs to groups
           echo "$MB_CPU_LIST" | sudo tee /sys/fs/resctrl/memory_bandwidth_group/cpus_list >/dev/null
@@ -400,45 +391,7 @@ jobs:
           
           echo "Measurement script created"
 
-      - name: Start Memory Bandwidth Workload
-        run: |
-          echo "=== Starting Memory Bandwidth Workload ==="
-          
-          # Get CPU assignments for taskset
-          MB_CPUS=$(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)
-          echo "Starting memory bandwidth stress-ng on CPUs: $MB_CPUS"
-          
-          # Start long-running memory bandwidth workload (30 minutes)
-          taskset -c "$MB_CPUS" stress-ng --vm 4 --vm-bytes 75% -t 1800s &
-          MB_STRESS_PID=$!
-          echo "Started memory bandwidth stress-ng with PID: $MB_STRESS_PID"
-          
-          # Save PID for later use
-          echo $MB_STRESS_PID > /tmp/mb_stress_pid
-          
-          # Give it a moment to start
-          sleep 2
-          
-          # Verify stress-ng is running
-          if kill -0 $MB_STRESS_PID 2>/dev/null; then
-            echo "Memory bandwidth stress-ng is running (PID: $MB_STRESS_PID)"
-          else
-            echo "ERROR: Memory bandwidth stress-ng failed to start"
-            exit 1
-          fi
-          
-          # Assign to memory bandwidth group
-          echo $MB_STRESS_PID | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
-          
-          # Also assign any child processes
-          sleep 1
-          pgrep -P $MB_STRESS_PID | while read child_pid; do
-            echo "Assigning child PID $child_pid to memory_bandwidth_group"
-            echo $child_pid | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
-          done
-          
-          echo "Memory bandwidth workload started and assigned to group"
-          echo ""
+
 
       - name: Verify Critical Functionality
         run: |
@@ -485,6 +438,50 @@ jobs:
           /tmp/measure_workloads.sh "baseline_cache_only" "/tmp/resctrl_measurements.csv"
           
           echo "Phase 1 complete - baseline cache performance measured"
+          echo ""
+
+      - name: Start Memory Bandwidth Workload
+        run: |
+          echo "=== Starting Memory Bandwidth Workload ==="
+          
+          # Get CPU assignments for taskset
+          MB_CPUS=$(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)
+          echo "Starting memory bandwidth stress-ng on CPUs: $MB_CPUS"
+          
+          # Calculate number of memory bandwidth stressors based on assigned CPUs
+          MB_CPU_COUNT=$(echo "$MB_CPUS" | tr ',-' ' ' | wc -w)
+          echo "Starting $MB_CPU_COUNT memory bandwidth stressors (one per assigned CPU)"
+          
+          # Start long-running memory bandwidth workload (30 minutes)
+          taskset -c "$MB_CPUS" stress-ng --vm $MB_CPU_COUNT --vm-bytes 75% -t 1800s &
+          MB_STRESS_PID=$!
+          echo "Started memory bandwidth stress-ng with PID: $MB_STRESS_PID"
+          
+          # Save PID for later use
+          echo $MB_STRESS_PID > /tmp/mb_stress_pid
+          
+          # Give it a moment to start
+          sleep 2
+          
+          # Verify stress-ng is running
+          if kill -0 $MB_STRESS_PID 2>/dev/null; then
+            echo "Memory bandwidth stress-ng is running (PID: $MB_STRESS_PID)"
+          else
+            echo "ERROR: Memory bandwidth stress-ng failed to start"
+            exit 1
+          fi
+          
+          # Assign to memory bandwidth group
+          echo $MB_STRESS_PID | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
+          
+          # Also assign any child processes
+          sleep 1
+          pgrep -P $MB_STRESS_PID | while read child_pid; do
+            echo "Assigning child PID $child_pid to memory_bandwidth_group"
+            echo $child_pid | sudo tee /sys/fs/resctrl/memory_bandwidth_group/tasks >/dev/null
+          done
+          
+          echo "Memory bandwidth workload started and assigned to group"
           echo ""
 
       - name: Phase 2 - Both Workloads Unthrottled  
