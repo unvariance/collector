@@ -246,24 +246,35 @@ jobs:
           
           echo "Running measurement for phase: $PHASE"
           
-          # Calculate cache size per core (1MB per core for cache sensitive group)
+          # Calculate cache size per core (0.5MB per core for cache sensitive group)
           CACHE_CPUS=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
           CACHE_CPU_COUNT=$(echo "$CACHE_CPUS" | tr ',-' ' ' | wc -w)
-          CACHE_SIZE_MB=$((CACHE_CPU_COUNT * 1))
+          CACHE_SIZE_PER_CPU_KB=$((512))  # 0.5MB = 512KB per CPU
           
-          echo "Cache workload will use ${CACHE_SIZE_MB}MB total (1MB per core)"
+          echo "Cache workload will use ${CACHE_SIZE_PER_CPU_KB}KB per CPU on $CACHE_CPU_COUNT CPUs"
           
-          # Start cache sensitive workload with perf counters for 5 seconds
-          echo "Starting cache measurement workload..."
+          # Start cache sensitive workload with perf counters for 9 seconds
+          # (2s warmup + 5s measurement + 2s buffer = 9s total)
+          echo "Starting cache measurement workload for 9 seconds..."
           CACHE_CPUS_TASKSET=$(cat /sys/fs/resctrl/cache_sensitive_group/cpus_list)
-          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache 1 --cache-size "${CACHE_SIZE_MB}M" --perf --metrics-brief -t 5s > /tmp/cache_perf_output.txt 2>&1 &
+          taskset -c "$CACHE_CPUS_TASKSET" stress-ng --cache $CACHE_CPU_COUNT --cache-size "${CACHE_SIZE_PER_CPU_KB}K" --perf --metrics-brief -t 9s > /tmp/cache_perf_output.txt 2>&1 &
           CACHE_PID=$!
           
           # Assign cache workload to its group
           echo $CACHE_PID | sudo tee /sys/fs/resctrl/cache_sensitive_group/tasks >/dev/null
           
-          # Take initial measurements
-          echo "Taking initial measurements..."
+          # Wait for cache workload to warm up (2 seconds)
+          echo "Waiting 2 seconds for cache workload to warm up..."
+          sleep 2
+          
+          # Verify cache workload is still running
+          if ! kill -0 $CACHE_PID 2>/dev/null; then
+            echo "ERROR: Cache workload died during warmup"
+            exit 1
+          fi
+          
+          # Take initial measurements (cache workload is now warmed up and running)
+          echo "Taking initial measurements while cache workload is active..."
           
           # Memory bandwidth group measurements
           MB_LLC_1=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
@@ -275,11 +286,17 @@ jobs:
           CACHE_MBM_TOTAL_1=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_total_bytes 2>/dev/null || echo "0")
           CACHE_MBM_LOCAL_1=$(cat /sys/fs/resctrl/cache_sensitive_group/mon_data/mon_L3_00/mbm_local_bytes 2>/dev/null || echo "0")
           
-          # Wait 5 seconds
+          # Wait 5 seconds for measurement interval
+          echo "Measuring for 5 seconds while cache workload continues..."
           sleep 5
           
-          # Take final measurements
-          echo "Taking final measurements..."
+          # Verify cache workload is still running
+          if ! kill -0 $CACHE_PID 2>/dev/null; then
+            echo "WARNING: Cache workload finished during measurement interval"
+          fi
+          
+          # Take final measurements (cache workload should still be running for 2 more seconds)
+          echo "Taking final measurements while cache workload is still active..."
           
           # Memory bandwidth group measurements
           MB_LLC_2=$(cat /sys/fs/resctrl/memory_bandwidth_group/mon_data/mon_L3_00/llc_occupancy 2>/dev/null || echo "0")
