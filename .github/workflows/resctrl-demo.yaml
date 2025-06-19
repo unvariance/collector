@@ -490,12 +490,21 @@ jobs:
           MB_CPUS=$(cat /sys/fs/resctrl/memory_bandwidth_group/cpus_list)
           echo "Starting memory bandwidth stress-ng on CPUs: $MB_CPUS"
           
-          # Calculate number of memory bandwidth stressors based on assigned CPUs
-          MB_CPU_COUNT=$(echo "$MB_CPUS" | tr ',-' ' ' | wc -w)
-          echo "Starting $MB_CPU_COUNT memory bandwidth stressors (one per assigned CPU)"
+          # Calculate number of memory bandwidth stressors based on total system size
+          TOTAL_SYSTEM_CPUS=$(nproc)
+          QUARTER_SYSTEM_CPUS=$((TOTAL_SYSTEM_CPUS / 4))
+          MB_THREAD_COUNT=$((QUARTER_SYSTEM_CPUS / 2))  # Half of quarter = 1/8 of system
+          if [ "$MB_THREAD_COUNT" -lt "1" ]; then
+            MB_THREAD_COUNT=1  # Ensure at least 1 thread
+          fi
+          
+          echo "Memory bandwidth workload configuration:"
+          echo "  Total system CPUs: $TOTAL_SYSTEM_CPUS"
+          echo "  Quarter of system CPUs: $QUARTER_SYSTEM_CPUS"
+          echo "  Memory bandwidth threads: $MB_THREAD_COUNT (half of quarter = 1/8 of system)"
           
           # Start long-running memory bandwidth workload (30 minutes)
-          taskset -c "$MB_CPUS" stress-ng --vm $MB_CPU_COUNT --vm-bytes 75% -t 1800s &
+          taskset -c "$MB_CPUS" stress-ng --vm $MB_THREAD_COUNT --vm-bytes 75% -t 1800s &
           MB_STRESS_PID=$!
           echo "Started memory bandwidth stress-ng with PID: $MB_STRESS_PID"
           
