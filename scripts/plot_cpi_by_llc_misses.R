@@ -1,20 +1,20 @@
 #!/usr/bin/env Rscript
 
 # Setup - load required libraries
-if (!requireNamespace("nanoparquet", quietly = TRUE)) {
-  install.packages("nanoparquet")
+if (!requireNamespace("nanoparquet", quietly = FALSE)) {
+  install.packages("nanoparquet", repos = "https://cloud.r-project.org/")
 }
 if (!requireNamespace("ggplot2", quietly = TRUE)) {
-  install.packages("ggplot2")
+  install.packages("ggplot2", repos = "https://cloud.r-project.org/")
 }
 if (!requireNamespace("dplyr", quietly = TRUE)) {
-  install.packages("dplyr")
+  install.packages("dplyr", repos = "https://cloud.r-project.org/")
 }
 if (!requireNamespace("tidyr", quietly = TRUE)) {
-  install.packages("tidyr")
+  install.packages("tidyr", repos = "https://cloud.r-project.org/")
 }
 if (!requireNamespace("forcats", quietly = TRUE)) {
-  install.packages("forcats")
+  install.packages("forcats", repos = "https://cloud.r-project.org/")
 }
 
 library(nanoparquet)
