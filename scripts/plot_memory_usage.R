@@ -99,6 +99,56 @@ prepare_plot_data <- function(data, n_top_processes = top_n_processes) {
     cache_references = if("cache_references" %in% colnames(data)) sum(data$cache_references, na.rm = TRUE) else 0
   )
   
+  # Add sanity checking and cache hits calculation if cache_references exists
+  if("cache_references" %in% colnames(data)) {
+    # Check for anomalous cases where LLC misses exceed cache references
+    anomalous_cases <- data %>%
+      filter(llc_misses > cache_references) %>%
+      mutate(negative_diff = llc_misses - cache_references)
+    
+    if(nrow(anomalous_cases) > 0) {
+      # Report anomalous cases by process
+      anomaly_summary <- anomalous_cases %>%
+        group_by(process_name) %>%
+        summarise(
+          anomalous_count = n(),
+          total_negative_diff = sum(negative_diff, na.rm = TRUE),
+          .groups = 'drop'
+        ) %>%
+        arrange(desc(total_negative_diff))
+      
+      message("\n=== SANITY CHECK RESULTS ===")
+      message("Found ", nrow(anomalous_cases), " time slots where LLC misses > cache references")
+      message("This represents ", round(nrow(anomalous_cases) / nrow(data) * 100, 2), "% of all measurements")
+      
+      total_negative_reads <- sum(anomaly_summary$total_negative_diff)
+      message("Total negative difference across all anomalous cases: ", total_negative_reads, " cache line reads")
+      message("This is ", round(total_negative_reads / totals_original$llc_misses * 100, 2), "% of total LLC misses")
+      
+      message("\nBreakdown by process:")
+      for(i in 1:nrow(anomaly_summary)) {
+        process <- anomaly_summary$process_name[i]
+        count <- anomaly_summary$anomalous_count[i]
+        diff <- anomaly_summary$total_negative_diff[i]
+        message("  ", process, ": ", count, " anomalous time slots, ", diff, " negative cache line reads")
+      }
+      message("=== END SANITY CHECK ===\n")
+    } else {
+      message("\n=== SANITY CHECK RESULTS ===")
+      message("No anomalous cases found - all cache references >= LLC misses")
+      message("=== END SANITY CHECK ===\n")
+    }
+    
+    # Calculate cache hits = cache references - LLC misses, ensuring non-negative values
+    data$cache_hits <- pmax(0, data$cache_references - data$llc_misses)
+    
+    # Update totals to include cache hits
+    totals_original$cache_hits <- sum(data$cache_hits, na.rm = TRUE)
+    
+    message("Cache hits calculation: ", totals_original$cache_hits, " total cache hits")
+    message("Hit rate: ", round(totals_original$cache_hits / totals_original$cache_references * 100, 2), "%")
+  }
+  
   # Select top processes by total memory usage (LLC misses + cache references)
   top_processes <- data %>%
     group_by(process_name) %>%
@@ -119,11 +169,13 @@ prepare_plot_data <- function(data, n_top_processes = top_n_processes) {
   if("cache_references" %in% colnames(data)) {
     coverage$cache_references <- sum(data$cache_references[data$process_name %in% top_processes], na.rm = TRUE) / 
                                 totals_original$cache_references * 100
+    coverage$cache_hits <- sum(data$cache_hits[data$process_name %in% top_processes], na.rm = TRUE) / 
+                          totals_original$cache_hits * 100
   }
   
   message("Top ", n_top_processes, " processes account for ",
           round(coverage$llc_misses, 2), "% of total LLC misses",
-          if("cache_references" %in% colnames(data)) paste0(" and ", round(coverage$cache_references, 2), "% of total cache references") else "")
+          if("cache_references" %in% colnames(data)) paste0(", ", round(coverage$cache_references, 2), "% of total cache references, and ", round(coverage$cache_hits, 2), "% of total cache hits") else "")
   
   # Filter data for top processes and group the rest as "other"
   plot_data <- data %>%
@@ -138,6 +190,7 @@ prepare_plot_data <- function(data, n_top_processes = top_n_processes) {
       summarise(
         llc_misses = sum(llc_misses, na.rm = TRUE),
         cache_references = sum(cache_references, na.rm = TRUE),
+        cache_hits = sum(cache_hits, na.rm = TRUE),
         .groups = 'drop'
       ) %>%
       ungroup()
@@ -158,19 +211,25 @@ prepare_plot_data <- function(data, n_top_processes = top_n_processes) {
   
   if("cache_references" %in% colnames(ms_data)) {
     totals_after$cache_references = sum(ms_data$cache_references, na.rm = TRUE)
+    totals_after$cache_hits = sum(ms_data$cache_hits, na.rm = TRUE)
   }
   
   llc_diff <- abs(totals_original$llc_misses - totals_after$llc_misses)
   cache_diff <- if("cache_references" %in% colnames(ms_data)) {
     abs(totals_original$cache_references - totals_after$cache_references)
   } else 0
+  hits_diff <- if("cache_hits" %in% colnames(ms_data)) {
+    abs(totals_original$cache_hits - totals_after$cache_hits)
+  } else 0
   
-  if (llc_diff > 0.01 || cache_diff > 0.01) {
+  if (llc_diff > 0.01 || cache_diff > 0.01 || hits_diff > 0.01) {
     warning("Possible data loss in aggregation. LLC misses: Original=", 
             totals_original$llc_misses, ", After=", totals_after$llc_misses,
             if("cache_references" %in% colnames(ms_data)) {
               paste0(". Cache references: Original=", totals_original$cache_references, 
-                     ", After=", totals_after$cache_references)
+                     ", After=", totals_after$cache_references,
+                     ". Cache hits: Original=", totals_original$cache_hits,
+                     ", After=", totals_after$cache_hits)
             } else "")
   } else {
     message("Aggregation validation passed. All data accounted for.")
@@ -204,7 +263,7 @@ prepare_plot_data <- function(data, n_top_processes = top_n_processes) {
   ))
 }
 
-# Function to create the combined memory usage plot with both LLC misses and cache references
+# Function to create the combined memory usage plot with both LLC misses and cache hits
 create_memory_usage_plot <- function(data, plot_data, n_top_processes = top_n_processes) {
   # Get time window info from attributes
   subtitle <- paste0("1-second window at ", start_time_offset, 
@@ -213,7 +272,7 @@ create_memory_usage_plot <- function(data, plot_data, n_top_processes = top_n_pr
   # Convert to long format for faceted plotting
   ms_data_long <- plot_data$ms_data %>%
     pivot_longer(
-      cols = c(llc_misses, cache_references),
+      cols = c(llc_misses, cache_hits),
       names_to = "metric_type",
       values_to = "count"
     ) %>%
@@ -222,7 +281,7 @@ create_memory_usage_plot <- function(data, plot_data, n_top_processes = top_n_pr
       gb_per_second = (bytes / BYTES_PER_GB) * 1000,  # Convert to GB/s (1000 millisecond frames per second)
       metric_label = case_when(
         metric_type == "llc_misses" ~ "LLC Misses",
-        metric_type == "cache_references" ~ "Cache References",
+        metric_type == "cache_hits" ~ "Cache Hits",
         TRUE ~ metric_type
       )
     )
@@ -251,9 +310,9 @@ create_memory_usage_plot <- function(data, plot_data, n_top_processes = top_n_pr
   ms_data_long$process_group <- factor(ms_data_long$process_group, 
                                       levels = levels(plot_data$ms_data$process_group))
   
-  # Order the metric facets with LLC Misses on top, Cache References on bottom
+  # Order the metric facets with LLC Misses on top, Cache Hits on bottom
   ms_data_long$metric_label <- factor(ms_data_long$metric_label, 
-                                      levels = c("LLC Misses", "Cache References"))
+                                      levels = c("LLC Misses", "Cache Hits"))
   
   # Create the faceted stacked area plot
   p <- ggplot(ms_data_long, aes(x = ms_bucket, y = gb_per_second, fill = process_group)) +
@@ -262,7 +321,7 @@ create_memory_usage_plot <- function(data, plot_data, n_top_processes = top_n_pr
     scale_fill_manual(values = plot_data$colors) +
     scale_y_continuous(labels = function(x) sprintf("%.2f", x)) +
     labs(
-      title = "Memory Bandwidth by Process: LLC Misses and Cache References",
+      title = "Memory Bandwidth by Process: LLC Misses and Cache Hits",
       subtitle = subtitle,
       x = "Time (milliseconds)",
       y = "Gigabytes Per Second",
