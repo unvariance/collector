@@ -25,11 +25,6 @@ OUTPUT_DIR="visualization_results_${BASE_NAME}"
 mkdir -p "$OUTPUT_DIR"
 
 # Check if required tools are installed
-if ! command -v pqrs &> /dev/null; then
-    echo "Error: pqrs is not installed"
-    exit 1
-fi
-
 if ! command -v R &> /dev/null; then
     echo "Error: R is not installed"
     exit 1
@@ -50,57 +45,20 @@ R -e "if (!require('stringr')) install.packages('stringr', repos='https://cloud.
 echo "Generating plots for $PARQUET_FILE"
 echo "Output will be saved to $OUTPUT_DIR"
 
-# Determine experiment length using pqrs
-echo "Determining experiment length using pqrs..."
-FIRST_RECORD=$(pqrs head "$PARQUET_FILE" --records 1 --json 2>/dev/null | head -1)
-LAST_RECORD=$(pqrs cat "$PARQUET_FILE" --json 2>/dev/null | tail -1)
+# Determine experiment length using fast R script
+echo "Determining experiment length using R..."
+WINDOW_PARAMS=$(Rscript "$SCRIPT_DIR/extract_window_params.R" "$PARQUET_FILE" 2>/dev/null)
 
-if [ -z "$FIRST_RECORD" ] || [ -z "$LAST_RECORD" ]; then
-    echo "Error: Could not read parquet file with pqrs"
-    exit 1
-fi
-
-# Extract timestamps - try different common field names
-FIRST_TIMESTAMP=""
-LAST_TIMESTAMP=""
-
-# Try common timestamp field names, starting with the known schema field
-for field in "start_time" "timestamp" "time" "time_ns" "elapsed_time" "elapsed_ns"; do
-    FIRST_TIMESTAMP=$(echo "$FIRST_RECORD" | grep -o "\"$field\":[0-9]*" | cut -d: -f2 | tr -d ',')
-    LAST_TIMESTAMP=$(echo "$LAST_RECORD" | grep -o "\"$field\":[0-9]*" | cut -d: -f2 | tr -d ',')
-    
-    if [ -n "$FIRST_TIMESTAMP" ] && [ -n "$LAST_TIMESTAMP" ]; then
-        echo "Using field '$field' for timestamps"
-        break
-    fi
-done
-
-if [ -z "$FIRST_TIMESTAMP" ] || [ -z "$LAST_TIMESTAMP" ]; then
-    echo "Warning: Could not extract timestamps from known fields, using fallback approach..."
-    # Try to extract any numeric field that looks like a timestamp
-    FIRST_TIMESTAMP=$(echo "$FIRST_RECORD" | grep -o '[0-9]\+\.[0-9]\+' | head -1)
-    LAST_TIMESTAMP=$(echo "$LAST_RECORD" | grep -o '[0-9]\+\.[0-9]\+' | tail -1)
-    
-    # If still no decimal numbers, try integers
-    if [ -z "$FIRST_TIMESTAMP" ] || [ -z "$LAST_TIMESTAMP" ]; then
-        FIRST_TIMESTAMP=$(echo "$FIRST_RECORD" | grep -o '[0-9]\+' | head -1)
-        LAST_TIMESTAMP=$(echo "$LAST_RECORD" | grep -o '[0-9]\+' | tail -1)
-    fi
-fi
-
-if [ -z "$FIRST_TIMESTAMP" ] || [ -z "$LAST_TIMESTAMP" ]; then
+if [ -z "$WINDOW_PARAMS" ]; then
     echo "Error: Could not extract timestamps from parquet file"
     exit 1
 fi
 
-# Convert from nanoseconds to seconds if the values are very large (likely nanoseconds)
-if (( $(echo "$FIRST_TIMESTAMP > 1000000000" | bc -l) )); then
-    echo "Detected nanosecond timestamps, converting to seconds..."
-    FIRST_TIMESTAMP=$(echo "scale=6; $FIRST_TIMESTAMP / 1000000000" | bc -l)
-    LAST_TIMESTAMP=$(echo "scale=6; $LAST_TIMESTAMP / 1000000000" | bc -l)
-fi
+# Parse the output: FIRST_TIMESTAMP|LAST_TIMESTAMP|EXPERIMENT_LENGTH
+FIRST_TIMESTAMP=$(echo "$WINDOW_PARAMS" | cut -d'|' -f1)
+LAST_TIMESTAMP=$(echo "$WINDOW_PARAMS" | cut -d'|' -f2)
+EXPERIMENT_LENGTH=$(echo "$WINDOW_PARAMS" | cut -d'|' -f3)
 
-EXPERIMENT_LENGTH=$(echo "scale=6; $LAST_TIMESTAMP - $FIRST_TIMESTAMP" | bc -l)
 echo "Experiment length: $EXPERIMENT_LENGTH seconds (from $FIRST_TIMESTAMP to $LAST_TIMESTAMP)"
 
 # Calculate time windows for beginning, middle, and end
