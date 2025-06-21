@@ -45,9 +45,13 @@ R -e "if (!require('stringr')) install.packages('stringr', repos='https://cloud.
 echo "Generating plots for $PARQUET_FILE"
 echo "Output will be saved to $OUTPUT_DIR"
 
-# Generate Instructions vs CPI scatter plot for last 4 seconds
-echo "Generating Instructions vs CPI scatter plot for last 4 seconds..."
-Rscript "$SCRIPT_DIR/plot_instructions_vs_cpi.R" "$PARQUET_FILE" 4 "$OUTPUT_DIR/instructions_vs_cpi_last20s" 12 || true
+# Generate contention analysis plots for last 20 seconds
+echo "Generating contention analysis plots for last 20 seconds..."
+Rscript "$SCRIPT_DIR/plot_contention_analysis.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/contention_analysis" 18 0.05 || true
+
+# Generate Instructions vs CPI scatter plot for last 20 seconds
+echo "Generating Instructions vs CPI scatter plot for last 20 seconds..."
+Rscript "$SCRIPT_DIR/plot_instructions_vs_cpi.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/instructions_vs_cpi_last20s" 18 || true
 
 
 # Determine experiment length using fast R script
