@@ -1,5 +1,5 @@
 default:
-  replicas: 3 # multiple replicas for most services
+  replicas: 9 # multiple replicas for most services
 
 opentelemetry-collector:
   enabled: true
@@ -64,7 +64,7 @@ components:
     # envOverrides:
     #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     #     value: "" # Disable
-    replicas: 5
+    replicas: 15
     resources:
       limits:
         memory: 600Mi
@@ -75,7 +75,7 @@ components:
     envOverrides:
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
         value: "" # Disable
-    replicas: 6
+    replicas: 18
     resources:
       limits:
         memory: 600Mi
@@ -88,7 +88,7 @@ components:
         value: "" # Disable
 
   frontend:
-    replicas: 15
+    replicas: 45
     useDefault:
       env: false
     envOverrides:
@@ -101,7 +101,7 @@ components:
   frontend-proxy:
     useDefault:
       env: false
-    replicas: 6
+    replicas: 18
     resources:
       limits:
         memory: 650Mi
@@ -179,7 +179,7 @@ components:
       - name: LOCUST_BROWSER_TRAFFIC_ENABLED
         value: "false"
       - name: LOCUST_PROCESSES
-        value: "32"
+        value: "48"
       - name: LOCUST_LOCUSTFILE
         value: "/etc/locust/locustfile.py"
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
