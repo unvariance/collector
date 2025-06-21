@@ -751,6 +751,24 @@ jobs:
           # Generate CPI by LLC misses plots with time window parameters
           Rscript scripts/plot_cpi_by_llc_misses.R collector_data/collector-parquet.parquet 100000 visualization_results/cpi_by_llc_misses 23 $START_TIME $END_TIME || true
 
+      - name: Generate Contention Analysis Plots
+        run: |
+          # Generate contention analysis plots for last 20 seconds
+          echo "Generating contention analysis plots for last 20 seconds..."
+          Rscript scripts/plot_contention_analysis.R collector_data/collector-parquet.parquet 20 visualization_results/contention_analysis 18 0.2 || true
+          
+          # Check output
+          ls -la visualization_results/contention_analysis_* || echo "No contention analysis plots generated"
+
+      - name: Generate Instructions vs CPI Plots
+        run: |
+          # Generate Instructions vs CPI scatter plot for last 20 seconds
+          echo "Generating Instructions vs CPI scatter plot for last 20 seconds..."
+          Rscript scripts/plot_instructions_vs_cpi.R collector_data/collector-parquet.parquet 20 visualization_results/instructions_vs_cpi_last20s 18 || true
+          
+          # Check output
+          ls -la visualization_results/instructions_vs_cpi_* || echo "No instructions vs CPI plots generated"
+
       - name: Upload Visualization Results
         uses: actions/upload-artifact@v4
         with:
