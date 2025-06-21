@@ -26,12 +26,13 @@ window_duration <- if(length(args) >= 2) as.numeric(args[2]) else 20  # Default 
 output_file <- if(length(args) >= 3) args[3] else "contention_analysis"
 top_n_processes <- if(length(args) >= 4) as.numeric(args[4]) else 12  # Default to showing top 12 processes
 sample_rate <- if(length(args) >= 5) as.numeric(args[5]) else 0.2  # Default to 20% sampling
+end_time <- if(length(args) >= 6) as.numeric(args[6]) else NULL  # Optional end time in seconds
 
 # Constants
 NS_PER_SEC <- 1e9
 
 # Function to load and process parquet data
-load_and_process_parquet <- function(file_path, window_duration_sec) {
+load_and_process_parquet <- function(file_path, window_duration_sec, end_time_sec = NULL) {
   # Read the parquet file
   message("Reading parquet file: ", file_path)
   perf_data <- nanoparquet::read_parquet(file_path)
@@ -40,15 +41,30 @@ load_and_process_parquet <- function(file_path, window_duration_sec) {
   min_time <- min(perf_data$start_time, na.rm = TRUE)
   max_time <- max(perf_data$start_time, na.rm = TRUE)
   
-  # Calculate window start time (last N seconds)
-  window_start_ns <- max_time - window_duration_sec * NS_PER_SEC
-  
-  message("Using data from last ", window_duration_sec, " seconds of experiment")
-  message("Window: ", window_start_ns / NS_PER_SEC, " to ", max_time / NS_PER_SEC, " seconds (absolute)")
+  # Calculate window boundaries
+  if (!is.null(end_time_sec)) {
+    # Use specified end time (in seconds from start of experiment)
+    window_end_ns <- min_time + end_time_sec * NS_PER_SEC
+    window_start_ns <- window_end_ns - window_duration_sec * NS_PER_SEC
+    
+    # Ensure we don't go beyond the actual data range
+    window_end_ns <- min(window_end_ns, max_time)
+    window_start_ns <- max(window_start_ns, min_time)
+    
+    message("Using specified end time: ", end_time_sec, " seconds from start")
+    message("Window: ", (window_start_ns - min_time) / NS_PER_SEC, " to ", (window_end_ns - min_time) / NS_PER_SEC, " seconds (relative)")
+  } else {
+    # Use last N seconds (original behavior)
+    window_start_ns <- max_time - window_duration_sec * NS_PER_SEC
+    window_end_ns <- max_time
+    
+    message("Using data from last ", window_duration_sec, " seconds of experiment")
+    message("Window: ", (window_start_ns - min_time) / NS_PER_SEC, " to ", (window_end_ns - min_time) / NS_PER_SEC, " seconds (relative)")
+  }
   
   # Filter data within the window
   window_data <- perf_data %>%
-    filter(start_time >= window_start_ns) %>%
+    filter(start_time >= window_start_ns & start_time <= window_end_ns) %>%
     mutate(
       # Replace NULL process names with "kernel"
       process_name = ifelse(is.na(process_name), "kernel", process_name),
@@ -304,7 +320,7 @@ main <- function() {
     }
     
     message("Processing contention analysis...")
-    window_data <- load_and_process_parquet(input_file, window_duration)
+    window_data <- load_and_process_parquet(input_file, window_duration, end_time)
     
     # Check if we have enough data
     if (nrow(window_data) < 1000) {

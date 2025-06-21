@@ -753,18 +753,54 @@ jobs:
 
       - name: Generate Contention Analysis Plots
         run: |
-          # Generate contention analysis plots for last 20 seconds
-          echo "Generating contention analysis plots for last 20 seconds..."
-          Rscript scripts/plot_contention_analysis.R collector_data/collector-parquet.parquet 20 visualization_results/contention_analysis 18 0.2 || true
+          # Calculate the time window similar to CPI by LLC Misses plots but capped at 60 seconds
+          TIME_DIFF=${TIME_DIFF:-0}
+          
+          # Start: 200 seconds after load generator is ready (which is 200+TIME_DIFF seconds after collector is ready)
+          # End: End 5 seconds before the steady state ends
+          START_TIME=$((205 + TIME_DIFF))
+          STEADY_STATE_SECONDS=$((${STEADY_STATE_MINUTES} * 60))
+          END_TIME=$((200 + STEADY_STATE_SECONDS - 5 + TIME_DIFF))
+
+          # Cap the window duration at 60 seconds
+          WINDOW_DURATION=$((END_TIME - START_TIME))
+          if [ "$WINDOW_DURATION" -gt 60 ]; then
+            WINDOW_DURATION=60
+            END_TIME=$((START_TIME + 60))
+          fi
+
+          echo "Using time window for contention analysis: $START_TIME - $END_TIME seconds (${WINDOW_DURATION}s duration, steady state: ${STEADY_STATE_MINUTES} min)"
+          echo "Time difference between collector and load generator ready states: ${TIME_DIFF} seconds"
+          
+          # Generate contention analysis plots with calculated time window
+          Rscript scripts/plot_contention_analysis.R collector_data/collector-parquet.parquet $WINDOW_DURATION visualization_results/contention_analysis 18 0.2 $END_TIME || true
           
           # Check output
           ls -la visualization_results/contention_analysis_* || echo "No contention analysis plots generated"
 
       - name: Generate Instructions vs CPI Plots
         run: |
-          # Generate Instructions vs CPI scatter plot for last 20 seconds
-          echo "Generating Instructions vs CPI scatter plot for last 20 seconds..."
-          Rscript scripts/plot_instructions_vs_cpi.R collector_data/collector-parquet.parquet 20 visualization_results/instructions_vs_cpi_last20s 18 || true
+          # Calculate the time window similar to CPI by LLC Misses plots but capped at 60 seconds
+          TIME_DIFF=${TIME_DIFF:-0}
+          
+          # Start: 200 seconds after load generator is ready (which is 200+TIME_DIFF seconds after collector is ready)
+          # End: End 5 seconds before the steady state ends
+          START_TIME=$((205 + TIME_DIFF))
+          STEADY_STATE_SECONDS=$((${STEADY_STATE_MINUTES} * 60))
+          END_TIME=$((200 + STEADY_STATE_SECONDS - 5 + TIME_DIFF))
+
+          # Cap the window duration at 60 seconds
+          WINDOW_DURATION=$((END_TIME - START_TIME))
+          if [ "$WINDOW_DURATION" -gt 60 ]; then
+            WINDOW_DURATION=60
+            END_TIME=$((START_TIME + 60))
+          fi
+
+          echo "Using time window for instructions vs CPI: $START_TIME - $END_TIME seconds (${WINDOW_DURATION}s duration, steady state: ${STEADY_STATE_MINUTES} min)"
+          echo "Time difference between collector and load generator ready states: ${TIME_DIFF} seconds"
+          
+          # Generate Instructions vs CPI scatter plot with calculated time window
+          Rscript scripts/plot_instructions_vs_cpi.R collector_data/collector-parquet.parquet $WINDOW_DURATION visualization_results/instructions_vs_cpi_steady_state 18 $END_TIME || true
           
           # Check output
           ls -la visualization_results/instructions_vs_cpi_* || echo "No instructions vs CPI plots generated"
