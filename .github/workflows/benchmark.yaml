@@ -207,7 +207,7 @@ jobs:
 
       - name: (stabilize) Wait for all Pods to be Ready
         run: |
-          if ! kubectl wait --for=condition=Ready pods --all --timeout=150s; then
+          if ! kubectl wait --for=condition=Ready pods --all --timeout=300s; then
             echo "Error: Not all pods reached Ready state within timeout"
             kubectl get pods
             echo "--------------------------------"
