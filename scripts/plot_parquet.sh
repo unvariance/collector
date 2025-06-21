@@ -45,6 +45,11 @@ R -e "if (!require('stringr')) install.packages('stringr', repos='https://cloud.
 echo "Generating plots for $PARQUET_FILE"
 echo "Output will be saved to $OUTPUT_DIR"
 
+# Generate Instructions vs CPI scatter plot for last 4 seconds
+echo "Generating Instructions vs CPI scatter plot for last 4 seconds..."
+Rscript "$SCRIPT_DIR/plot_instructions_vs_cpi.R" "$PARQUET_FILE" 4 "$OUTPUT_DIR/instructions_vs_cpi_last20s" 12 || true
+
+
 # Determine experiment length using fast R script
 echo "Determining experiment length using R..."
 WINDOW_PARAMS=$(Rscript "$SCRIPT_DIR/extract_window_params.R" "$PARQUET_FILE" 2>/dev/null)
