@@ -45,9 +45,9 @@ R -e "if (!require('stringr')) install.packages('stringr', repos='https://cloud.
 echo "Generating plots for $PARQUET_FILE"
 echo "Output will be saved to $OUTPUT_DIR"
 
-# Generate contention analysis plots for last 20 seconds
+# Generate contention analysis plots for last 20 seconds (instruction range configurable in script)
 echo "Generating contention analysis plots for last 20 seconds..."
-Rscript "$SCRIPT_DIR/plot_contention_analysis.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/contention_analysis" 18 0.05 || true
+Rscript "$SCRIPT_DIR/plot_contention_analysis.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/contention_analysis" 18 0.2 || true
 
 # Generate Instructions vs CPI scatter plot for last 20 seconds
 echo "Generating Instructions vs CPI scatter plot for last 20 seconds..."

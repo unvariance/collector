@@ -25,7 +25,7 @@ input_file <- if(length(args) >= 1) args[1] else "collector-parquet.parquet"
 window_duration <- if(length(args) >= 2) as.numeric(args[2]) else 20  # Default to 20 seconds
 output_file <- if(length(args) >= 3) args[3] else "contention_analysis"
 top_n_processes <- if(length(args) >= 4) as.numeric(args[4]) else 12  # Default to showing top 12 processes
-sample_rate <- if(length(args) >= 5) as.numeric(args[5]) else 0.05  # Default to 5% sampling
+sample_rate <- if(length(args) >= 5) as.numeric(args[5]) else 0.2  # Default to 20% sampling
 
 # Constants
 NS_PER_SEC <- 1e9
@@ -67,7 +67,7 @@ load_and_process_parquet <- function(file_path, window_duration_sec) {
 }
 
 # Function to prepare contention analysis data
-prepare_contention_data <- function(data, n_top_processes = top_n_processes, sample_rate = 0.05) {
+prepare_contention_data <- function(data, n_top_processes = top_n_processes, sample_rate = 0.2, instruction_min, instruction_max) {
   
   # FIRST: Calculate total activity from ALL processes for each time point (before any filtering)
   message("Computing total activity per time slice from all processes...")
@@ -121,179 +121,93 @@ prepare_contention_data <- function(data, n_top_processes = top_n_processes, sam
     ) %>%
     filter(other_instructions > 0)  # Only keep time points where other processes were active
   
-  # FOURTH: Compute smooth percentile curves for CPI coloring (similar to plot_instructions_vs_cpi.R)
-  message("Computing smooth CPI percentile curves...")
+  # FOURTH: Filter to specific instruction range for clearer analysis
+  message("Filtering to instruction range: ", instruction_min, " to ", instruction_max)
   
-  # Define percentiles to compute (every 10th + 5th and 95th)
-  percentiles <- c(0.05, seq(0.1, 0.9, by = 0.1), 0.95)
+  filtered_data <- plot_data %>%
+    filter(
+      instructions >= instruction_min,
+      instructions <= instruction_max
+    )
   
-  # Calculate smooth percentile curves for each process
-  percentile_data <- data.frame()
+  message("Instruction range filtering results:")
+  message("  Original data points: ", nrow(plot_data))
+  message("  After instruction filtering: ", nrow(filtered_data))
   
-  for (proc in unique(plot_data$process_name)) {
-    proc_data <- plot_data[plot_data$process_name == proc, ]
-    
-    if (nrow(proc_data) > 20) {  # Need minimum data for percentiles
-      # Create instruction sequence for smooth curves
-      log_inst_range <- range(log10(proc_data$instructions))
-      log_inst_seq <- seq(log_inst_range[1], log_inst_range[2], length.out = 50)
-      inst_seq <- 10^log_inst_seq
-      
-      # Calculate percentiles for each instruction level
-      for (p in percentiles) {
-        percentile_values <- rep(NA, length(inst_seq))
-        
-        for (i in 1:length(inst_seq)) {
-          # Find nearby points (within a window on log scale)
-          window_size <- diff(log_inst_range) / 20  # Adaptive window size
-          nearby_idx <- abs(log10(proc_data$instructions) - log_inst_seq[i]) <= window_size
-          
-          if (sum(nearby_idx) >= 5) {  # Need at least 5 points for percentile
-            percentile_values[i] <- quantile(proc_data$cpi[nearby_idx], p, na.rm = TRUE)
-          }
-        }
-        
-        # Remove NAs and smooth the percentile curve
-        valid_idx <- !is.na(percentile_values)
-        if (sum(valid_idx) >= 3) {
-          # Use loess smoothing for the percentile curve
-          smooth_fit <- loess(percentile_values[valid_idx] ~ log_inst_seq[valid_idx], span = 0.5)
-          smoothed_values <- predict(smooth_fit, log_inst_seq)
-          
-          # Add to combined data
-          proc_percentile <- data.frame(
-            process_name = proc,
-            log_inst_seq = log_inst_seq,
-            inst_seq = inst_seq,
-            cpi_value = smoothed_values,
-            percentile = p * 100
-          )
-          percentile_data <- rbind(percentile_data, proc_percentile)
-        }
-      }
-    }
+  if (nrow(filtered_data) < 100) {
+    stop("Insufficient data after instruction filtering. Found ", nrow(filtered_data), " points.")
   }
   
-  # FIFTH: Interpolate CPI percentiles for each data point using fast vectorized approach
-  message("Interpolating CPI percentiles for color mapping...")
+  # Report instruction range coverage by process
+  range_summary <- filtered_data %>%
+    group_by(process_name) %>%
+    summarise(
+      points_in_range = n(),
+      min_instructions = min(instructions),
+      max_instructions = max(instructions),
+      median_cpi = median(cpi, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(points_in_range))
   
-  contention_data <- plot_data
-  contention_data$cpi_percentile <- NA
-  
-  # Use a much more efficient approach with pre-computed interpolation functions
-  for (proc in unique(plot_data$process_name)) {
-    proc_data_idx <- which(plot_data$process_name == proc)
-    proc_percentiles <- percentile_data[percentile_data$process_name == proc, ]
-    
-    if (nrow(proc_percentiles) > 0 && length(proc_data_idx) > 0) {
-      message("  Processing ", length(proc_data_idx), " points for ", proc, "...")
-      
-      # Get data for this process
-      proc_log_inst <- log10(plot_data$instructions[proc_data_idx])
-      proc_cpi <- plot_data$cpi[proc_data_idx]
-      
-      # Create interpolation functions for each percentile curve
-      unique_percentiles <- sort(unique(proc_percentiles$percentile))
-      percentile_functions <- list()
-      
-      for (p in unique_percentiles) {
-        p_data <- proc_percentiles[proc_percentiles$percentile == p, ]
-        if (nrow(p_data) > 1) {
-          # Create interpolation function for this percentile curve
-          percentile_functions[[as.character(p)]] <- approxfun(p_data$log_inst_seq, p_data$cpi_value, rule = 2)
-        }
-      }
-      
-      if (length(percentile_functions) >= 2) {
-        # Vectorized approach: evaluate all percentile functions at all instruction points
-        percentile_matrix <- matrix(NA, nrow = length(proc_log_inst), ncol = length(percentile_functions))
-        colnames(percentile_matrix) <- names(percentile_functions)
-        
-        # Evaluate all percentile functions at once
-        for (i in seq_along(percentile_functions)) {
-          percentile_matrix[, i] <- percentile_functions[[i]](proc_log_inst)
-        }
-        
-        # Fully vectorized percentile assignment using apply
-        percentile_names <- as.numeric(names(percentile_functions))
-        
-        percentile_values <- sapply(seq_along(proc_cpi), function(i) {
-          cpi_val <- proc_cpi[i]
-          percentile_cpis <- percentile_matrix[i, ]
-          valid_percentiles <- !is.na(percentile_cpis)
-          
-          if (sum(valid_percentiles) >= 2) {
-            # Use approx to find percentile, but with pre-computed values
-            percentile_val <- approx(percentile_cpis[valid_percentiles], 
-                                   percentile_names[valid_percentiles], 
-                                   xout = cpi_val, rule = 2)$y
-            return(pmax(0, pmin(100, percentile_val)))
-          } else {
-            return(NA)
-          }
-        })
-        
-        # Assign percentiles back to main data
-        contention_data$cpi_percentile[proc_data_idx] <- percentile_values
-      }
-    }
+  message("Points in instruction range by process:")
+  for (i in 1:nrow(range_summary)) {
+    process <- range_summary$process_name[i]
+    points <- range_summary$points_in_range[i]
+    min_inst <- range_summary$min_instructions[i]
+    max_inst <- range_summary$max_instructions[i]
+    median_cpi <- range_summary$median_cpi[i]
+    message("  ", process, ": ", points, " points, instructions ", min_inst, "-", max_inst, 
+            ", median CPI = ", round(median_cpi, 3))
   }
-  
-  # Remove points where percentile calculation failed
-  contention_data <- contention_data %>%
-    filter(!is.na(cpi_percentile))
   
   # Sample the data for visualization
-  sampled_data <- contention_data %>%
+  sampled_data <- filtered_data %>%
     group_by(process_name) %>%
     sample_frac(sample_rate) %>%
     ungroup()
   
   message("Contention analysis data prepared:")
-  message("  Total data points: ", nrow(contention_data))
+  message("  Filtered data points: ", nrow(filtered_data))
   message("  Sampled points (", sample_rate*100, "%): ", nrow(sampled_data))
-  
-  # Report CPI percentile distribution
-  percentile_summary <- sampled_data %>%
-    group_by(process_name) %>%
-    summarise(
-      min_percentile = min(cpi_percentile, na.rm = TRUE),
-      max_percentile = max(cpi_percentile, na.rm = TRUE),
-      median_percentile = median(cpi_percentile, na.rm = TRUE),
-      .groups = 'drop'
-    )
-  
-  message("CPI percentile ranges by process:")
-  for (i in 1:nrow(percentile_summary)) {
-    process <- percentile_summary$process_name[i]
-    message("  ", process, ": ", 
-            round(percentile_summary$min_percentile[i], 1), "-", 
-            round(percentile_summary$max_percentile[i], 1), 
-            "% (median: ", round(percentile_summary$median_percentile[i], 1), "%)")
-  }
   
   return(sampled_data)
 }
 
 # Function to create contention plots
-create_contention_plots <- function(contention_data, window_duration_sec, output_file) {
+create_contention_plots <- function(contention_data, window_duration_sec, output_file, instruction_min, instruction_max) {
   
-  # Create instructions contention plot
-  instructions_plot <- ggplot(contention_data, aes(x = instructions, y = other_instructions, color = cpi_percentile)) +
-    geom_point(alpha = 0.2, size = 1.0) +
-    scale_x_log10(labels = function(x) format(x, scientific = TRUE, digits = 2)) +
-    scale_y_log10(labels = function(x) format(x, scientific = TRUE, digits = 2)) +
-    scale_color_viridis_c(name = "CPI\nPercentile", 
-                         option = "plasma",
-                         trans = "identity",
-                         breaks = c(1, 25, 50, 75, 99),
-                         labels = c("1st", "25th", "50th", "75th", "99th")) +
+  # Generate colors for processes
+  unique_processes <- unique(contention_data$process_name)
+  n_colors <- length(unique_processes)
+  process_colors <- rainbow(n_colors, start = 0, end = 0.8)  # Avoid red-pink range
+  names(process_colors) <- unique_processes
+  
+  # Format instruction range for display
+  format_instruction_count <- function(x) {
+    if (x >= 1000000) {
+      paste0(round(x / 1000000, 1), "M")
+    } else if (x >= 1000) {
+      paste0(round(x / 1000, 0), "k")
+    } else {
+      as.character(x)
+    }
+  }
+  
+  instruction_range_label <- paste0(format_instruction_count(instruction_min), "-", format_instruction_count(instruction_max))
+  
+  # Create instructions vs CPI plot
+  instructions_plot <- ggplot(contention_data, aes(x = other_instructions, y = cpi, color = process_name)) +
+    geom_point(alpha = 0.6, size = 1.2) +
+    scale_x_continuous(labels = function(x) format(x, scientific = FALSE, big.mark = ",")) +
+    scale_color_manual(values = process_colors) +
     facet_wrap(~ process_name, scales = "free", ncol = 3) +
     labs(
-      title = paste0("Process Instructions vs Other Processes' Instructions: Last ", window_duration_sec, " Seconds"),
-      subtitle = paste0("Color shows CPI percentile within instruction bins (", nrow(contention_data), " sampled points)"),
-      x = "Process Instructions (log scale)",
-      y = "Other Processes' Total Instructions (log scale)"
+      title = paste0("Instructions vs CPI in Range ", instruction_range_label, ": Last ", window_duration_sec, " Seconds"),
+      subtitle = paste0("Filtered to instruction range for clearer analysis (", nrow(contention_data), " sampled points)"),
+      x = "Instructions",
+      y = "Cycles Per Instruction (CPI)",
+      color = "Process"
     ) +
     theme_minimal() +
     theme(
@@ -305,25 +219,21 @@ create_contention_plots <- function(contention_data, window_duration_sec, output
       axis.text.x = element_text(angle = 45, hjust = 1),
       strip.text = element_text(face = "bold", size = 9),
       panel.spacing = unit(0.5, "lines"),
-      legend.position = "right"
+      legend.position = "none"  # Remove legend since we have facets
     )
   
-  # Create cache misses contention plot
-  cache_plot <- ggplot(contention_data, aes(x = instructions, y = other_cache_misses, color = cpi_percentile)) +
-    geom_point(alpha = 0.2, size = 1.0) +
+  # Create other cache misses vs CPI plot
+  cache_plot <- ggplot(contention_data, aes(x = other_cache_misses, y = cpi, color = process_name)) +
+    geom_point(alpha = 0.6, size = 1.2) +
     scale_x_log10(labels = function(x) format(x, scientific = TRUE, digits = 2)) +
-    scale_y_log10(labels = function(x) format(x, scientific = TRUE, digits = 2)) +
-    scale_color_viridis_c(name = "CPI\nPercentile", 
-                         option = "plasma",
-                         trans = "identity",
-                         breaks = c(1, 25, 50, 75, 99),
-                         labels = c("1st", "25th", "50th", "75th", "99th")) +
+    scale_color_manual(values = process_colors) +
     facet_wrap(~ process_name, scales = "free", ncol = 3) +
     labs(
-      title = paste0("Process Instructions vs Other Processes' Cache Misses: Last ", window_duration_sec, " Seconds"),
-      subtitle = paste0("Color shows CPI percentile within instruction bins (", nrow(contention_data), " sampled points)"),
-      x = "Process Instructions (log scale)",
-      y = "Other Processes' Total Cache Misses (log scale)"
+      title = paste0("Other Processes' Cache Misses vs CPI: Last ", window_duration_sec, " Seconds"),
+      subtitle = paste0("Process instructions filtered to ", instruction_range_label, " range (", nrow(contention_data), " sampled points)"),
+      x = "Other Processes' Total Cache Misses (log scale)",
+      y = "Cycles Per Instruction (CPI)",
+      color = "Process"
     ) +
     theme_minimal() +
     theme(
@@ -335,20 +245,54 @@ create_contention_plots <- function(contention_data, window_duration_sec, output
       axis.text.x = element_text(angle = 45, hjust = 1),
       strip.text = element_text(face = "bold", size = 9),
       panel.spacing = unit(0.5, "lines"),
-      legend.position = "right"
+      legend.position = "none"  # Remove legend since we have facets
+    )
+  
+  # Create other instructions vs CPI plot
+  other_instructions_plot <- ggplot(contention_data, aes(x = other_instructions, y = cpi, color = process_name)) +
+    geom_point(alpha = 0.6, size = 1.2) +
+    scale_x_log10(labels = function(x) format(x, scientific = TRUE, digits = 2)) +
+    scale_color_manual(values = process_colors) +
+    facet_wrap(~ process_name, scales = "free", ncol = 3) +
+    labs(
+      title = paste0("Other Processes' Instructions vs CPI: Last ", window_duration_sec, " Seconds"),
+      subtitle = paste0("Process instructions filtered to ", instruction_range_label, " range (", nrow(contention_data), " sampled points)"),
+      x = "Other Processes' Total Instructions (log scale)",
+      y = "Cycles Per Instruction (CPI)",
+      color = "Process"
+    ) +
+    theme_minimal() +
+    theme(
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 11),
+      axis.title = element_text(face = "bold", size = 11),
+      axis.text = element_text(size = 8),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      strip.text = element_text(face = "bold", size = 9),
+      panel.spacing = unit(0.5, "lines"),
+      legend.position = "none"  # Remove legend since we have facets
     )
   
   # Save plots
-  instructions_pdf <- paste0(output_file, "_instructions.pdf")
-  cache_pdf <- paste0(output_file, "_cache_misses.pdf")
+  instructions_pdf <- paste0(output_file, "_instructions_vs_cpi.pdf")
+  cache_pdf <- paste0(output_file, "_cache_misses_vs_cpi.pdf")
+  other_instructions_pdf <- paste0(output_file, "_other_instructions_vs_cpi.pdf")
   
-  message("Saving instructions contention plot as PDF: ", instructions_pdf)
+  message("Saving instructions vs CPI plot as PDF: ", instructions_pdf)
   ggsave(instructions_pdf, instructions_plot, width = 16, height = 12)
   
-  message("Saving cache misses contention plot as PDF: ", cache_pdf)
+  message("Saving cache misses vs CPI plot as PDF: ", cache_pdf)
   ggsave(cache_pdf, cache_plot, width = 16, height = 12)
   
-  return(list(instructions_plot = instructions_plot, cache_plot = cache_plot))
+  message("Saving other instructions vs CPI plot as PDF: ", other_instructions_pdf)
+  ggsave(other_instructions_pdf, other_instructions_plot, width = 16, height = 12)
+  
+  return(list(
+    instructions_plot = instructions_plot, 
+    cache_plot = cache_plot,
+    other_instructions_plot = other_instructions_plot
+  ))
 }
 
 # Main execution
@@ -368,14 +312,16 @@ main <- function() {
     }
     
     message("Preparing contention analysis data...")
-    contention_data <- prepare_contention_data(window_data, top_n_processes, sample_rate)
+    instruction_min <- 300000
+    instruction_max <- 400000
+    contention_data <- prepare_contention_data(window_data, top_n_processes, sample_rate, instruction_min, instruction_max)
     
     if (nrow(contention_data) < 50) {
       stop("Insufficient data after filtering and sampling. Found ", nrow(contention_data), " points.")
     }
     
     message("Creating contention analysis plots...")
-    plots <- create_contention_plots(contention_data, window_duration, output_file)
+    plots <- create_contention_plots(contention_data, window_duration, output_file, instruction_min, instruction_max)
     
     message("Contention analysis complete!")
   }, error = function(e) {
