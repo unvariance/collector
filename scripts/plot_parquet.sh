@@ -119,16 +119,17 @@ else
     # Generate 10 memory usage plots for beginning, middle, and end
     echo "Generating 10 memory usage plots for beginning, middle, and end..."
     
-    # Beginning: 10 plots with 0.5s windows starting at 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5
-    echo "Generating beginning plots..."
+    # End: 10 plots with 0.5s windows leading up to the end
+    echo "Generating end plots..."
+    end_start_base=$(echo "scale=6; $EXPERIMENT_LENGTH - 5.0" | bc -l)  # Start 5s before end
     for i in {0..9}; do
-        start_time=$(echo "scale=1; $i * 0.5" | bc -l)
+        start_time=$(echo "scale=6; $end_start_base + ($i * 0.5)" | bc -l)
         window_size=0.5
-        output_name="memory_usage_beginning_${i}_${start_time}s"
-        echo "  Plot $((i+1))/10: ${start_time}s - $(echo "$start_time + $window_size" | bc -l)s"
+        output_name="memory_usage_end_${i}_${start_time}s"
+        echo "  Plot $((i+1))/10: ${start_time}s - $(echo "$start_time + $window_size" | bc -l)s (relative to start)"
         Rscript "$SCRIPT_DIR/plot_memory_usage.R" "$PARQUET_FILE" "$start_time" "$window_size" "$OUTPUT_DIR/$output_name" || true
     done
-    
+
     # Middle: 10 plots with 0.5s windows centered around middle
     echo "Generating middle plots..."
     middle_center=$(echo "scale=6; $FIRST_TIMESTAMP + ($EXPERIMENT_LENGTH / 2)" | bc -l)
@@ -141,15 +142,14 @@ else
         echo "  Plot $((i+1))/10: ${relative_start}s - $(echo "$relative_start + $window_size" | bc -l)s (relative to start)"
         Rscript "$SCRIPT_DIR/plot_memory_usage.R" "$PARQUET_FILE" "$relative_start" "$window_size" "$OUTPUT_DIR/$output_name" || true
     done
-    
-    # End: 10 plots with 0.5s windows leading up to the end
-    echo "Generating end plots..."
-    end_start_base=$(echo "scale=6; $EXPERIMENT_LENGTH - 5.0" | bc -l)  # Start 5s before end
+
+    # Beginning: 10 plots with 0.5s windows starting at 0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5
+    echo "Generating beginning plots..."
     for i in {0..9}; do
-        start_time=$(echo "scale=6; $end_start_base + ($i * 0.5)" | bc -l)
+        start_time=$(echo "scale=1; $i * 0.5" | bc -l)
         window_size=0.5
-        output_name="memory_usage_end_${i}_${start_time}s"
-        echo "  Plot $((i+1))/10: ${start_time}s - $(echo "$start_time + $window_size" | bc -l)s (relative to start)"
+        output_name="memory_usage_beginning_${i}_${start_time}s"
+        echo "  Plot $((i+1))/10: ${start_time}s - $(echo "$start_time + $window_size" | bc -l)s"
         Rscript "$SCRIPT_DIR/plot_memory_usage.R" "$PARQUET_FILE" "$start_time" "$window_size" "$OUTPUT_DIR/$output_name" || true
     done
 fi
