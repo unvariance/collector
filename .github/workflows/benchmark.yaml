@@ -103,6 +103,48 @@ jobs:
       - name: (k8s) Status of K3s Installation
         run: |
           systemctl status k3s  
+
+      - name: (k8s) Configure Kubelet Max Pods
+        run: |
+          # Create kubelet configuration directory
+          sudo mkdir -p /etc/rancher/k3s
+          
+          # Create kubelet configuration file to increase max pods to 250
+          sudo tee /etc/rancher/k3s/kubelet.config > /dev/null <<EOF
+          apiVersion: kubelet.config.k8s.io/v1beta1
+          kind: KubeletConfiguration
+          maxPods: 250
+          EOF
+          
+          echo "Created kubelet configuration file:"
+          cat /etc/rancher/k3s/kubelet.config
+
+      - name: (k8s) Update K3S Service Configuration
+        run: |
+          # Backup original service file
+          sudo cp /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.backup
+          
+          # Update the service file to include kubelet config
+          sudo sed -i '/ExecStart=/ {
+            s|server|server --kubelet-arg=config=/etc/rancher/k3s/kubelet.config|
+          }' /etc/systemd/system/k3s.service
+          
+          echo "Updated K3S service configuration:"
+          cat /etc/systemd/system/k3s.service
+
+      - name: (k8s) Reload and Restart K3S
+        run: |
+          # Reload systemctl daemon to pick up service changes
+          sudo systemctl daemon-reload
+          
+          # Restart K3S to apply the new configuration
+          sudo systemctl restart k3s
+          
+          # Wait a moment for the service to start
+          sleep 5
+          
+          # Check service status
+          systemctl status k3s
       
       - name: (k8s) Wait for Kubernetes API
         run: |
@@ -132,6 +174,20 @@ jobs:
           done
           echo "Node(s) registered, waiting for Ready status..."
           kubectl wait --for=condition=Ready nodes --all --timeout=300s      
+
+      - name: (k8s) Verify Node Configuration
+        run: |
+          echo "Verifying node configuration with increased max pods..."
+          kubectl get nodes -o wide
+          
+          # Get the node name and describe it to verify max pods configuration
+          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          echo "Describing node: $NODE_NAME"
+          kubectl describe node $NODE_NAME
+          
+          # Specifically check for the allocatable pods count
+          echo "Checking allocatable pods count..."
+          kubectl describe node $NODE_NAME | grep -A 10 "Allocatable:" | grep pods || echo "Could not find pods allocation info"
 
       - name: (k8s) Wait for kube-system pods
         run: |
