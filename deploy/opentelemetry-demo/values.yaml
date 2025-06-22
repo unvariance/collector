@@ -64,7 +64,7 @@ components:
     # envOverrides:
     #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     #     value: "" # Disable
-    replicas: 10
+    replicas: 15
     resources:
       limits:
         memory: 600Mi
