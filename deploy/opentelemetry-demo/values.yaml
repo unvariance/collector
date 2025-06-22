@@ -163,6 +163,9 @@ components:
   load-generator:
     enabled: false
     replicas: 1 # only one replica for load-generator, it spawns multiple processes
+    resources:
+      limits:
+        memory: 5000Mi
     useDefault:
       env: false
     envOverrides:
