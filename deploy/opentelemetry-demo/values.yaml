@@ -101,7 +101,7 @@ components:
   frontend-proxy:
     useDefault:
       env: false
-    replicas: 8 s
+    replicas: 8
     resources:
       limits:
         memory: 650Mi
