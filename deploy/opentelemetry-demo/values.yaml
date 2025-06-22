@@ -1,5 +1,5 @@
 default:
-  replicas: 9 # multiple replicas for most services
+  replicas: 4 # multiple replicas for most services
 
 opentelemetry-collector:
   enabled: true
@@ -64,7 +64,7 @@ components:
     # envOverrides:
     #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     #     value: "" # Disable
-    replicas: 15
+    replicas: 10
     resources:
       limits:
         memory: 600Mi
@@ -75,7 +75,7 @@ components:
     envOverrides:
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
         value: "" # Disable
-    replicas: 18
+    replicas: 10
     resources:
       limits:
         memory: 600Mi
@@ -88,7 +88,7 @@ components:
         value: "" # Disable
 
   frontend:
-    replicas: 45
+    replicas: 30
     useDefault:
       env: false
     envOverrides:
@@ -101,7 +101,7 @@ components:
   frontend-proxy:
     useDefault:
       env: false
-    replicas: 18
+    replicas: 8 s
     resources:
       limits:
         memory: 650Mi
