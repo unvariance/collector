@@ -125,9 +125,8 @@ jobs:
           sudo cp /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.backup
           
           # Update the service file to include kubelet config
-          sudo sed -i '/ExecStart=/ {
-            s|server|server --kubelet-arg=config=/etc/rancher/k3s/kubelet.config|
-          }' /etc/systemd/system/k3s.service
+          # The service file has 'server \' on its own line, so we need to replace that specific line
+          sudo sed -i 's|^    server \\$|    server --kubelet-arg=config=/etc/rancher/k3s/kubelet.config \\|' /etc/systemd/system/k3s.service
           
           echo "Updated K3S service configuration:"
           cat /etc/systemd/system/k3s.service
