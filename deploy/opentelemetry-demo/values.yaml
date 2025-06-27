@@ -10,19 +10,19 @@ opentelemetry-collector:
   extraVolumeMounts:
     - name: internal-metrics
       mountPath: /tmp/internal-metrics
-  config:
-    service:
-      telemetry:
-        metrics:
-          level: detailed
-          readers:
-            - periodic:
-                interval: 10000
-                timeout: 5000
-                exporter:
-                  file:
-                    path: /tmp/internal-metrics/otel-collector-internal-metrics.jsonl
-                    format: json
+  # config:
+  #   service:
+  #     telemetry:
+  #       metrics:
+  #         level: detailed
+  #         readers:
+  #           - periodic:
+  #               interval: 10000
+  #               timeout: 5000
+  #               exporter:
+  #                 file:
+  #                   path: /tmp/internal-metrics/otel-collector-internal-metrics.jsonl
+  #                   format: json
 
 opensearch:
   enabled: false
