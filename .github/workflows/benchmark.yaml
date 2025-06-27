@@ -109,11 +109,11 @@ jobs:
           # Create kubelet configuration directory
           sudo mkdir -p /etc/rancher/k3s
           
-          # Create kubelet configuration file to increase max pods to 250
+          # Create kubelet configuration file to increase max pods to 400
           sudo tee /etc/rancher/k3s/kubelet.config > /dev/null <<EOF
           apiVersion: kubelet.config.k8s.io/v1beta1
           kind: KubeletConfiguration
-          maxPods: 250
+          maxPods: 400
           EOF
           
           echo "Created kubelet configuration file:"
