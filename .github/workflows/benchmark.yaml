@@ -572,6 +572,46 @@ jobs:
         run: | 
           kubectl get pods -n default
 
+      - name: (opentelemetry-collector) Collect Internal Metrics File
+        run: |
+          # Create directory for internal metrics
+          mkdir -p otel_internal_metrics
+          
+          # Get the OpenTelemetry collector pod name
+          OTEL_POD=$(kubectl get pods -l app.kubernetes.io/name=otel-collector -o name | cut -d/ -f2)
+          echo "OpenTelemetry Collector Pod: $OTEL_POD"
+
+          # Check if the internal metrics file exists and copy it
+          echo "Checking for internal metrics file..."
+          if kubectl exec $OTEL_POD -- test -f /tmp/internal-metrics/otel-collector-internal-metrics.jsonl; then
+            echo "Internal metrics file found, copying..."
+            kubectl cp $OTEL_POD:/tmp/internal-metrics/otel-collector-internal-metrics.jsonl ./otel_internal_metrics/otel-collector-internal-metrics.jsonl
+            
+            # Check file size and show first few lines
+            if [ -f ./otel_internal_metrics/otel-collector-internal-metrics.jsonl ]; then
+              FILE_SIZE=$(stat -c %s ./otel_internal_metrics/otel-collector-internal-metrics.jsonl)
+              echo "Internal metrics file size: ${FILE_SIZE} bytes"
+              echo "First 5 lines of internal metrics file:"
+              head -n 5 ./otel_internal_metrics/otel-collector-internal-metrics.jsonl || true
+            else
+              echo "Failed to copy internal metrics file"
+            fi
+          else
+            echo "Internal metrics file not found in pod"
+            kubectl exec $OTEL_POD -- ls -la /tmp/internal-metrics/ || echo "Directory /tmp/internal-metrics/ not found"
+          fi
+          
+          # List the extracted files
+          echo "Internal metrics files:"
+          ls -la otel_internal_metrics/ || echo "No internal metrics files found"
+
+      - name: (opentelemetry-collector) Upload Internal Metrics as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: otel-internal-metrics
+          path: otel_internal_metrics/
+          retention-days: 28
+        if: always()
 
   generate-flamegraphs:
     name: Generate Flamegraphs
