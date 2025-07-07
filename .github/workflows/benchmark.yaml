@@ -218,7 +218,12 @@ jobs:
               echo "Final attempt failed. Exiting with error."
               exit 1
             else
-              echo "Attempt $i failed. Retrying..."
+              echo "Attempt $i failed. Restarting k3s service..."
+              sudo systemctl daemon-reload
+              sudo systemctl restart k3s
+              sleep 5
+              systemctl status k3s
+              echo "Retrying after k3s restart..."
             fi
           done
 
