@@ -185,6 +185,8 @@ components:
         value: "" # Disable
 
   shipping:
+    keda:
+      minReplicas: 3
     resources:
       limits:
         memory: 800Mi
