@@ -4,6 +4,10 @@ default:
     maxReplicas: 40
     targetCPUMillicores: 800
 
+keda:
+  install:
+    enabled: false
+
 opentelemetry-collector:
   enabled: true
   # Mount volume for internal metrics export
