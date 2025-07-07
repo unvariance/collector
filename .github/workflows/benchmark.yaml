@@ -170,6 +170,8 @@ jobs:
           cd opentelemetry-helm-charts
           echo "Using forked OpenTelemetry Helm Charts repository"
           git log --oneline -5
+          echo "Updating helm dependencies..."
+          helm dep update
 
       - name: (k8s) Wait for nodes
         run: |
