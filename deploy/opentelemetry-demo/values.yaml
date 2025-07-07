@@ -44,6 +44,11 @@ grafana:
   enabled: false
 
 components:
+  flagd:
+    resources:
+      limits:
+        memory: 275Mi
+
   accounting:
     useDefault:
       env: false
