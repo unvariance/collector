@@ -164,6 +164,13 @@ jobs:
           helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
           helm repo update
 
+      - name: (k8s) Clone forked OpenTelemetry Helm Charts
+        run: |
+          git clone https://github.com/yonch/opentelemetry-helm-charts.git
+          cd opentelemetry-helm-charts
+          echo "Using forked OpenTelemetry Helm Charts repository"
+          git log --oneline -5
+
       - name: (k8s) Wait for nodes
         run: |
           echo "Waiting for at least one node to be registered..."
@@ -212,7 +219,7 @@ jobs:
       #### Install OpenTelemetry Demo
       - name: (workload) Install OpenTelemetry Demo
         run: |
-          helm install $RELEASE_NAME open-telemetry/opentelemetry-demo -f deploy/opentelemetry-demo/values.yaml
+          helm install $RELEASE_NAME opentelemetry-helm-charts/charts/opentelemetry-demo -f deploy/opentelemetry-demo/values.yaml
 
       #### Install dependencies
 
@@ -345,6 +352,12 @@ jobs:
           # Output the timestamp when collector is fully ready
           echo "COLLECTOR_START_TIME=${COLLECTOR_START_TIME}" >> $GITHUB_ENV
           echo "Collector fully ready at timestamp: ${COLLECTOR_START_TIME}"
+
+      - name: (hpa) Check HPA Status After Deployment
+        run: |
+          echo "Checking HPA status after deployment but before load generation starts..."
+          kubectl get hpa --all-namespaces || echo "No HPA resources found"
+          kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
       - name: (collector) Show Collector Pod Status
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
@@ -355,7 +368,7 @@ jobs:
       - name: (workload) Start Load Generator
         id: calculate-time-diff
         run: |
-          helm upgrade $RELEASE_NAME open-telemetry/opentelemetry-demo -f deploy/opentelemetry-demo/values.yaml \
+          helm upgrade $RELEASE_NAME opentelemetry-helm-charts/charts/opentelemetry-demo -f deploy/opentelemetry-demo/values.yaml \
             --set components.load-generator.enabled=true
           
           # Wait for load generator pods to be specifically in Ready state
@@ -414,6 +427,16 @@ jobs:
           echo "Memory metrics file: ${MEMORY_METRICS_FILE}"
 
       #### Main run time
+      - name: (hpa) Check HPA Status Before Measurements
+        run: |
+          echo "Checking HPA status just before measurements with perf..."
+          kubectl get hpa --all-namespaces || echo "No HPA resources found"
+          kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
+          
+          echo "Checking pod scaling status..."
+          kubectl get deployment -o wide
+          kubectl get rs -o wide
+          
       - name: (metrics) Record system performance with perf
         run: |
           # Create directory for perf data
@@ -571,6 +594,16 @@ jobs:
       - name: (status) Print Pod Status
         run: | 
           kubectl get pods -n default
+          
+      - name: (hpa) Check HPA Status At End of Benchmark
+        run: |
+          echo "Checking HPA status at the end of the benchmark run..."
+          kubectl get hpa --all-namespaces || echo "No HPA resources found"
+          kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
+          
+          echo "Final deployment scaling status..."
+          kubectl get deployment -o wide
+          kubectl get rs -o wide
 
       - name: (opentelemetry-collector) Collect Internal Metrics File
         run: |

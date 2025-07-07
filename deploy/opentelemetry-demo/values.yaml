@@ -1,5 +1,7 @@
 default:
-  replicas: 9 # multiple replicas for most services
+  keda:
+    maxReplicas: 40
+    targetCPUMillicores: 800
 
 opentelemetry-collector:
   enabled: true
@@ -31,16 +33,12 @@ jaeger:
   enabled: false
 
 prometheus:
-  enabled: false
+  enabled: true
 
 grafana:
   enabled: false
 
 components:
-  flagd:
-    replicas: 3 # otherwise, flagd only runs on one replica, and will bottleneck some services
-
-
   accounting:
     useDefault:
       env: false
@@ -84,7 +82,8 @@ components:
     # envOverrides:
     #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
     #     value: "" # Disable
-    replicas: 15
+    keda:
+      minReplicas: 3
     resources:
       limits:
         memory: 600Mi
@@ -95,7 +94,8 @@ components:
     envOverrides:
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
         value: "" # Disable
-    replicas: 18
+    keda:
+      minReplicas: 3
     resources:
       limits:
         memory: 600Mi
@@ -108,7 +108,8 @@ components:
         value: "" # Disable
 
   frontend:
-    replicas: 45
+    keda:
+      minReplicas: 5
     useDefault:
       env: false
     envOverrides:
@@ -121,7 +122,8 @@ components:
   frontend-proxy:
     useDefault:
       env: false
-    replicas: 18
+    keda:
+      minReplicas: 3
     resources:
       limits:
         memory: 650Mi
