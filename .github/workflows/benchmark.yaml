@@ -371,6 +371,10 @@ jobs:
           echo "Checking HPA status after deployment but before load generation starts..."
           kubectl get hpa --all-namespaces || echo "No HPA resources found"
           kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
+          
+          echo "Checking pod scaling status..."
+          kubectl get deployment -o wide
+          kubectl get rs -o wide
       - name: (collector) Show Collector Pod Status
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
