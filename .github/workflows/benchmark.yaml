@@ -444,6 +444,11 @@ jobs:
           echo "Memory metrics file: ${MEMORY_METRICS_FILE}"
 
       #### Main run time
+      - name: (metrics) Ramp up load generator
+        run: |
+          echo "Ramping up load generator without perf record..."
+          sleep 200
+
       - name: (hpa) Check HPA Status Before Measurements
         run: |
           echo "Checking HPA status just before measurements with perf..."
@@ -459,9 +464,6 @@ jobs:
           # Create directory for perf data
           mkdir -p /tmp/perf_data
           
-          echo "Ramping up load generator without perf record..."
-          sleep 200
-
           STEADY_STATE_MINUTES=${STEADY_STATE_MINUTES}
           PERF_RECORD_SECONDS=60
           
