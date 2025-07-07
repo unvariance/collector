@@ -374,12 +374,14 @@ jobs:
       - name: (hpa) Check HPA Status After Deployment
         run: |
           echo "Checking HPA status after deployment but before load generation starts..."
-          kubectl get hpa --all-namespaces || echo "No HPA resources found"
           kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
           
           echo "Checking pod scaling status..."
           kubectl get deployment -o wide
-          kubectl get rs -o wide
+
+          echo "Pod top..."
+          kubectl top pods --all-namespaces || echo "No pod metrics available"
+
       - name: (collector) Show Collector Pod Status
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
@@ -457,13 +459,14 @@ jobs:
       - name: (hpa) Check HPA Status Before Measurements
         run: |
           echo "Checking HPA status just before measurements with perf..."
-          kubectl get hpa --all-namespaces || echo "No HPA resources found"
           kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
           
           echo "Checking pod scaling status..."
           kubectl get deployment -o wide
-          kubectl get rs -o wide
-          
+
+          echo "Pod top..."
+          kubectl top pods --all-namespaces || echo "No pod metrics available"
+
       - name: (metrics) Record system performance with perf
         run: |
           # Create directory for perf data
@@ -622,12 +625,13 @@ jobs:
       - name: (hpa) Check HPA Status At End of Benchmark
         run: |
           echo "Checking HPA status at the end of the benchmark run..."
-          kubectl get hpa --all-namespaces || echo "No HPA resources found"
           kubectl get hpa -o wide --all-namespaces || echo "No HPA resources found (wide output)"
           
           echo "Final deployment scaling status..."
           kubectl get deployment -o wide
-          kubectl get rs -o wide
+
+          echo "Pod top..."
+          kubectl top pods --all-namespaces || echo "No pod metrics available"
 
       - name: (opentelemetry-collector) Collect Internal Metrics File
         run: |
