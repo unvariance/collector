@@ -229,12 +229,6 @@ jobs:
           helm repo update
           helm install keda kedacore/keda --namespace keda-system --create-namespace
           
-          # Wait for KEDA operator to be ready
-          kubectl wait --for=condition=Available deployment/keda-operator --namespace keda-system --timeout=300s
-          kubectl wait --for=condition=Available deployment/keda-metrics-apiserver --namespace keda-system --timeout=300s
-          
-          echo "KEDA operator installation completed"
-
       #### Install OpenTelemetry Demo
       - name: (workload) Install OpenTelemetry Demo
         run: |
