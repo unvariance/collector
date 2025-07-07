@@ -49,6 +49,10 @@ echo "Output will be saved to $OUTPUT_DIR"
 echo "Generating contention analysis plots for last 20 seconds..."
 Rscript "$SCRIPT_DIR/plot_contention_analysis.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/contention_analysis" 18 0.2 || true
 
+# Generate CPI vs Scheduling Gap analysis for last 20 seconds
+echo "Generating CPI vs Scheduling Gap analysis for last 20 seconds..."
+Rscript "$SCRIPT_DIR/plot_cpi_vs_scheduling_gap.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/cpi_vs_scheduling_gap_last20s" 12 || true
+
 # Generate Instructions vs CPI scatter plot for last 20 seconds
 echo "Generating Instructions vs CPI scatter plot for last 20 seconds..."
 Rscript "$SCRIPT_DIR/plot_instructions_vs_cpi.R" "$PARQUET_FILE" 20 "$OUTPUT_DIR/instructions_vs_cpi_last20s" 18 || true
