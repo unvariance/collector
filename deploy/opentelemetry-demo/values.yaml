@@ -45,6 +45,8 @@ grafana:
 
 components:
   flagd:
+    keda:
+      minReplicas: 3
     resources:
       limits:
         memory: 275Mi
