@@ -95,6 +95,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: (k8s) Increase inotify limits
+        run: |
+          # Increase inotify limits to prevent fsnotify watcher errors
+          sudo sysctl -w fs.inotify.max_user_watches=524288
+          sudo sysctl -w fs.inotify.max_user_instances=512
+          
+          # Verify the settings
+          echo "Current inotify limits:"
+          sysctl fs.inotify.max_user_watches
+          sysctl fs.inotify.max_user_instances
+
       - name: (k8s) Install K3s Cluster
         run: |
           # Installs K3s (a lightweight Kubernetes distribution) on the system
