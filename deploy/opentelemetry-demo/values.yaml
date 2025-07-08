@@ -3,6 +3,11 @@ default:
     enabled: true
     maxReplicas: 80
     targetCPUMillicores: 600
+    advanced:
+      horizontalPodAutoscalerConfig:
+        behavior:
+          scaleDown:
+            selectPolicy: Disabled # disable scale down as the benchmark only increases load
 
 keda:
   install:
