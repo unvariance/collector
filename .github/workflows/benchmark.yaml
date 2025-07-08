@@ -5,7 +5,7 @@ on:
       instance-type:
         description: 'EC2 instance type to use'
         required: false
-        default: 'm7i.metal-24xl'
+        default: 'c5.9xlarge'
         type: string
       image-type:
         description: 'Image type to use (ubuntu-22.04 or ubuntu-24.04)'
@@ -67,7 +67,7 @@ jobs:
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
           iam-role-name: github-actions-runner          
-          instance-type: ${{ inputs.instance-type || 'm7i.metal-24xl' }}
+          instance-type: ${{ inputs.instance-type || 'c5.9xlarge' }}
           image-type: ${{ inputs.image-type || 'ubuntu-22.04' }}
           volume-size: '40'
 
