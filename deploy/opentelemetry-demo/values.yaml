@@ -219,13 +219,13 @@ components:
       - name: LOCUST_HEADLESS
         value: "true"
       - name: LOCUST_USERS
-        value: "9200"
+        value: "18400"
       - name: LOCUST_SPAWN_RATE
-        value: "46"
+        value: "92"
       - name: LOCUST_BROWSER_TRAFFIC_ENABLED
         value: "false"
       - name: LOCUST_PROCESSES
-        value: "16"
+        value: "32"
       - name: LOCUST_LOCUSTFILE
         value: "/etc/locust/locustfile.py"
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
