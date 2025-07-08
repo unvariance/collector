@@ -2,7 +2,7 @@ default:
   keda:
     enabled: true
     maxReplicas: 80
-    targetCPUMillicores: 600
+    targetCPUMillicores: 200
     advanced:
       horizontalPodAutoscalerConfig:
         behavior:
