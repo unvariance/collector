@@ -1,7 +1,7 @@
 default:
   keda:
     enabled: true
-    maxReplicas: 40
+    maxReplicas: 80
     targetCPUMillicores: 300
 
 keda:
