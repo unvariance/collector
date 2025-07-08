@@ -222,7 +222,7 @@ jobs:
           echo "Kube-system pod(s) registered, waiting for Ready status..."
           for i in {1..2}; do
             echo "Attempt $i of 2: Waiting for kube-system pods (60s timeout)..."
-            if kubectl wait --namespace kube-system --for=condition=Ready pods --all --timeout=60s; then
+            if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout=60s; then
               echo "All kube-system pods are ready!"
               break
             elif [ $i -eq 2 ]; then
