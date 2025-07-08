@@ -183,6 +183,8 @@ components:
   recommendation:
     useDefault:
       env: false
+    keda:
+      minReplicas: 5
     envOverrides:
       - name: OTEL_EXPORTER_OTLP_ENDPOINT
         value: "" # Disable
