@@ -15,6 +15,7 @@ keda:
 
 opentelemetry-collector:
   enabled: true
+  replicaCount: 3
   # Mount volume for internal metrics export
   extraVolumes:
     - name: internal-metrics
