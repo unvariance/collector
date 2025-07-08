@@ -226,7 +226,26 @@ jobs:
               echo "All kube-system pods are ready!"
               break
             elif [ $i -eq 2 ]; then
-              echo "Final attempt failed. Exiting with error."
+              echo "Final attempt failed. Gathering diagnostic information..."
+              
+              echo "=== KUBE-SYSTEM PODS STATUS ==="
+              kubectl get pods --namespace kube-system -o wide
+              
+              echo "=== KUBE-SYSTEM PODS DESCRIPTIONS ==="
+              kubectl get pods --namespace kube-system --no-headers | awk '{print $1}' | while read pod; do
+                echo "--- Describing pod: $pod ---"
+                kubectl describe pod "$pod" --namespace kube-system
+                echo
+              done
+              
+              echo "=== NODE DESCRIPTION ==="
+              NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+              kubectl describe node "$NODE_NAME"
+              
+              echo "=== CLUSTER EVENTS ==="
+              kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+              
+              echo "Exiting with error."
               exit 1
             else
               echo "Attempt $i failed. Retrying..."
