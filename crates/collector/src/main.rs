@@ -3,6 +3,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::sync::mpsc;
+
 use anyhow::Result;
 use clap::Parser;
 use env_logger;
@@ -76,8 +78,11 @@ struct Command {
 // Application state containing task collection and timer tracking
 struct PerfEventProcessor {
     current_timeslot: TimeslotData,
-    // Callback for completed timeslots
-    on_timeslot_complete: Box<dyn Fn(TimeslotData)>,
+    // Channel for sending completed timeslots
+    timeslot_tx: Option<mpsc::Sender<TimeslotData>>,
+    // Error tracking for batched reporting
+    error_counter: u64,
+    last_error_report: std::time::Instant,
     // BPF timeslot tracker
     _timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
     // BPF error handler
@@ -87,11 +92,11 @@ struct PerfEventProcessor {
 }
 
 impl PerfEventProcessor {
-    // Create a new PerfEventProcessor with a callback for completed timeslots
+    // Create a new PerfEventProcessor with a timeslot sender
     fn new(
         bpf_loader: &mut BpfLoader,
         num_cpus: usize,
-        on_timeslot_complete: impl Fn(TimeslotData) + 'static,
+        timeslot_tx: mpsc::Sender<TimeslotData>,
     ) -> Rc<RefCell<Self>> {
         // Create BpfTimeslotTracker
         let timeslot_tracker = BpfTimeslotTracker::new(bpf_loader, num_cpus);
@@ -104,27 +109,24 @@ impl PerfEventProcessor {
 
         let processor = Rc::new(RefCell::new(Self {
             current_timeslot: TimeslotData::new(0), // Start with timestamp 0
-            on_timeslot_complete: Box::new(on_timeslot_complete),
+            timeslot_tx: Some(timeslot_tx),
+            error_counter: 0u64,
+            last_error_report: std::time::Instant::now(),
             _timeslot_tracker: timeslot_tracker.clone(),
             _error_handler: error_handler,
             task_tracker: task_tracker.clone(),
         }));
 
-        // Set up timeslot event subscriptions
+        // Set up timeslot event subscription
         {
             let processor_clone = processor.clone();
+            let task_tracker_clone = task_tracker.clone();
             timeslot_tracker
                 .borrow_mut()
                 .subscribe(move |old_timeslot, new_timeslot| {
                     processor_clone
                         .borrow_mut()
-                        .handle_new_timeslot(old_timeslot, new_timeslot);
-                });
-
-            let task_tracker_clone = task_tracker.clone();
-            timeslot_tracker
-                .borrow_mut()
-                .subscribe(move |_old_timeslot, _new_timeslot| {
+                        .on_new_timeslot(old_timeslot, new_timeslot);
                     task_tracker_clone.borrow_mut().flush_removals();
                 });
         }
@@ -178,15 +180,42 @@ impl PerfEventProcessor {
     }
 
     // Handle new timeslot events
-    fn handle_new_timeslot(&mut self, _old_timeslot: u64, new_timeslot: u64) {
+    fn on_new_timeslot(&mut self, _old_timeslot: u64, new_timeslot: u64) {
         // Create a new empty timeslot with the new timestamp
         let new_timeslot_data = TimeslotData::new(new_timeslot);
 
         // Take ownership of the current timeslot, replacing it with the new one
         let completed_timeslot = std::mem::replace(&mut self.current_timeslot, new_timeslot_data);
 
-        // Call the callback with the completed timeslot
-        (self.on_timeslot_complete)(completed_timeslot);
+        // Try to send the completed timeslot to the writer
+        if let Some(ref sender) = self.timeslot_tx {
+            if let Err(_) = sender.try_send(completed_timeslot) {
+                // Increment error count instead of printing immediately
+                self.error_counter += 1;
+
+                // Check if it's time to report errors (every 1 second)
+                let now = std::time::Instant::now();
+                if now.duration_since(self.last_error_report).as_secs() >= 1 {
+                    // Report accumulated errors
+                    if self.error_counter > 0 {
+                        error!(
+                            "Error sending timeslots to object writer: {} errors in the last 1 seconds",
+                            self.error_counter
+                        );
+                        self.error_counter = 0;
+                    }
+                    self.last_error_report = now;
+                }
+            }
+        }
+    }
+
+    // Shutdown the processor and close the timeslot channel
+    pub fn shutdown(&mut self) {
+        // Extract and drop the sender to close the channel
+        if let Some(sender) = self.timeslot_tx.take() {
+            drop(sender);
+        }
     }
 }
 
@@ -274,37 +303,8 @@ fn main() -> Result<()> {
     // Determine the number of available CPUs
     let num_cpus = libbpf_rs::num_possible_cpus()?;
 
-    // Track errors for batched reporting
-    let error_counter = Rc::new(RefCell::new(0u64));
-    let last_error_report = Rc::new(RefCell::new(std::time::Instant::now()));
-
-    // Create callback for handling completed timeslots
-    let timeslot_callback = {
-        let error_counter = error_counter.clone();
-        let last_error_report = last_error_report.clone();
-
-        move |timeslot: TimeslotData| {
-            if let Err(_) = object_writer_sender.try_send(timeslot) {
-                // Increment error count instead of printing immediately
-                *error_counter.borrow_mut() += 1;
-
-                // Check if it's time to report errors (every 1 second)
-                let now = std::time::Instant::now();
-                let mut last_report = last_error_report.borrow_mut();
-                if now.duration_since(*last_report).as_secs() >= 1 {
-                    // Report accumulated errors
-                    if *error_counter.borrow() > 0 {
-                        error!("Error sending timeslots to object writer: {} errors in the last 1 seconds", *error_counter.borrow());
-                        *error_counter.borrow_mut() = 0;
-                    }
-                    *last_report = now;
-                }
-            }
-        }
-    };
-
-    // Create PerfEventProcessor with the callback and BPF loader
-    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_callback);
+    // Create PerfEventProcessor with the timeslot sender and BPF loader
+    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, object_writer_sender);
 
     // Attach BPF programs
     bpf_loader.attach()?;
@@ -427,6 +427,9 @@ fn main() -> Result<()> {
             tokio::task::yield_now().await;
         });
     }
+
+    // Clean up: shutdown the processor
+    _processor.borrow_mut().shutdown();
 
     // Clean up: wait for monitoring task to complete
     if let Err(e) = runtime.block_on(monitoring_handle) {
