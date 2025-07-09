@@ -283,8 +283,10 @@ fn main() -> Result<()> {
     let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
 
     // Create ParquetWriterTask with pre-configured channels
-    let mut writer_task = runtime
-        .block_on(async { ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver) });
+    let writer_task = ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver);
+
+    // Spawn the writer task
+    let writer_task_handle = runtime.spawn(writer_task.run());
 
     debug!("Parquet writer task initialized and ready to receive data");
 
@@ -312,6 +314,7 @@ fn main() -> Result<()> {
 
     // Spawn monitoring task to watch for signals and timeout
     let monitoring_handle = runtime.spawn(async move {
+        let mut writer_task_handle = writer_task_handle;
         let duration = Duration::from_secs(opts.duration);
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint = signal(SignalKind::interrupt())?;
@@ -370,13 +373,9 @@ fn main() -> Result<()> {
                 },
 
                 // Parquet writer task completed
-                result = writer_task.join_handle() => {
+                result = &mut writer_task_handle => {
                     let shutdown_reason = match result {
-                        Ok(Ok(_)) => "Writer task returned unexpectedly",
-                        Ok(Err(e)) => {
-                            error!("Writer task error: {}", e);
-                            "Writer task failed with error"
-                        },
+                        Ok(_) => "Writer task returned unexpectedly",
                         Err(e) => {
                             error!("Writer task panicked: {}", e);
                             "Writer task panicked"
@@ -394,11 +393,8 @@ fn main() -> Result<()> {
         shutdown_token_clone.cancel();
 
         debug!("Waiting for writer task to complete...");
-        let writer_task_result = writer_task.join().await;
-        if let Err(e) = writer_task_result {
-            error!("Writer task error: {}", e);
-            return Result::<_>::Err(anyhow::anyhow!("Writer task error: {}", e));
-        }
+        // Writer task handles its own errors and logs them, so we just wait for completion
+        let _ = writer_task_handle.await;
 
         Result::<_>::Ok(())
     });
