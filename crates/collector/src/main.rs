@@ -95,46 +95,41 @@ impl PerfEventProcessor {
     }
 
     // Handle task metadata events
-    fn handle_task_metadata(&mut self, _ring_index: usize, data: &[u8]) -> Result<()> {
+    fn handle_task_metadata(&mut self, _ring_index: usize, data: &[u8]) {
         let event: &TaskMetadataMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to parse task metadata event: {:?}",
-                    e
-                ));
+                error!("Failed to parse task metadata event: {:?}", e);
+                return;
             }
         };
 
         // Create task metadata and add to collection
         let metadata = TaskMetadata::new(event.pid, event.comm, event.cgroup_id);
         self.task_collection.add(metadata);
-        Ok(())
     }
 
     // Handle task free events
-    fn handle_task_free(&mut self, _ring_index: usize, data: &[u8]) -> Result<()> {
+    fn handle_task_free(&mut self, _ring_index: usize, data: &[u8]) {
         let event: &TaskFreeMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {
-                return Err(anyhow::anyhow!("Failed to parse task free event: {:?}", e));
+                error!("Failed to parse task free event: {:?}", e);
+                return;
             }
         };
 
         // Queue the task for removal
         self.task_collection.queue_removal(event.pid);
-        Ok(())
     }
 
     // Handle performance measurement events
-    fn handle_perf_measurement(&mut self, _ring_index: usize, data: &[u8]) -> Result<()> {
+    fn handle_perf_measurement(&mut self, _ring_index: usize, data: &[u8]) {
         let event: &PerfMeasurementMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to parse perf measurement event: {:?}",
-                    e
-                ));
+                error!("Failed to parse perf measurement event: {:?}", e);
+                return;
             }
         };
 
@@ -151,18 +146,15 @@ impl PerfEventProcessor {
         let pid = event.pid;
         let metadata = self.task_collection.lookup(pid).cloned();
         self.current_timeslot.update(pid, metadata, metric);
-        Ok(())
     }
 
     // Handle timer finished processing events
-    fn handle_timer_finished_processing(&mut self, ring_index: usize, data: &[u8]) -> Result<()> {
+    fn handle_timer_finished_processing(&mut self, ring_index: usize, data: &[u8]) {
         let event: &TimerFinishedProcessingMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to parse timer finished processing event: {:?}",
-                    e
-                ));
+                error!("Failed to parse timer finished processing event: {:?}", e);
+                return;
             }
         };
 
@@ -170,7 +162,8 @@ impl PerfEventProcessor {
         let timestamp = event.header.timestamp;
 
         if let Err(e) = self.min_tracker.update(ring_index, timestamp) {
-            return Err(anyhow::anyhow!("Failed to update min tracker: {:?}", e));
+            error!("Failed to update min tracker: {:?}", e);
+            return;
         }
 
         // Check if the minimum time slot has changed
@@ -193,18 +186,15 @@ impl PerfEventProcessor {
             // End of time slot - flush queued removals
             self.task_collection.flush_removals();
         }
-        Ok(())
     }
 
     // Handle timer migration detection events
-    fn handle_timer_migration(&mut self, _ring_index: usize, data: &[u8]) -> Result<()> {
+    fn handle_timer_migration(&mut self, _ring_index: usize, data: &[u8]) {
         let event: &TimerMigrationMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {
-                return Err(anyhow::anyhow!(
-                    "Failed to parse timer migration event: {:?}",
-                    e
-                ));
+                error!("Failed to parse timer migration event: {:?}", e);
+                return;
             }
         };
 
@@ -357,12 +347,9 @@ fn main() -> Result<()> {
         dispatcher.subscribe(
             msg_type::MSG_TYPE_TASK_METADATA as u32,
             move |ring_index, data| {
-                if let Err(e) = processor_clone
+                processor_clone
                     .borrow_mut()
-                    .handle_task_metadata(ring_index, data)
-                {
-                    error!("Error handling task metadata: {:?}", e);
-                }
+                    .handle_task_metadata(ring_index, data);
             },
         );
 
@@ -370,12 +357,9 @@ fn main() -> Result<()> {
         dispatcher.subscribe(
             msg_type::MSG_TYPE_TASK_FREE as u32,
             move |ring_index, data| {
-                if let Err(e) = processor_clone
+                processor_clone
                     .borrow_mut()
-                    .handle_task_free(ring_index, data)
-                {
-                    error!("Error handling task free: {:?}", e);
-                }
+                    .handle_task_free(ring_index, data);
             },
         );
 
@@ -384,12 +368,9 @@ fn main() -> Result<()> {
         dispatcher.subscribe(
             msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
             move |ring_index, data| {
-                if let Err(e) = processor_clone
+                processor_clone
                     .borrow_mut()
-                    .handle_perf_measurement(ring_index, data)
-                {
-                    error!("Error handling perf measurement: {:?}", e);
-                }
+                    .handle_perf_measurement(ring_index, data);
             },
         );
 
@@ -398,12 +379,9 @@ fn main() -> Result<()> {
         dispatcher.subscribe(
             msg_type::MSG_TYPE_TIMER_FINISHED_PROCESSING as u32,
             move |ring_index, data| {
-                if let Err(e) = processor_clone
+                processor_clone
                     .borrow_mut()
-                    .handle_timer_finished_processing(ring_index, data)
-                {
-                    error!("Error handling timer finished: {:?}", e);
-                }
+                    .handle_timer_finished_processing(ring_index, data);
             },
         );
 
@@ -412,12 +390,9 @@ fn main() -> Result<()> {
         dispatcher.subscribe(
             msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
             move |ring_index, data| {
-                if let Err(e) = processor_clone
+                processor_clone
                     .borrow_mut()
-                    .handle_timer_migration(ring_index, data)
-                {
-                    error!("Error handling timer migration: {:?}", e);
-                }
+                    .handle_timer_migration(ring_index, data);
             },
         );
 
