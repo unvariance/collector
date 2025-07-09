@@ -135,18 +135,9 @@ impl PerfEventProcessor {
         {
             let dispatcher = bpf_loader.dispatcher_mut();
 
-            // Helper function to create subscription closures
-            let mut subscribe_handler =
-                |msg_type: u32, handler: fn(&mut PerfEventProcessor, usize, &[u8])| {
-                    let processor_clone = processor.clone();
-                    dispatcher.subscribe(msg_type, move |ring_index, data| {
-                        handler(&mut processor_clone.borrow_mut(), ring_index, data);
-                    });
-                };
-
-            // Register handlers for each message type
-            subscribe_handler(
+            dispatcher.subscribe_method(
                 msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
+                processor.clone(),
                 PerfEventProcessor::handle_perf_measurement,
             );
         }

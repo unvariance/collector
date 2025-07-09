@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use thiserror::Error;
 
 use crate::{
@@ -78,6 +78,19 @@ impl Dispatcher {
         F: FnMut(usize, &[u8]) + 'static,
     {
         self.lost_subscribers.push(Box::new(callback));
+    }
+
+    /// Subscribe to events of a specific message type with a method from a struct
+    pub fn subscribe_method<T: 'static>(
+        &mut self,
+        message_type: u32,
+        instance: Rc<RefCell<T>>,
+        method: fn(&mut T, usize, &[u8]),
+    ) {
+        let callback = move |ring_index, data: &[u8]| {
+            method(&mut instance.borrow_mut(), ring_index, data);
+        };
+        self.subscribe(message_type, callback);
     }
 
     /// Dispatch events from the reader to registered subscribers

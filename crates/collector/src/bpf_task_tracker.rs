@@ -22,25 +22,17 @@ impl BpfTaskTracker {
         let dispatcher = bpf_loader.dispatcher_mut();
 
         // Subscribe to task metadata events
-        let tracker_clone = tracker.clone();
-        dispatcher.subscribe(
+        dispatcher.subscribe_method(
             msg_type::MSG_TYPE_TASK_METADATA as u32,
-            move |ring_index, data| {
-                tracker_clone
-                    .borrow_mut()
-                    .handle_task_metadata(ring_index, data);
-            },
+            tracker.clone(),
+            BpfTaskTracker::handle_task_metadata,
         );
 
         // Subscribe to task free events
-        let tracker_clone = tracker.clone();
-        dispatcher.subscribe(
+        dispatcher.subscribe_method(
             msg_type::MSG_TYPE_TASK_FREE as u32,
-            move |ring_index, data| {
-                tracker_clone
-                    .borrow_mut()
-                    .handle_task_free(ring_index, data);
-            },
+            tracker.clone(),
+            BpfTaskTracker::handle_task_free,
         );
 
         tracker

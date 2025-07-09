@@ -17,14 +17,10 @@ impl BpfErrorHandler {
 
         // Subscribe to timer migration events
         let dispatcher = bpf_loader.dispatcher_mut();
-        let handler_clone = handler.clone();
-        dispatcher.subscribe(
+        dispatcher.subscribe_method(
             msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
-            move |ring_index, data| {
-                handler_clone
-                    .borrow()
-                    .handle_timer_migration(ring_index, data);
-            },
+            handler.clone(),
+            BpfErrorHandler::handle_timer_migration,
         );
 
         // Subscribe to lost samples events
@@ -37,7 +33,7 @@ impl BpfErrorHandler {
     }
 
     /// Handle timer migration detection events
-    fn handle_timer_migration(&self, _ring_index: usize, data: &[u8]) {
+    fn handle_timer_migration(&mut self, _ring_index: usize, data: &[u8]) {
         let event: &TimerMigrationMsg = match plain::from_bytes(data) {
             Ok(event) => event,
             Err(e) => {

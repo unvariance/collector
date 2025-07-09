@@ -28,14 +28,10 @@ impl BpfTimeslotTracker {
 
         // Subscribe to timer finished processing events
         let dispatcher = bpf_loader.dispatcher_mut();
-        let tracker_clone = tracker.clone();
-        dispatcher.subscribe(
+        dispatcher.subscribe_method(
             msg_type::MSG_TYPE_TIMER_FINISHED_PROCESSING as u32,
-            move |ring_index, data| {
-                tracker_clone
-                    .borrow_mut()
-                    .handle_timer_finished_processing(ring_index, data);
-            },
+            tracker.clone(),
+            BpfTimeslotTracker::handle_timer_finished_processing,
         );
 
         tracker
