@@ -16,11 +16,10 @@ use uuid::Uuid;
 // Import the perf_events crate components
 
 // Import the bpf crate components
-use bpf::{
-    msg_type, BpfLoader, PerfMeasurementMsg, TaskFreeMsg, TaskMetadataMsg, TimerMigrationMsg,
-};
+use bpf::{msg_type, BpfLoader, PerfMeasurementMsg, TaskFreeMsg, TaskMetadataMsg};
 
 // Import local modules
+mod bpf_error_handler;
 mod bpf_timeslot_tracker;
 mod metrics;
 mod parquet_writer;
@@ -29,6 +28,7 @@ mod task_metadata;
 mod timeslot_data;
 
 // Re-export the Metric struct
+use bpf_error_handler::BpfErrorHandler;
 use bpf_timeslot_tracker::BpfTimeslotTracker;
 pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
@@ -80,6 +80,8 @@ struct PerfEventProcessor {
     on_timeslot_complete: Box<dyn Fn(TimeslotData)>,
     // BPF timeslot tracker
     _timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
+    // BPF error handler
+    _error_handler: Rc<RefCell<BpfErrorHandler>>,
 }
 
 impl PerfEventProcessor {
@@ -92,11 +94,15 @@ impl PerfEventProcessor {
         // Create BpfTimeslotTracker
         let timeslot_tracker = BpfTimeslotTracker::new(bpf_loader, num_cpus);
 
+        // Create BpfErrorHandler
+        let error_handler = BpfErrorHandler::new(bpf_loader);
+
         let processor = Rc::new(RefCell::new(Self {
             task_collection: TaskCollection::new(),
             current_timeslot: TimeslotData::new(0), // Start with timestamp 0
             on_timeslot_complete: Box::new(on_timeslot_complete),
             _timeslot_tracker: timeslot_tracker.clone(),
+            _error_handler: error_handler,
         }));
 
         // Set up timeslot event subscriptions
@@ -146,17 +152,6 @@ impl PerfEventProcessor {
                 msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
                 PerfEventProcessor::handle_perf_measurement,
             );
-            subscribe_handler(
-                msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
-                PerfEventProcessor::handle_timer_migration,
-            );
-
-            let processor_clone = processor.clone();
-            dispatcher.subscribe_lost_samples(move |ring_index, data| {
-                processor_clone
-                    .borrow()
-                    .handle_lost_events(ring_index, data);
-            });
         }
 
         processor
@@ -232,37 +227,6 @@ impl PerfEventProcessor {
     fn handle_task_collection_flush(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
         // End of time slot - flush queued removals
         self.task_collection.flush_removals();
-    }
-
-    // Handle timer migration detection events
-    fn handle_timer_migration(&mut self, _ring_index: usize, data: &[u8]) {
-        let event: &TimerMigrationMsg = match plain::from_bytes(data) {
-            Ok(event) => event,
-            Err(e) => {
-                error!("Failed to parse timer migration event: {:?}", e);
-                return;
-            }
-        };
-
-        // Timer migration detected - this is a critical error that invalidates measurements
-        error!(
-            r#"CRITICAL ERROR: Timer migration detected!
-Expected CPU: {}, Actual CPU: {}
-Timer pinning failed - measurements are no longer reliable.
-This indicates either:
-  1. Kernel version doesn't support BPF timer CPU pinning (requires 6.7+)
-  2. Legacy fallback timer migration control failed
-  This case should never happen, please report this as a bug with the distribution and kernel version.
-Exiting to prevent incorrect performance measurements."#,
-            event.expected_cpu, event.actual_cpu
-        );
-
-        std::process::exit(1);
-    }
-
-    // Handle lost events
-    fn handle_lost_events(&self, ring_index: usize, _data: &[u8]) {
-        error!("Lost events notification on ring {}", ring_index);
     }
 }
 
