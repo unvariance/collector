@@ -8,7 +8,6 @@ use clap::Parser;
 use env_logger;
 use log::{debug, error, info};
 use object_store::ObjectStore;
-use timeslot::MinTracker;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::time::sleep;
@@ -18,11 +17,11 @@ use uuid::Uuid;
 
 // Import the bpf crate components
 use bpf::{
-    msg_type, BpfLoader, PerfMeasurementMsg, TaskFreeMsg, TaskMetadataMsg,
-    TimerFinishedProcessingMsg, TimerMigrationMsg,
+    msg_type, BpfLoader, PerfMeasurementMsg, TaskFreeMsg, TaskMetadataMsg, TimerMigrationMsg,
 };
 
 // Import local modules
+mod bpf_timeslot_tracker;
 mod metrics;
 mod parquet_writer;
 mod parquet_writer_task;
@@ -30,6 +29,7 @@ mod task_metadata;
 mod timeslot_data;
 
 // Re-export the Metric struct
+use bpf_timeslot_tracker::BpfTimeslotTracker;
 pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
@@ -74,8 +74,6 @@ struct Command {
 
 // Application state containing task collection and timer tracking
 struct PerfEventProcessor {
-    min_tracker: MinTracker,
-    last_min_slot: Option<u64>,
     task_collection: TaskCollection,
     current_timeslot: TimeslotData,
     // Callback for completed timeslots
@@ -84,10 +82,8 @@ struct PerfEventProcessor {
 
 impl PerfEventProcessor {
     // Create a new PerfEventProcessor with a callback for completed timeslots
-    fn new(num_cpus: usize, on_timeslot_complete: impl Fn(TimeslotData) + 'static) -> Self {
+    fn new(on_timeslot_complete: impl Fn(TimeslotData) + 'static) -> Self {
         Self {
-            min_tracker: MinTracker::new(1_000_000, num_cpus),
-            last_min_slot: None,
             task_collection: TaskCollection::new(),
             current_timeslot: TimeslotData::new(0), // Start with timestamp 0
             on_timeslot_complete: Box::new(on_timeslot_complete),
@@ -148,44 +144,22 @@ impl PerfEventProcessor {
         self.current_timeslot.update(pid, metadata, metric);
     }
 
-    // Handle timer finished processing events
-    fn handle_timer_finished_processing(&mut self, ring_index: usize, data: &[u8]) {
-        let event: &TimerFinishedProcessingMsg = match plain::from_bytes(data) {
-            Ok(event) => event,
-            Err(e) => {
-                error!("Failed to parse timer finished processing event: {:?}", e);
-                return;
-            }
-        };
+    // Handle new timeslot events
+    fn handle_new_timeslot(&mut self, _old_timeslot: u64, new_timeslot: u64) {
+        // Create a new empty timeslot with the new timestamp
+        let new_timeslot_data = TimeslotData::new(new_timeslot);
 
-        // Update the min tracker with the CPU ID and timestamp
-        let timestamp = event.header.timestamp;
+        // Take ownership of the current timeslot, replacing it with the new one
+        let completed_timeslot = std::mem::replace(&mut self.current_timeslot, new_timeslot_data);
 
-        if let Err(e) = self.min_tracker.update(ring_index, timestamp) {
-            error!("Failed to update min tracker: {:?}", e);
-            return;
-        }
+        // Call the callback with the completed timeslot
+        (self.on_timeslot_complete)(completed_timeslot);
+    }
 
-        // Check if the minimum time slot has changed
-        let new_min_slot = self.min_tracker.get_min();
-        if new_min_slot != self.last_min_slot {
-            // Create a new empty timeslot with the new timestamp
-            let new_timeslot = TimeslotData::new(new_min_slot.unwrap_or(0));
-
-            // Take ownership of the current timeslot, replacing it with the new one
-            let completed_timeslot = std::mem::replace(&mut self.current_timeslot, new_timeslot);
-
-            if self.last_min_slot.is_some() {
-                // Call the callback with the completed timeslot
-                (self.on_timeslot_complete)(completed_timeslot);
-            }
-
-            // Update the last min slot
-            self.last_min_slot = new_min_slot;
-
-            // End of time slot - flush queued removals
-            self.task_collection.flush_removals();
-        }
+    // Handle task collection flush for new time slots
+    fn handle_task_collection_flush(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
+        // End of time slot - flush queued removals
+        self.task_collection.flush_removals();
     }
 
     // Handle timer migration detection events
@@ -334,10 +308,31 @@ fn main() -> Result<()> {
     };
 
     // Create PerfEventProcessor with the callback
-    let processor = Rc::new(RefCell::new(PerfEventProcessor::new(
-        num_cpus,
-        timeslot_callback,
-    )));
+    let processor = Rc::new(RefCell::new(PerfEventProcessor::new(timeslot_callback)));
+
+    // Create BpfTimeslotTracker and set up subscribers
+    let timeslot_tracker = BpfTimeslotTracker::new(&mut bpf_loader, num_cpus);
+
+    // Subscribe to new timeslot events
+    {
+        let processor_clone = processor.clone();
+        timeslot_tracker
+            .borrow_mut()
+            .subscribe(move |old_timeslot, new_timeslot| {
+                processor_clone
+                    .borrow_mut()
+                    .handle_new_timeslot(old_timeslot, new_timeslot);
+            });
+
+        let processor_clone = processor.clone();
+        timeslot_tracker
+            .borrow_mut()
+            .subscribe(move |old_timeslot, new_timeslot| {
+                processor_clone
+                    .borrow_mut()
+                    .handle_task_collection_flush(old_timeslot, new_timeslot);
+            });
+    }
 
     // Register event handlers
     {
@@ -365,10 +360,7 @@ fn main() -> Result<()> {
             msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
             PerfEventProcessor::handle_perf_measurement,
         );
-        subscribe_handler(
-            msg_type::MSG_TYPE_TIMER_FINISHED_PROCESSING as u32,
-            PerfEventProcessor::handle_timer_finished_processing,
-        );
+        // Timer finished processing is now handled by BpfMinTracker
         subscribe_handler(
             msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
             PerfEventProcessor::handle_timer_migration,
