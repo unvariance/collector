@@ -78,16 +78,88 @@ struct PerfEventProcessor {
     current_timeslot: TimeslotData,
     // Callback for completed timeslots
     on_timeslot_complete: Box<dyn Fn(TimeslotData)>,
+    // BPF timeslot tracker
+    _timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
 }
 
 impl PerfEventProcessor {
     // Create a new PerfEventProcessor with a callback for completed timeslots
-    fn new(on_timeslot_complete: impl Fn(TimeslotData) + 'static) -> Self {
-        Self {
+    fn new(
+        bpf_loader: &mut BpfLoader,
+        num_cpus: usize,
+        on_timeslot_complete: impl Fn(TimeslotData) + 'static,
+    ) -> Rc<RefCell<Self>> {
+        // Create BpfTimeslotTracker
+        let timeslot_tracker = BpfTimeslotTracker::new(bpf_loader, num_cpus);
+
+        let processor = Rc::new(RefCell::new(Self {
             task_collection: TaskCollection::new(),
             current_timeslot: TimeslotData::new(0), // Start with timestamp 0
             on_timeslot_complete: Box::new(on_timeslot_complete),
+            _timeslot_tracker: timeslot_tracker.clone(),
+        }));
+
+        // Set up timeslot event subscriptions
+        {
+            let processor_clone = processor.clone();
+            timeslot_tracker
+                .borrow_mut()
+                .subscribe(move |old_timeslot, new_timeslot| {
+                    processor_clone
+                        .borrow_mut()
+                        .handle_new_timeslot(old_timeslot, new_timeslot);
+                });
+
+            let processor_clone = processor.clone();
+            timeslot_tracker
+                .borrow_mut()
+                .subscribe(move |old_timeslot, new_timeslot| {
+                    processor_clone
+                        .borrow_mut()
+                        .handle_task_collection_flush(old_timeslot, new_timeslot);
+                });
         }
+
+        // Set up BPF event subscriptions
+        {
+            let dispatcher = bpf_loader.dispatcher_mut();
+
+            // Helper function to create subscription closures
+            let mut subscribe_handler =
+                |msg_type: u32, handler: fn(&mut PerfEventProcessor, usize, &[u8])| {
+                    let processor_clone = processor.clone();
+                    dispatcher.subscribe(msg_type, move |ring_index, data| {
+                        handler(&mut processor_clone.borrow_mut(), ring_index, data);
+                    });
+                };
+
+            // Register handlers for each message type
+            subscribe_handler(
+                msg_type::MSG_TYPE_TASK_METADATA as u32,
+                PerfEventProcessor::handle_task_metadata,
+            );
+            subscribe_handler(
+                msg_type::MSG_TYPE_TASK_FREE as u32,
+                PerfEventProcessor::handle_task_free,
+            );
+            subscribe_handler(
+                msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
+                PerfEventProcessor::handle_perf_measurement,
+            );
+            subscribe_handler(
+                msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
+                PerfEventProcessor::handle_timer_migration,
+            );
+
+            let processor_clone = processor.clone();
+            dispatcher.subscribe_lost_samples(move |ring_index, data| {
+                processor_clone
+                    .borrow()
+                    .handle_lost_events(ring_index, data);
+            });
+        }
+
+        processor
     }
 
     // Handle task metadata events
@@ -307,72 +379,8 @@ fn main() -> Result<()> {
         }
     };
 
-    // Create PerfEventProcessor with the callback
-    let processor = Rc::new(RefCell::new(PerfEventProcessor::new(timeslot_callback)));
-
-    // Create BpfTimeslotTracker and set up subscribers
-    let timeslot_tracker = BpfTimeslotTracker::new(&mut bpf_loader, num_cpus);
-
-    // Subscribe to new timeslot events
-    {
-        let processor_clone = processor.clone();
-        timeslot_tracker
-            .borrow_mut()
-            .subscribe(move |old_timeslot, new_timeslot| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_new_timeslot(old_timeslot, new_timeslot);
-            });
-
-        let processor_clone = processor.clone();
-        timeslot_tracker
-            .borrow_mut()
-            .subscribe(move |old_timeslot, new_timeslot| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_task_collection_flush(old_timeslot, new_timeslot);
-            });
-    }
-
-    // Register event handlers
-    {
-        let dispatcher = bpf_loader.dispatcher_mut();
-
-        // Helper function to create subscription closures
-        let mut subscribe_handler =
-            |msg_type: u32, handler: fn(&mut PerfEventProcessor, usize, &[u8])| {
-                let processor_clone = processor.clone();
-                dispatcher.subscribe(msg_type, move |ring_index, data| {
-                    handler(&mut processor_clone.borrow_mut(), ring_index, data);
-                });
-            };
-
-        // Register handlers for each message type
-        subscribe_handler(
-            msg_type::MSG_TYPE_TASK_METADATA as u32,
-            PerfEventProcessor::handle_task_metadata,
-        );
-        subscribe_handler(
-            msg_type::MSG_TYPE_TASK_FREE as u32,
-            PerfEventProcessor::handle_task_free,
-        );
-        subscribe_handler(
-            msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
-            PerfEventProcessor::handle_perf_measurement,
-        );
-        // Timer finished processing is now handled by BpfMinTracker
-        subscribe_handler(
-            msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
-            PerfEventProcessor::handle_timer_migration,
-        );
-
-        let processor_clone = processor.clone();
-        dispatcher.subscribe_lost_samples(move |ring_index, data| {
-            processor_clone
-                .borrow()
-                .handle_lost_events(ring_index, data);
-        });
-    }
+    // Create PerfEventProcessor with the callback and BPF loader
+    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_callback);
 
     // Attach BPF programs
     bpf_loader.attach()?;
