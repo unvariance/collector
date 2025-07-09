@@ -278,13 +278,15 @@ fn main() -> Result<()> {
     );
     let writer = ParquetWriter::new(store, config)?;
 
-    // Create ParquetWriterTask with a buffer of 1000 items
-    let mut writer_task = runtime.block_on(async { ParquetWriterTask::new(writer, 1000) });
+    // Create channels for the ParquetWriterTask
+    let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
+    let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
+
+    // Create ParquetWriterTask with pre-configured channels
+    let mut writer_task = runtime
+        .block_on(async { ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver) });
 
     debug!("Parquet writer task initialized and ready to receive data");
-
-    // Get sender from the writer task
-    let object_writer_sender = writer_task.sender();
 
     // Create a BPF loader with the specified verbosity
     let mut bpf_loader = BpfLoader::new()?;
@@ -296,7 +298,7 @@ fn main() -> Result<()> {
     let num_cpus = libbpf_rs::num_possible_cpus()?;
 
     // Create PerfEventProcessor with the timeslot sender and BPF loader
-    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, object_writer_sender);
+    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_sender);
 
     // Attach BPF programs
     bpf_loader.attach()?;
@@ -348,8 +350,8 @@ fn main() -> Result<()> {
                 // SIGUSR1 received - trigger file rotation
                 _ = sigusr1.recv() => {
                     debug!("Received SIGUSR1, rotating parquet file");
-                    if let Err(e) = writer_task.rotate().await {
-                        error!("Failed to rotate parquet file: {}", e);
+                    if let Err(e) = rotate_sender.send(()).await {
+                        error!("Failed to send rotation signal: {}", e);
                     }
                     // Continue running, don't break
                 },
@@ -392,7 +394,7 @@ fn main() -> Result<()> {
         shutdown_token_clone.cancel();
 
         debug!("Waiting for writer task to complete...");
-        let writer_task_result = writer_task.shutdown().await;
+        let writer_task_result = writer_task.join().await;
         if let Err(e) = writer_task_result {
             error!("Writer task error: {}", e);
             return Result::<_>::Err(anyhow::anyhow!("Writer task error: {}", e));
