@@ -16,10 +16,11 @@ use uuid::Uuid;
 // Import the perf_events crate components
 
 // Import the bpf crate components
-use bpf::{msg_type, BpfLoader, PerfMeasurementMsg, TaskFreeMsg, TaskMetadataMsg};
+use bpf::{msg_type, BpfLoader, PerfMeasurementMsg};
 
 // Import local modules
 mod bpf_error_handler;
+mod bpf_task_tracker;
 mod bpf_timeslot_tracker;
 mod metrics;
 mod parquet_writer;
@@ -29,11 +30,11 @@ mod timeslot_data;
 
 // Re-export the Metric struct
 use bpf_error_handler::BpfErrorHandler;
+use bpf_task_tracker::BpfTaskTracker;
 use bpf_timeslot_tracker::BpfTimeslotTracker;
 pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
-use task_metadata::{TaskCollection, TaskMetadata};
 use timeslot_data::TimeslotData;
 
 /// Linux process monitoring tool
@@ -74,7 +75,6 @@ struct Command {
 
 // Application state containing task collection and timer tracking
 struct PerfEventProcessor {
-    task_collection: TaskCollection,
     current_timeslot: TimeslotData,
     // Callback for completed timeslots
     on_timeslot_complete: Box<dyn Fn(TimeslotData)>,
@@ -82,6 +82,8 @@ struct PerfEventProcessor {
     _timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
     // BPF error handler
     _error_handler: Rc<RefCell<BpfErrorHandler>>,
+    // BPF task tracker
+    task_tracker: Rc<RefCell<BpfTaskTracker>>,
 }
 
 impl PerfEventProcessor {
@@ -97,12 +99,15 @@ impl PerfEventProcessor {
         // Create BpfErrorHandler
         let error_handler = BpfErrorHandler::new(bpf_loader);
 
+        // Create BpfTaskTracker
+        let task_tracker = BpfTaskTracker::new(bpf_loader);
+
         let processor = Rc::new(RefCell::new(Self {
-            task_collection: TaskCollection::new(),
             current_timeslot: TimeslotData::new(0), // Start with timestamp 0
             on_timeslot_complete: Box::new(on_timeslot_complete),
             _timeslot_tracker: timeslot_tracker.clone(),
             _error_handler: error_handler,
+            task_tracker: task_tracker.clone(),
         }));
 
         // Set up timeslot event subscriptions
@@ -116,13 +121,11 @@ impl PerfEventProcessor {
                         .handle_new_timeslot(old_timeslot, new_timeslot);
                 });
 
-            let processor_clone = processor.clone();
+            let task_tracker_clone = task_tracker.clone();
             timeslot_tracker
                 .borrow_mut()
-                .subscribe(move |old_timeslot, new_timeslot| {
-                    processor_clone
-                        .borrow_mut()
-                        .handle_task_collection_flush(old_timeslot, new_timeslot);
+                .subscribe(move |_old_timeslot, _new_timeslot| {
+                    task_tracker_clone.borrow_mut().flush_removals();
                 });
         }
 
@@ -141,49 +144,12 @@ impl PerfEventProcessor {
 
             // Register handlers for each message type
             subscribe_handler(
-                msg_type::MSG_TYPE_TASK_METADATA as u32,
-                PerfEventProcessor::handle_task_metadata,
-            );
-            subscribe_handler(
-                msg_type::MSG_TYPE_TASK_FREE as u32,
-                PerfEventProcessor::handle_task_free,
-            );
-            subscribe_handler(
                 msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
                 PerfEventProcessor::handle_perf_measurement,
             );
         }
 
         processor
-    }
-
-    // Handle task metadata events
-    fn handle_task_metadata(&mut self, _ring_index: usize, data: &[u8]) {
-        let event: &TaskMetadataMsg = match plain::from_bytes(data) {
-            Ok(event) => event,
-            Err(e) => {
-                error!("Failed to parse task metadata event: {:?}", e);
-                return;
-            }
-        };
-
-        // Create task metadata and add to collection
-        let metadata = TaskMetadata::new(event.pid, event.comm, event.cgroup_id);
-        self.task_collection.add(metadata);
-    }
-
-    // Handle task free events
-    fn handle_task_free(&mut self, _ring_index: usize, data: &[u8]) {
-        let event: &TaskFreeMsg = match plain::from_bytes(data) {
-            Ok(event) => event,
-            Err(e) => {
-                error!("Failed to parse task free event: {:?}", e);
-                return;
-            }
-        };
-
-        // Queue the task for removal
-        self.task_collection.queue_removal(event.pid);
     }
 
     // Handle performance measurement events
@@ -207,7 +173,7 @@ impl PerfEventProcessor {
 
         // Look up task metadata and update timeslot data
         let pid = event.pid;
-        let metadata = self.task_collection.lookup(pid).cloned();
+        let metadata = self.task_tracker.borrow().lookup(pid).cloned();
         self.current_timeslot.update(pid, metadata, metric);
     }
 
@@ -221,12 +187,6 @@ impl PerfEventProcessor {
 
         // Call the callback with the completed timeslot
         (self.on_timeslot_complete)(completed_timeslot);
-    }
-
-    // Handle task collection flush for new time slots
-    fn handle_task_collection_flush(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
-        // End of time slot - flush queued removals
-        self.task_collection.flush_removals();
     }
 }
 
