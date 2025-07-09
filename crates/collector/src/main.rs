@@ -342,58 +342,36 @@ fn main() -> Result<()> {
     // Register event handlers
     {
         let dispatcher = bpf_loader.dispatcher_mut();
-        // Register handlers for each message type with processor
-        let processor_clone = processor.clone();
-        dispatcher.subscribe(
+
+        // Helper function to create subscription closures
+        let mut subscribe_handler =
+            |msg_type: u32, handler: fn(&mut PerfEventProcessor, usize, &[u8])| {
+                let processor_clone = processor.clone();
+                dispatcher.subscribe(msg_type, move |ring_index, data| {
+                    handler(&mut processor_clone.borrow_mut(), ring_index, data);
+                });
+            };
+
+        // Register handlers for each message type
+        subscribe_handler(
             msg_type::MSG_TYPE_TASK_METADATA as u32,
-            move |ring_index, data| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_task_metadata(ring_index, data);
-            },
+            PerfEventProcessor::handle_task_metadata,
         );
-
-        let processor_clone = processor.clone();
-        dispatcher.subscribe(
+        subscribe_handler(
             msg_type::MSG_TYPE_TASK_FREE as u32,
-            move |ring_index, data| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_task_free(ring_index, data);
-            },
+            PerfEventProcessor::handle_task_free,
         );
-
-        // Processor clone for the perf measurement callback
-        let processor_clone = processor.clone();
-        dispatcher.subscribe(
+        subscribe_handler(
             msg_type::MSG_TYPE_PERF_MEASUREMENT as u32,
-            move |ring_index, data| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_perf_measurement(ring_index, data);
-            },
+            PerfEventProcessor::handle_perf_measurement,
         );
-
-        // Processor clone for the timer callback
-        let processor_clone = processor.clone();
-        dispatcher.subscribe(
+        subscribe_handler(
             msg_type::MSG_TYPE_TIMER_FINISHED_PROCESSING as u32,
-            move |ring_index, data| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_timer_finished_processing(ring_index, data);
-            },
+            PerfEventProcessor::handle_timer_finished_processing,
         );
-
-        // Processor clone for the timer migration callback
-        let processor_clone = processor.clone();
-        dispatcher.subscribe(
+        subscribe_handler(
             msg_type::MSG_TYPE_TIMER_MIGRATION_DETECTED as u32,
-            move |ring_index, data| {
-                processor_clone
-                    .borrow_mut()
-                    .handle_timer_migration(ring_index, data);
-            },
+            PerfEventProcessor::handle_timer_migration,
         );
 
         let processor_clone = processor.clone();
