@@ -501,6 +501,7 @@ dependencies = [
  "time",
  "timeslot",
  "tokio",
+ "tokio-util",
  "url",
  "uuid",
  "vmlinux",

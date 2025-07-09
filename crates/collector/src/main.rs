@@ -13,6 +13,7 @@ use object_store::ObjectStore;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 // Import the perf_events crate components
@@ -302,9 +303,10 @@ fn main() -> Result<()> {
 
     info!("Successfully started! Tracing and aggregating task performance...");
 
-    // Create a channel for BPF error communication and shutdown signaling
+    // Create a channel for BPF error communication and cancellation token for shutdown signaling
     let (bpf_error_tx, mut bpf_error_rx) = oneshot::channel();
-    let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
+    let shutdown_token = CancellationToken::new();
+    let shutdown_token_clone = shutdown_token.clone();
 
     // Spawn monitoring task to watch for signals and timeout
     let monitoring_handle = runtime.spawn(async move {
@@ -378,7 +380,7 @@ fn main() -> Result<()> {
                             "Writer task panicked"
                         }
                     };
-                    let _ = shutdown_tx.send(());
+                    shutdown_token_clone.cancel();
                     return Result::<_>::Err(anyhow::anyhow!("{}", shutdown_reason));
                 }
             };
@@ -387,7 +389,7 @@ fn main() -> Result<()> {
         debug!("Shutting down...");
 
         // Signal the main thread to shutdown BPF polling
-        let _ = shutdown_tx.send(());
+        shutdown_token_clone.cancel();
 
         debug!("Waiting for writer task to complete...");
         let writer_task_result = writer_task.shutdown().await;
@@ -402,7 +404,7 @@ fn main() -> Result<()> {
     // Run BPF polling in the main thread until signaled to stop
     loop {
         // Check if we should shutdown
-        if shutdown_rx.try_recv().is_ok() {
+        if shutdown_token.is_cancelled() {
             break;
         }
 

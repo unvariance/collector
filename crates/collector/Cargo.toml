@@ -25,6 +25,7 @@ parquet = { workspace = true }
 object_store = { workspace = true }
 url = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 uuid = { workspace = true }
 hostname = { workspace = true }
 futures = { workspace = true }
