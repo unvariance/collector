@@ -1,5 +1,5 @@
 {
-    "name": "Kernel Module Development",
+    "name": "Rust + eBPF Collector Development",
     "dockerFile": "Dockerfile.devcontainer",
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
@@ -10,7 +10,11 @@
                 "ms-vscode.makefile-tools",
                 "ms-azuretools.vscode-docker",
                 "ms-vscode.cmake-tools",
-                "golang.go"
+                "golang.go",
+                "rust-lang.rust-analyzer",
+                "tamasfe.even-better-toml",
+                "fill-labs.dependi",
+                "usernamehw.errorlens"
             ]
         }
     },
