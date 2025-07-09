@@ -18,40 +18,23 @@ deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricte
 
 RUN rm /etc/apt/sources.list.d/ubuntu.sources
 
-# Packages required for cilium/ebpf development
-ENV EBPF_PACKAGES="golang-go llvm clang libbpf-dev"
-
 # Update and install essential build tools and kernel headers
 RUN apt-get update && apt-get install -y \
     build-essential \
-    crossbuild-essential-amd64 \
-    linux-headers-6.8.0-52-generic:amd64 \
-    linux-image-6.8.0-52-generic:amd64 \
-    linux-tools-6.8.0-52-generic:amd64 \
+    clang-19 \
+    libelf-dev \
+    pkg-config \
     git \
     vim \
     curl \
     kmod \
     r-base \
-    ${EBPF_PACKAGES} \
     && rm -rf /var/lib/apt/lists/*
 
-# For Go development
-RUN go install -v golang.org/x/tools/gopls@latest
+    RUN ln -s /usr/bin/clang-19 /usr/bin/clang
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# Create architecture-specific symlink for asm
-RUN arch=$(uname -m) && \
-    case ${arch} in \
-        aarch64) ln -sf /usr/include/aarch64-linux-gnu/asm /usr/include/asm ;; \
-        x86_64)  ln -sf /usr/include/x86_64-linux-gnu/asm /usr/include/asm ;; \
-        *)       echo "Unsupported architecture: ${arch}" && exit 1 ;; \
-    esac
-
-# Expose bpftool by symlinking "ln -s 6.8.0-52-generic `uname -r`" in /usr/lib/linux-tools
-RUN ln -s /usr/lib/linux-tools/6.8.0-52-generic /usr/lib/linux-tools/`uname -r`
 
 # Set the working directory
 WORKDIR /workspace
