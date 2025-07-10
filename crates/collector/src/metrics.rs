@@ -14,11 +14,6 @@ pub struct Metric {
 }
 
 impl Metric {
-    /// Creates a new empty metric
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Add another metric to this one, aggregating all values
     pub fn add(&mut self, other: &Metric) {
         self.cycles += other.cycles;

@@ -30,8 +30,6 @@ mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
 
-// Re-export the Metric struct
-pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
 use perf_event_processor::PerfEventProcessor;
@@ -268,7 +266,6 @@ async fn main() -> Result<()> {
     bpf_loader.attach()?;
 
     info!("Successfully started! Tracing and aggregating task performance...");
-
 
     // Run BPF polling in the main thread until signaled to stop
     loop {
