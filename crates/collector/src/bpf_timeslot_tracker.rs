@@ -43,6 +43,19 @@ impl BpfTimeslotTracker {
         self.subscribers.push(Box::new(callback));
     }
 
+    /// Subscribe to new timeslot events with a method from a struct
+    /// Similar to BPF dispatcher's subscribe_method pattern
+    pub fn subscribe_method<T: 'static>(
+        &mut self,
+        instance: Rc<RefCell<T>>,
+        method: fn(&mut T, u64, u64),
+    ) {
+        let callback = move |old_timeslot, new_timeslot| {
+            method(&mut instance.borrow_mut(), old_timeslot, new_timeslot);
+        };
+        self.subscribe(callback);
+    }
+
     /// Handle timer finished processing events
     fn handle_timer_finished_processing(&mut self, ring_index: usize, data: &[u8]) {
         let event: &TimerFinishedProcessingMsg = match plain::from_bytes(data) {

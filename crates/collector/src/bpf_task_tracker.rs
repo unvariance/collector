@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use log::error;
 
+use crate::bpf_timeslot_tracker::BpfTimeslotTracker;
 use crate::task_metadata::{TaskCollection, TaskMetadata};
 use bpf::{msg_type, BpfLoader, TaskFreeMsg, TaskMetadataMsg};
 
@@ -13,7 +14,10 @@ pub struct BpfTaskTracker {
 
 impl BpfTaskTracker {
     /// Create a new BpfTaskTracker and subscribe to task events
-    pub fn new(bpf_loader: &mut BpfLoader) -> Rc<RefCell<Self>> {
+    pub fn new(
+        bpf_loader: &mut BpfLoader,
+        timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
+    ) -> Rc<RefCell<Self>> {
         let tracker = Rc::new(RefCell::new(Self {
             task_collection: TaskCollection::new(),
         }));
@@ -35,6 +39,11 @@ impl BpfTaskTracker {
             BpfTaskTracker::handle_task_free,
         );
 
+        // Subscribe to timeslot events for flush_removals maintenance
+        timeslot_tracker
+            .borrow_mut()
+            .subscribe_method(tracker.clone(), BpfTaskTracker::on_new_timeslot);
+
         tracker
     }
 
@@ -46,6 +55,11 @@ impl BpfTaskTracker {
     /// Flush queued task removals
     pub fn flush_removals(&mut self) {
         self.task_collection.flush_removals();
+    }
+
+    /// Handle new timeslot events - triggers flush_removals maintenance
+    fn on_new_timeslot(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
+        self.flush_removals();
     }
 
     /// Handle task metadata events

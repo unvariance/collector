@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 // Import local modules
 mod bpf_error_handler;
+mod bpf_perf_to_timeslot;
 mod bpf_task_tracker;
 mod bpf_timeslot_tracker;
 mod metrics;
