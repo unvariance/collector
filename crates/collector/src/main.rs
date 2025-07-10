@@ -71,19 +71,13 @@ async fn duration_timeout_handler(
     duration: Duration,
     cancellation_token: CancellationToken,
 ) -> Result<()> {
-    if duration.as_secs() == 0 {
-        // Unlimited duration - just wait for cancellation
-        cancellation_token.cancelled().await;
-        debug!("Duration timeout handler cancelled (unlimited duration)");
-    } else {
-        // Wait for either duration timeout or cancellation
-        tokio::select! {
-            _ = tokio::time::sleep(duration) => {
-                debug!("Duration timeout reached");
-            }
-            _ = cancellation_token.cancelled() => {
-                debug!("Duration timeout handler cancelled");
-            }
+    // Wait for either duration timeout or cancellation
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => {
+            debug!("Duration timeout reached");
+        }
+        _ = cancellation_token.cancelled() => {
+            debug!("Duration timeout handler cancelled");
         }
     }
     Ok(())
@@ -219,13 +213,15 @@ async fn main() -> Result<()> {
 
     debug!("Parquet writer task initialized and ready to receive data");
 
-    // Spawn duration timeout handler
-    let duration = Duration::from_secs(opts.duration);
-    task_tracker.spawn(task_completion_handler(
-        duration_timeout_handler(duration, shutdown_token.clone()),
-        shutdown_token.clone(),
-        "DurationTimeoutHandler",
-    ));
+    // Spawn duration timeout handler only if duration is non-zero
+    if opts.duration > 0 {
+        let duration = Duration::from_secs(opts.duration);
+        task_tracker.spawn(task_completion_handler(
+            duration_timeout_handler(duration, shutdown_token.clone()),
+            shutdown_token.clone(),
+            "DurationTimeoutHandler",
+        ));
+    }
 
     // Spawn signal handler for SIGTERM/SIGINT
     task_tracker.spawn(task_completion_handler(
