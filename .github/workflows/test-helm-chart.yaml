@@ -104,8 +104,33 @@ jobs:
         run: | 
           kubectl get all -n kube-system
 
+  install-prerequisites:
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 5
+    env:
+      HOME: /root
+    steps:
+      - name: Create HOME directory
+        run: |
+          mkdir -p $HOME
+
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Install awscli
+        run: |
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          python3 -m zipfile -e awscliv2.zip .
+          chmod u+x ./aws/install
+          sudo ./aws/install
+          echo ls: `ls -l /usr/local/bin/aws` || true
+          chmod +x /usr/local/bin/aws || true
+          echo version: `/usr/local/bin/aws --version` || true
+
   helm-chart-deployment:
-    needs: [setup-runner, k3s-deployment]
+    needs: [setup-runner, k3s-deployment, install-prerequisites]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 15
     strategy:
@@ -123,20 +148,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install Helm
-        run: |
-          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-
-      - name: Install awscli
-        run: |
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          python3 -m zipfile -e awscliv2.zip .
-          chmod u+x ./aws/install
-          sudo ./aws/install
-          echo ls: `ls -l /usr/local/bin/aws` || true
-          chmod +x /usr/local/bin/aws || true
-          echo version: `/usr/local/bin/aws --version` || true
 
       - name: Generate UUID Prefix
         id: generate-uuid
@@ -382,7 +393,7 @@ jobs:
 
   stop-runner:
     name: Stop EC2 runner
-    needs: [setup-runner, k3s-deployment, helm-chart-deployment]
+    needs: [setup-runner, k3s-deployment, install-prerequisites, helm-chart-deployment]
     runs-on: ubuntu-latest
     if: always()  # Run even if previous jobs fail
     steps:
