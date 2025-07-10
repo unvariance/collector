@@ -12,7 +12,6 @@ use log::{debug, error, info};
 use object_store::ObjectStore;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
@@ -43,6 +42,75 @@ use parquet_writer_task::ParquetWriterTask;
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 
+/// Duration timeout handler - exits when duration completes or cancellation token is triggered
+async fn duration_timeout_handler(
+    duration: Duration,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    if duration.as_secs() == 0 {
+        // Unlimited duration - just wait for cancellation
+        cancellation_token.cancelled().await;
+        debug!("Duration timeout handler cancelled (unlimited duration)");
+    } else {
+        // Wait for either duration timeout or cancellation
+        tokio::select! {
+            _ = tokio::time::sleep(duration) => {
+                debug!("Duration timeout reached");
+            }
+            _ = cancellation_token.cancelled() => {
+                debug!("Duration timeout handler cancelled");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Signal handler for SIGTERM and SIGINT - triggers cancellation when received
+async fn signal_handler(cancellation_token: CancellationToken) -> Result<()> {
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+    
+    tokio::select! {
+        _ = sigterm.recv() => {
+            debug!("Received SIGTERM, triggering shutdown");
+            cancellation_token.cancel();
+        }
+        _ = sigint.recv() => {
+            debug!("Received SIGINT, triggering shutdown");
+            cancellation_token.cancel();
+        }
+        _ = cancellation_token.cancelled() => {
+            debug!("Signal handler cancelled");
+        }
+    }
+    Ok(())
+}
+
+/// SIGUSR1 rotation handler - sends rotation signals when SIGUSR1 is received
+async fn rotation_handler(
+    rotate_sender: mpsc::Sender<()>,
+    cancellation_token: CancellationToken,
+) -> Result<()> {
+    let mut sigusr1 = signal(SignalKind::user_defined1())?;
+    
+    loop {
+        tokio::select! {
+            _ = sigusr1.recv() => {
+                debug!("Received SIGUSR1, rotating parquet file");
+                if let Err(e) = rotate_sender.send(()).await {
+                    error!("Failed to send rotation signal: {}", e);
+                    // If rotation channel is closed, we can exit
+                    break;
+                }
+            }
+            _ = cancellation_token.cancelled() => {
+                debug!("Rotation handler cancelled");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
@@ -296,6 +364,28 @@ async fn main() -> Result<()> {
         "ParquetWriterTask",
     ));
     
+    // Spawn duration timeout handler
+    let duration = Duration::from_secs(opts.duration);
+    task_tracker.spawn(task_completion_handler(
+        duration_timeout_handler(duration, shutdown_token.clone()),
+        shutdown_token.clone(),
+        "DurationTimeoutHandler",
+    ));
+    
+    // Spawn signal handler for SIGTERM/SIGINT
+    task_tracker.spawn(task_completion_handler(
+        signal_handler(shutdown_token.clone()),
+        shutdown_token.clone(),
+        "SignalHandler",
+    ));
+    
+    // Spawn rotation handler for SIGUSR1
+    task_tracker.spawn(task_completion_handler(
+        rotation_handler(rotate_sender.clone(), shutdown_token.clone()),
+        shutdown_token.clone(),
+        "RotationHandler",
+    ));
+    
     // Close the tracker since we've added all tasks
     task_tracker.close();
 
@@ -322,80 +412,33 @@ async fn main() -> Result<()> {
     let (bpf_error_tx, mut bpf_error_rx) = oneshot::channel();
     let shutdown_token_clone = shutdown_token.clone();
 
-    // Spawn monitoring task to watch for signals and timeout
+    // Spawn monitoring task to handle BPF errors and task completion
     let monitoring_handle = tokio::spawn(async move {
         let task_tracker = task_tracker;
-        let duration = Duration::from_secs(opts.duration);
-        let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint = signal(SignalKind::interrupt())?;
-        let mut sigusr1 = signal(SignalKind::user_defined1())?;
 
-        // Run until we receive a signal to terminate
-        loop {
-            // Select between different completion scenarios
-            tokio::select! {
-                // Duration timeout (if specified)
-                _ = async {
-                    if duration.as_secs() > 0 {
-                        sleep(duration).await;
-                        true
-                    } else {
-                        // This future never completes for unlimited duration
-                        std::future::pending::<bool>().await
+        // Wait for either BPF error or shutdown token cancellation
+        tokio::select! {
+            // BPF polling error
+            error = &mut bpf_error_rx => {
+                match error {
+                    Ok(error_msg) => {
+                        error!("BPF polling error: {}", error_msg);
+                    },
+                    Err(_) => {
+                        error!("BPF polling channel closed unexpectedly");
                     }
-                } => {
-                    debug!("Duration timeout reached");
-                    break;
-                },
-
-                // SIGTERM received
-                _ = sigterm.recv() => {
-                    debug!("Received SIGTERM");
-                    break;
-                },
-
-                // SIGINT received
-                _ = sigint.recv() => {
-                    debug!("Received SIGINT");
-                    break;
-                },
-
-                // SIGUSR1 received - trigger file rotation
-                _ = sigusr1.recv() => {
-                    debug!("Received SIGUSR1, rotating parquet file");
-                    if let Err(e) = rotate_sender.send(()).await {
-                        error!("Failed to send rotation signal: {}", e);
-                    }
-                    // Continue running, don't break
-                },
-
-                // BPF polling error
-                error = &mut bpf_error_rx => {
-                    match error {
-                        Ok(error_msg) => {
-                            error!("{}", error_msg);
-                        },
-                        Err(_) => {
-                            error!("BPF polling channel closed unexpectedly");
-                        }
-                    }
-                    break;
-                },
-
-                // Shutdown token cancelled (by completion wrapper or other failure)
-                _ = shutdown_token_clone.cancelled() => {
-                    debug!("Shutdown token cancelled");
-                    break;
                 }
-            };
+                // Cancel shutdown token to trigger all other tasks to stop
+                shutdown_token_clone.cancel();
+            },
+
+            // Shutdown token cancelled (by one of the other handlers)
+            _ = shutdown_token_clone.cancelled() => {
+                debug!("Shutdown token cancelled, monitoring task proceeding to cleanup");
+            }
         }
 
-        debug!("Shutting down...");
-
-        // Signal the main thread to shutdown BPF polling
-        shutdown_token_clone.cancel();
-
-        debug!("Waiting for writer tasks to complete...");
+        debug!("Waiting for all tasks to complete...");
         task_tracker.wait().await;
 
         debug!("Monitoring task shutting down...");
