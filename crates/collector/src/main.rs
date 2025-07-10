@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +28,7 @@ mod bpf_timeslot_tracker;
 mod metrics;
 mod parquet_writer;
 mod parquet_writer_task;
+mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
 
@@ -39,36 +39,9 @@ use bpf_timeslot_tracker::BpfTimeslotTracker;
 pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
+use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 
-/// Completion wrapper that handles errors, successful exits, and panics
-/// Cancels the token when the task completes for any reason
-async fn completion_wrapper<F, T, E>(future: F, token: CancellationToken, task_name: &str)
-where
-    F: Future<Output = Result<T, E>> + Send + 'static,
-    T: Send + 'static,
-    E: Send + 'static + std::fmt::Debug,
-{
-    let handle = tokio::spawn(future);
-
-    match handle.await {
-        Ok(Ok(_)) => {
-            // Task completed successfully
-            debug!("{} completed successfully", task_name);
-        }
-        Ok(Err(error)) => {
-            // Task completed but returned an error
-            error!("{} failed with error: {:?}", task_name, error);
-        }
-        Err(join_error) => {
-            // Task panicked or was cancelled
-            error!("{} panicked or was cancelled: {:?}", task_name, join_error);
-        }
-    }
-
-    // Always cancel the token when task completes for any reason
-    token.cancel();
-}
 
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
@@ -318,8 +291,8 @@ fn main() -> Result<()> {
     // Create ParquetWriterTask with pre-configured channels
     let writer_task = ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver);
 
-    // Spawn the writer task with completion wrapper
-    let writer_task_handle = runtime.spawn(completion_wrapper(
+    // Spawn the writer task with completion handler
+    let writer_task_handle = runtime.spawn(task_completion_handler(
         writer_task.run(),
         shutdown_token.clone(),
         "ParquetWriterTask",
@@ -422,7 +395,6 @@ fn main() -> Result<()> {
         shutdown_token_clone.cancel();
 
         debug!("Waiting for writer task to complete...");
-        // Writer task completion wrapper handles its own errors and logs them
         let _ = writer_task_handle.await;
 
         debug!("Monitoring task shutting down...");

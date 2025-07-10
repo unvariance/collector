@@ -32,3 +32,6 @@ futures = { workspace = true }
 chrono = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
+
+[dev-dependencies]
+testing_logger = "0.1"
