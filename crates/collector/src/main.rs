@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::future::Future;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +40,35 @@ pub use metrics::Metric;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
 use timeslot_data::TimeslotData;
+
+/// Completion wrapper that handles errors, successful exits, and panics
+/// Cancels the token when the task completes for any reason
+async fn completion_wrapper<F, T, E>(future: F, token: CancellationToken, task_name: &str)
+where
+    F: Future<Output = Result<T, E>> + Send + 'static,
+    T: Send + 'static,
+    E: Send + 'static + std::fmt::Debug,
+{
+    let handle = tokio::spawn(future);
+
+    match handle.await {
+        Ok(Ok(_)) => {
+            // Task completed successfully
+            debug!("{} completed successfully", task_name);
+        }
+        Ok(Err(error)) => {
+            // Task completed but returned an error
+            error!("{} failed with error: {:?}", task_name, error);
+        }
+        Err(join_error) => {
+            // Task panicked or was cancelled
+            error!("{} panicked or was cancelled: {:?}", task_name, join_error);
+        }
+    }
+
+    // Always cancel the token when task completes for any reason
+    token.cancel();
+}
 
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
@@ -282,11 +312,18 @@ fn main() -> Result<()> {
     let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
     let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
 
+    // Create shutdown token
+    let shutdown_token = CancellationToken::new();
+
     // Create ParquetWriterTask with pre-configured channels
     let writer_task = ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver);
 
-    // Spawn the writer task
-    let writer_task_handle = runtime.spawn(writer_task.run());
+    // Spawn the writer task with completion wrapper
+    let writer_task_handle = runtime.spawn(completion_wrapper(
+        writer_task.run(),
+        shutdown_token.clone(),
+        "ParquetWriterTask",
+    ));
 
     debug!("Parquet writer task initialized and ready to receive data");
 
@@ -309,12 +346,11 @@ fn main() -> Result<()> {
 
     // Create a channel for BPF error communication and cancellation token for shutdown signaling
     let (bpf_error_tx, mut bpf_error_rx) = oneshot::channel();
-    let shutdown_token = CancellationToken::new();
     let shutdown_token_clone = shutdown_token.clone();
 
     // Spawn monitoring task to watch for signals and timeout
     let monitoring_handle = runtime.spawn(async move {
-        let mut writer_task_handle = writer_task_handle;
+        let writer_task_handle = writer_task_handle;
         let duration = Duration::from_secs(opts.duration);
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint = signal(SignalKind::interrupt())?;
@@ -372,17 +408,10 @@ fn main() -> Result<()> {
                     break;
                 },
 
-                // Parquet writer task completed
-                result = &mut writer_task_handle => {
-                    let shutdown_reason = match result {
-                        Ok(_) => "Writer task returned unexpectedly",
-                        Err(e) => {
-                            error!("Writer task panicked: {}", e);
-                            "Writer task panicked"
-                        }
-                    };
-                    shutdown_token_clone.cancel();
-                    return Result::<_>::Err(anyhow::anyhow!("{}", shutdown_reason));
+                // Shutdown token cancelled (by completion wrapper or other failure)
+                _ = shutdown_token_clone.cancelled() => {
+                    debug!("Shutdown token cancelled");
+                    break;
                 }
             };
         }
@@ -393,8 +422,10 @@ fn main() -> Result<()> {
         shutdown_token_clone.cancel();
 
         debug!("Waiting for writer task to complete...");
-        // Writer task handles its own errors and logs them, so we just wait for completion
+        // Writer task completion wrapper handles its own errors and logs them
         let _ = writer_task_handle.await;
+
+        debug!("Monitoring task shutting down...");
 
         Result::<_>::Ok(())
     });

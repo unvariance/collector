@@ -25,15 +25,8 @@ impl ParquetWriterTask {
         }
     }
 
-    /// Run the task with error handling - logs errors and doesn't return Result
-    pub async fn run(self) {
-        if let Err(e) = self.run_internal().await {
-            log::error!("ParquetWriterTask had an error: {}", e);
-        }
-    }
-
     /// Run the task, processing timeslots until the channel is closed
-    async fn run_internal(mut self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         loop {
             tokio::select! {
                 timeslot_result = self.timeslot_receiver.recv() => {
