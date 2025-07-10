@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::SchemaRef;
 use chrono::Utc;
 use log::{debug, info};
 use object_store::{path::Path, ObjectStore};
@@ -11,21 +11,6 @@ use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
-
-/// Create the schema for parquet files
-pub fn create_parquet_schema() -> SchemaRef {
-    Arc::new(Schema::new(vec![
-        Field::new("start_time", DataType::Int64, false),
-        Field::new("pid", DataType::Int32, false),
-        Field::new("process_name", DataType::Utf8, true),
-        Field::new("cgroup_id", DataType::Int64, false),
-        Field::new("cycles", DataType::Int64, false),
-        Field::new("instructions", DataType::Int64, false),
-        Field::new("llc_misses", DataType::Int64, false),
-        Field::new("cache_references", DataType::Int64, false),
-        Field::new("duration", DataType::Int64, false),
-    ]))
-}
 
 /// Configuration for the parquet writer
 pub struct ParquetWriterConfig {
@@ -324,97 +309,189 @@ impl ParquetWriter {
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::{builder::{BooleanBuilder, Float64Builder, Int32Builder, StringBuilder}, ArrayRef};
+    use arrow_schema::{DataType, Field, Schema};
     use futures::StreamExt;
     use object_store::memory::InMemory;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     use super::*;
-    use crate::metrics::Metric;
-    use crate::task_metadata::TaskMetadata;
-    use crate::timeslot_data::TimeslotData;
+
+    /// Create a simple test schema with multiple data types
+    fn create_test_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("value", DataType::Float64, false),
+            Field::new("active", DataType::Boolean, false),
+        ]))
+    }
+
+    /// Create a test record batch with known data
+    fn create_test_batch(schema: SchemaRef) -> Result<RecordBatch> {
+        let mut id_builder = Int32Builder::with_capacity(2);
+        let mut name_builder = StringBuilder::with_capacity(2, 20);
+        let mut value_builder = Float64Builder::with_capacity(2);
+        let mut active_builder = BooleanBuilder::with_capacity(2);
+
+        // First row
+        id_builder.append_value(101);
+        name_builder.append_value("alice");
+        value_builder.append_value(12.34);
+        active_builder.append_value(true);
+
+        // Second row
+        id_builder.append_value(202);
+        name_builder.append_value("bob");
+        value_builder.append_value(56.78);
+        active_builder.append_value(false);
+
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(id_builder.finish()),
+            Arc::new(name_builder.finish()),
+            Arc::new(value_builder.finish()),
+            Arc::new(active_builder.finish()),
+        ];
+
+        RecordBatch::try_new(schema, arrays)
+            .map_err(|e| anyhow!("Failed to create test RecordBatch: {}", e))
+    }
 
     #[tokio::test]
-    async fn test_parquet_writer() {
-        // Create a test timeslot
-        let mut timeslot = TimeslotData::new(1000000);
+    async fn test_parquet_write_and_read() {
+        // Create test schema and data
+        let schema = create_test_schema();
+        let test_batch = create_test_batch(schema.clone()).unwrap();
 
-        // Create some test task data
-        let mut comm = [0u8; 16];
-        // Copy "test_process" into the comm array
-        let test_name = b"test_process";
-        comm[..test_name.len()].copy_from_slice(test_name);
-
-        let metadata = Some(TaskMetadata::new(1, comm, 12345));
-        let metrics = Metric::from_deltas(1000, 2000, 30, 500, 100000);
-
-        // Add task data to timeslot
-        timeslot.update(1, metadata, metrics);
-
-        // Create a test writer using an in-memory cursor
-        let memory_storage = InMemory::new();
-        let schema = create_parquet_schema();
+        // Create a test writer using in-memory storage
+        let memory_storage = Arc::new(InMemory::new());
         let mut writer = ParquetWriter::new(
-            Arc::new(memory_storage),
+            memory_storage.clone(),
             schema.clone(),
             ParquetWriterConfig::default(),
         )
         .unwrap();
 
-        // Convert timeslot to batch and write
-        let batch =
-            crate::timeslot_to_recordbatch_task::timeslot_to_batch(timeslot, schema).unwrap();
-        writer.write(batch).await.unwrap();
+        // Write the batch
+        writer.write(test_batch.clone()).await.unwrap();
         writer.close().await.unwrap();
 
-        // Success if we got here without errors
-        assert!(true);
+        // Verify files were created
+        let list_stream = memory_storage.list(None);
+        let files: Vec<_> = list_stream.collect().await;
+        assert_eq!(files.len(), 1, "Expected exactly one parquet file");
+
+        let file_path = &files[0].as_ref().unwrap().location;
+
+        // Read back the parquet file and verify contents
+        let file_data = memory_storage.get(file_path).await.unwrap();
+        let bytes = file_data.bytes().await.unwrap();
+
+        // Create parquet reader
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        let mut reader = reader_builder.build().unwrap();
+
+        // Read all batches
+        let mut all_batches = Vec::new();
+        while let Some(batch) = reader.next() {
+            all_batches.push(batch.unwrap());
+        }
+
+        // Verify we got exactly one batch back
+        assert_eq!(all_batches.len(), 1, "Expected exactly one batch");
+        let read_batch = &all_batches[0];
+
+        // Verify schema matches
+        assert_eq!(read_batch.schema(), schema);
+
+        // Verify structure
+        assert_eq!(read_batch.num_rows(), 2);
+        assert_eq!(read_batch.num_columns(), 4);
+
+        // Verify content - extract arrays and check values
+        use arrow_array::{BooleanArray, Float64Array, Int32Array, StringArray};
+
+        // Check id column
+        let id_array = read_batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_array.value(0), 101);
+        assert_eq!(id_array.value(1), 202);
+
+        // Check name column
+        let name_array = read_batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(name_array.value(0), "alice");
+        assert_eq!(name_array.value(1), "bob");
+
+        // Check value column
+        let value_array = read_batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert!((value_array.value(0) - 12.34).abs() < f64::EPSILON);
+        assert!((value_array.value(1) - 56.78).abs() < f64::EPSILON);
+
+        // Check active column
+        let active_array = read_batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .unwrap();
+        assert_eq!(active_array.value(0), true);
+        assert_eq!(active_array.value(1), false);
     }
 
     #[tokio::test]
     async fn test_file_rotation() {
-        // Create a test timeslot with multiple processes to make it larger
-        let mut timeslot = TimeslotData::new(1000000);
-
-        // Create some test task data
-        let mut comm = [0u8; 16];
-        let test_name = b"test_process";
-        comm[..test_name.len()].copy_from_slice(test_name);
-
-        // Add several tasks to make the timeslot larger
-        for i in 0..100 {
-            let pid = i + 1;
-            let metadata = Some(TaskMetadata::new(pid, comm, 10000 + pid as u64));
-            let metrics = Metric::from_deltas(
-                1000 * pid as u64,
-                2000 * pid as u64,
-                30 * pid as u64,
-                500 * pid as u64,
-                100000 * pid as u64,
-            );
-            timeslot.update(pid, metadata, metrics);
-        }
+        // Create test schema
+        let schema = create_test_schema();
 
         // Create a test writer with a small file size limit to force rotation
         let memory_storage = Arc::new(InMemory::new());
         let config = ParquetWriterConfig {
             storage_prefix: "test-".to_string(),
-            file_size_limit: 100_000, // Small limit to force rotation
-            buffer_size: 10_000,      // Small buffer to force frequent flushes
-            max_row_group_size: 50,   // Small row group size
+            file_size_limit: 10_000, // Very small limit to force rotation
+            buffer_size: 1_000,      // Small buffer to force frequent flushes
+            max_row_group_size: 10,  // Small row group size
             storage_quota: None,
         };
 
-        let schema = create_parquet_schema();
         let mut writer =
             ParquetWriter::new(memory_storage.clone(), schema.clone(), config).unwrap();
 
-        // Write the same timeslot multiple times to exceed the file size limit
-        let batch =
-            crate::timeslot_to_recordbatch_task::timeslot_to_batch(timeslot, schema).unwrap();
+        // Create one large batch with 100 rows (similar to original test)
+        let mut id_builder = Int32Builder::with_capacity(100);
+        let mut name_builder = StringBuilder::with_capacity(100, 1600); // 16 chars per name * 100
+        let mut value_builder = Float64Builder::with_capacity(100);
+        let mut active_builder = BooleanBuilder::with_capacity(100);
 
-        // Write enough batches to ensure rotation
+        // Create 100 rows per batch to match original test data volume
+        for i in 0..100 {
+            id_builder.append_value(i);
+            name_builder.append_value(&format!("user_{}", i));
+            value_builder.append_value(i as f64 * 1.5);
+            active_builder.append_value(i % 2 == 0);
+        }
+
+        let arrays: Vec<ArrayRef> = vec![
+            Arc::new(id_builder.finish()),
+            Arc::new(name_builder.finish()),
+            Arc::new(value_builder.finish()),
+            Arc::new(active_builder.finish()),
+        ];
+
+        let large_batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
+
+        // Write the large batch multiple times to exceed the file size limit (like original test)
         for _ in 0..50 {
-            writer.write(batch.clone()).await.unwrap();
-            // Force a flush to ensure data is written
+            writer.write(large_batch.clone()).await.unwrap();
             writer.flush().await.unwrap();
         }
 
@@ -441,7 +518,7 @@ mod tests {
             );
         }
 
-        // Verify some files have content
+        // Verify all files have content
         for file in &files {
             let size = file.as_ref().unwrap().size;
             assert!(size > 0, "File should have content");
