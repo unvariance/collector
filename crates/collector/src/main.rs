@@ -14,6 +14,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::oneshot;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 use uuid::Uuid;
 
 // Import the perf_events crate components
@@ -243,18 +244,14 @@ fn get_node_identity() -> String {
     Uuid::new_v4().to_string().chars().take(8).collect()
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Initialize env_logger
     env_logger::init();
 
     let opts = Command::parse();
 
     debug!("Starting collector with options: {:?}", opts);
-
-    // Initialize tokio runtime for async operations
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
 
     // Get node identity for file path
     let node_id = get_node_identity();
@@ -285,18 +282,22 @@ fn main() -> Result<()> {
     let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
     let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
 
-    // Create shutdown token
+    // Create shutdown token and task tracker
     let shutdown_token = CancellationToken::new();
+    let task_tracker = TaskTracker::new();
 
     // Create ParquetWriterTask with pre-configured channels
     let writer_task = ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver);
 
-    // Spawn the writer task with completion handler
-    let writer_task_handle = runtime.spawn(task_completion_handler(
+    // Spawn the writer task with completion handler using task tracker
+    task_tracker.spawn(task_completion_handler(
         writer_task.run(),
         shutdown_token.clone(),
         "ParquetWriterTask",
     ));
+    
+    // Close the tracker since we've added all tasks
+    task_tracker.close();
 
     debug!("Parquet writer task initialized and ready to receive data");
 
@@ -322,8 +323,8 @@ fn main() -> Result<()> {
     let shutdown_token_clone = shutdown_token.clone();
 
     // Spawn monitoring task to watch for signals and timeout
-    let monitoring_handle = runtime.spawn(async move {
-        let writer_task_handle = writer_task_handle;
+    let monitoring_handle = tokio::spawn(async move {
+        let task_tracker = task_tracker;
         let duration = Duration::from_secs(opts.duration);
         let mut sigterm = signal(SignalKind::terminate())?;
         let mut sigint = signal(SignalKind::interrupt())?;
@@ -394,8 +395,8 @@ fn main() -> Result<()> {
         // Signal the main thread to shutdown BPF polling
         shutdown_token_clone.cancel();
 
-        debug!("Waiting for writer task to complete...");
-        let _ = writer_task_handle.await;
+        debug!("Waiting for writer tasks to complete...");
+        task_tracker.wait().await;
 
         debug!("Monitoring task shutting down...");
 
@@ -417,16 +418,14 @@ fn main() -> Result<()> {
         }
 
         // Drive the tokio runtime forward
-        runtime.block_on(async {
-            tokio::task::yield_now().await;
-        });
+        tokio::task::yield_now().await;
     }
 
     // Clean up: shutdown the processor
     _processor.borrow_mut().shutdown();
 
     // Clean up: wait for monitoring task to complete
-    if let Err(e) = runtime.block_on(monitoring_handle) {
+    if let Err(e) = monitoring_handle.await {
         error!("Error in monitoring task: {:?}", e);
     }
 
