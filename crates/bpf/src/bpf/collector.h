@@ -49,6 +49,7 @@ struct perf_measurement_msg {
     __u64 llc_misses_delta;      // LLC misses delta
     __u64 cache_references_delta; // Cache references delta
     __u64 time_delta_ns;         // Time delta in nanoseconds
+    __u32 is_context_switch;     // 1 if context switch event, 0 if timer event
 };
 
 // Structure for timer migration detection messages

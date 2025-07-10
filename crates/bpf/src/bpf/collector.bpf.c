@@ -165,7 +165,8 @@ static __always_inline __u64 compute_delta(__u64 current, __u64 previous) {
 // Send perf measurement event to userspace
 static __always_inline int send_perf_measurement(void *ctx, __u32 pid, __u64 cycles_delta, 
                                                __u64 instructions_delta, __u64 llc_misses_delta,
-                                               __u64 cache_references_delta, __u64 time_delta_ns, __u64 timestamp)
+                                               __u64 cache_references_delta, __u64 time_delta_ns, __u64 timestamp,
+                                               __u32 is_context_switch)
 {
     struct perf_measurement_msg msg = {};
     
@@ -178,6 +179,7 @@ static __always_inline int send_perf_measurement(void *ctx, __u32 pid, __u64 cyc
     msg.llc_misses_delta = llc_misses_delta;
     msg.cache_references_delta = cache_references_delta;
     msg.time_delta_ns = time_delta_ns;
+    msg.is_context_switch = is_context_switch;
     
     // Skip the size field (first 4 bytes) when sending
     return bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, 
@@ -236,7 +238,7 @@ static __always_inline int check_and_send_metadata(void *ctx, struct task_struct
 }
 
 // Collect and report performance measurements
-static __always_inline int collect_and_send_perf_measurements(void *ctx, struct task_struct *task)
+static __always_inline int collect_and_send_perf_measurements(void *ctx, struct task_struct *task, __u32 is_context_switch)
 {
     // Skip if null task
     if (!task)
@@ -293,7 +295,8 @@ static __always_inline int collect_and_send_perf_measurements(void *ctx, struct 
     if (prev->timestamp != 0) {
         time_delta_ns = compute_delta(now, prev->timestamp);
         send_perf_measurement(ctx, pid, cycles_delta, instructions_delta, 
-                              llc_misses_delta, cache_references_delta, time_delta_ns, now);
+                              llc_misses_delta, cache_references_delta, time_delta_ns, now,
+                              is_context_switch);
     }
     prev->timestamp = now;
     
@@ -312,8 +315,8 @@ int handle_sched_switch(u64 *ctx)
     // Check and send metadata if needed
     check_and_send_metadata(ctx, current_task);
     
-    // Collect and send performance measurements
-    collect_and_send_perf_measurements(ctx, current_task);
+    // Collect and send performance measurements (context switch event)
+    collect_and_send_perf_measurements(ctx, current_task, 1);
     
     return 0;
 }
@@ -417,8 +420,8 @@ int handle_hrtimer_expire_exit(void *ctx)
     // Check and send metadata if needed
     check_and_send_metadata(ctx, current_task);
 
-    // Collect and send performance measurements before sending timer finished message
-    collect_and_send_perf_measurements(ctx, current_task);
+    // Collect and send performance measurements before sending timer finished message (timer event)
+    collect_and_send_perf_measurements(ctx, current_task, 0);
     
     // Send the timer processing finished message
     send_timer_finished_processing(ctx);
