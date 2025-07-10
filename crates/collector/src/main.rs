@@ -1,22 +1,16 @@
-use std::sync::Arc;
-use std::time::Duration;
-
-use tokio::sync::mpsc;
-
 use anyhow::Result;
+use bpf::BpfLoader;
 use clap::Parser;
 use env_logger;
 use log::{debug, error, info};
 use object_store::ObjectStore;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
-
-// Import the perf_events crate components
-
-// Import the bpf crate components
-use bpf::BpfLoader;
 
 // Import local modules
 mod bpf_error_handler;
@@ -35,6 +29,42 @@ use parquet_writer_task::ParquetWriterTask;
 use perf_event_processor::PerfEventProcessor;
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
+
+/// Linux process monitoring tool
+#[derive(Debug, Parser)]
+struct Command {
+    /// Verbose debug output
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Track duration in seconds (0 = unlimited)
+    #[arg(short, long, default_value = "0")]
+    duration: u64,
+
+    /// Storage type (local or s3)
+    #[arg(long, default_value = "local")]
+    storage_type: String,
+
+    /// Prefix for storage path
+    #[arg(short, long, default_value = "unvariance-metrics-")]
+    prefix: String,
+
+    /// Maximum memory buffer size before flushing (bytes)
+    #[arg(long, default_value = "104857600")] // 100MB
+    parquet_buffer_size: usize,
+
+    /// Maximum size for each Parquet file before rotation (bytes)
+    #[arg(long, default_value = "1073741824")] // 1GB
+    parquet_file_size: usize,
+
+    /// Maximum row group size (number of rows) in a Parquet Row Group
+    #[arg(long, default_value = "1048576")]
+    max_row_group_size: usize,
+
+    /// Maximum total bytes to write to object store
+    #[arg(long)]
+    storage_quota: Option<usize>,
+}
 
 /// Duration timeout handler - exits when duration completes or cancellation token is triggered
 async fn duration_timeout_handler(
@@ -104,42 +134,6 @@ async fn rotation_handler(
         }
     }
     Ok(())
-}
-
-/// Linux process monitoring tool
-#[derive(Debug, Parser)]
-struct Command {
-    /// Verbose debug output
-    #[arg(short, long)]
-    verbose: bool,
-
-    /// Track duration in seconds (0 = unlimited)
-    #[arg(short, long, default_value = "0")]
-    duration: u64,
-
-    /// Storage type (local or s3)
-    #[arg(long, default_value = "local")]
-    storage_type: String,
-
-    /// Prefix for storage path
-    #[arg(short, long, default_value = "unvariance-metrics-")]
-    prefix: String,
-
-    /// Maximum memory buffer size before flushing (bytes)
-    #[arg(long, default_value = "104857600")] // 100MB
-    parquet_buffer_size: usize,
-
-    /// Maximum size for each Parquet file before rotation (bytes)
-    #[arg(long, default_value = "1073741824")] // 1GB
-    parquet_file_size: usize,
-
-    /// Maximum row group size (number of rows) in a Parquet Row Group
-    #[arg(long, default_value = "1048576")]
-    max_row_group_size: usize,
-
-    /// Maximum total bytes to write to object store
-    #[arg(long)]
-    storage_quota: Option<usize>,
 }
 
 // Create object store based on storage type
@@ -223,6 +217,8 @@ async fn main() -> Result<()> {
         "ParquetWriterTask",
     ));
 
+    debug!("Parquet writer task initialized and ready to receive data");
+
     // Spawn duration timeout handler
     let duration = Duration::from_secs(opts.duration);
     task_tracker.spawn(task_completion_handler(
@@ -248,8 +244,6 @@ async fn main() -> Result<()> {
     // Close the tracker since we've added all tasks
     task_tracker.close();
 
-    debug!("Parquet writer task initialized and ready to receive data");
-
     // Create a BPF loader with the specified verbosity
     let mut bpf_loader = BpfLoader::new()?;
 
@@ -260,7 +254,7 @@ async fn main() -> Result<()> {
     let num_cpus = libbpf_rs::num_possible_cpus()?;
 
     // Create PerfEventProcessor with the timeslot sender and BPF loader
-    let _processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_sender);
+    let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_sender);
 
     // Attach BPF programs
     bpf_loader.attach()?;
@@ -287,7 +281,7 @@ async fn main() -> Result<()> {
     }
 
     // Clean up: shutdown the processor
-    _processor.borrow_mut().shutdown();
+    processor.borrow_mut().shutdown();
 
     // Clean up: wait for all tasks to complete
     debug!("Waiting for all tasks to complete...");
