@@ -9,7 +9,6 @@ use env_logger;
 use log::{debug, error, info};
 use object_store::ObjectStore;
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
@@ -270,43 +269,6 @@ async fn main() -> Result<()> {
 
     info!("Successfully started! Tracing and aggregating task performance...");
 
-    // Create a channel for BPF error communication and cancellation token for shutdown signaling
-    let (bpf_error_tx, mut bpf_error_rx) = oneshot::channel();
-    let shutdown_token_clone = shutdown_token.clone();
-
-    // Spawn monitoring task to handle BPF errors and task completion
-    let monitoring_handle = tokio::spawn(async move {
-        let task_tracker = task_tracker;
-
-        // Wait for either BPF error or shutdown token cancellation
-        tokio::select! {
-            // BPF polling error
-            error = &mut bpf_error_rx => {
-                match error {
-                    Ok(error_msg) => {
-                        error!("BPF polling error: {}", error_msg);
-                    },
-                    Err(_) => {
-                        error!("BPF polling channel closed unexpectedly");
-                    }
-                }
-                // Cancel shutdown token to trigger all other tasks to stop
-                shutdown_token_clone.cancel();
-            },
-
-            // Shutdown token cancelled (by one of the other handlers)
-            _ = shutdown_token_clone.cancelled() => {
-                debug!("Shutdown token cancelled, monitoring task proceeding to cleanup");
-            }
-        }
-
-        debug!("Waiting for all tasks to complete...");
-        task_tracker.wait().await;
-
-        debug!("Monitoring task shutting down...");
-
-        Result::<_>::Ok(())
-    });
 
     // Run BPF polling in the main thread until signaled to stop
     loop {
@@ -317,8 +279,9 @@ async fn main() -> Result<()> {
 
         // Poll for events with a 10ms timeout
         if let Err(e) = bpf_loader.poll_events(10) {
-            // Send error to the monitoring task
-            let _ = bpf_error_tx.send(format!("BPF polling error: {}", e));
+            // Log error directly and cancel shutdown token
+            error!("BPF polling error: {}", e);
+            shutdown_token.cancel();
             break;
         }
 
@@ -329,10 +292,9 @@ async fn main() -> Result<()> {
     // Clean up: shutdown the processor
     _processor.borrow_mut().shutdown();
 
-    // Clean up: wait for monitoring task to complete
-    if let Err(e) = monitoring_handle.await {
-        error!("Error in monitoring task: {:?}", e);
-    }
+    // Clean up: wait for all tasks to complete
+    debug!("Waiting for all tasks to complete...");
+    task_tracker.wait().await;
 
     info!("Shutdown complete");
     Ok(())
