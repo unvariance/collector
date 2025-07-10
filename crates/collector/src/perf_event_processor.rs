@@ -66,7 +66,7 @@ impl PerfEventProcessor {
                     bpf_loader,
                     task_tracker.clone(),
                     batch_tx,
-                    1000, // Default batch capacity
+                    32 * 1024, // Default batch capacity
                 );
                 (None, Some(perf_to_trace))
             }
