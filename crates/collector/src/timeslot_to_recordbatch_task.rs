@@ -177,89 +177,54 @@ mod tests {
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.num_columns(), 9);
 
-        // Verify content - extract arrays and check values
+        // Verify content - extract arrays and check values (accounting for unordered timeslot iteration)
         use arrow_array::{Int32Array, Int64Array, StringArray};
 
-        // Check start_time column (should be same for both rows)
-        let start_time_array = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(start_time_array.value(0), 1500000);
-        assert_eq!(start_time_array.value(1), 1500000);
+        let start_time_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let pid_array = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+        let process_name_array = batch.column(2).as_any().downcast_ref::<StringArray>().unwrap();
+        let cgroup_id_array = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
+        let cycles_array = batch.column(4).as_any().downcast_ref::<Int64Array>().unwrap();
+        let instructions_array = batch.column(5).as_any().downcast_ref::<Int64Array>().unwrap();
+        let llc_misses_array = batch.column(6).as_any().downcast_ref::<Int64Array>().unwrap();
+        let cache_references_array = batch.column(7).as_any().downcast_ref::<Int64Array>().unwrap();
+        let duration_array = batch.column(8).as_any().downcast_ref::<Int64Array>().unwrap();
 
-        // Check pid column (should be different)
-        let pid_array = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(pid_array.value(0), 101);
-        assert_eq!(pid_array.value(1), 202);
+        // Find which row corresponds to which process by process name
+        let mut proc_one_row = None;
+        let mut proc_two_row = None;
+        
+        for i in 0..batch.num_rows() {
+            let process_name = process_name_array.value(i);
+            if process_name == "proc_one" {
+                proc_one_row = Some(i);
+            } else if process_name == "proc_two" {
+                proc_two_row = Some(i);
+            }
+        }
+        
+        let proc_one_idx = proc_one_row.expect("proc_one not found in batch");
+        let proc_two_idx = proc_two_row.expect("proc_two not found in batch");
 
-        // Check process_name column (should be different)
-        let process_name_array = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(process_name_array.value(0), "proc_one");
-        assert_eq!(process_name_array.value(1), "proc_two");
+        // Verify proc_one values
+        assert_eq!(start_time_array.value(proc_one_idx), 1500000);
+        assert_eq!(pid_array.value(proc_one_idx), 101);
+        assert_eq!(cgroup_id_array.value(proc_one_idx), 11111);
+        assert_eq!(cycles_array.value(proc_one_idx), 1000);
+        assert_eq!(instructions_array.value(proc_one_idx), 2000);
+        assert_eq!(llc_misses_array.value(proc_one_idx), 30);
+        assert_eq!(cache_references_array.value(proc_one_idx), 500);
+        assert_eq!(duration_array.value(proc_one_idx), 100000);
 
-        // Check cgroup_id column (should be different)
-        let cgroup_id_array = batch
-            .column(3)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(cgroup_id_array.value(0), 11111);
-        assert_eq!(cgroup_id_array.value(1), 22222);
-
-        // Check cycles column (should be different)
-        let cycles_array = batch
-            .column(4)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(cycles_array.value(0), 1000);
-        assert_eq!(cycles_array.value(1), 3000);
-
-        // Check instructions column (should be different)
-        let instructions_array = batch
-            .column(5)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(instructions_array.value(0), 2000);
-        assert_eq!(instructions_array.value(1), 4000);
-
-        // Check llc_misses column (should be different)
-        let llc_misses_array = batch
-            .column(6)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(llc_misses_array.value(0), 30);
-        assert_eq!(llc_misses_array.value(1), 60);
-
-        // Check cache_references column (should be different)
-        let cache_references_array = batch
-            .column(7)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(cache_references_array.value(0), 500);
-        assert_eq!(cache_references_array.value(1), 800);
-
-        // Check duration column (should be different)
-        let duration_array = batch
-            .column(8)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(duration_array.value(0), 100000);
-        assert_eq!(duration_array.value(1), 200000);
+        // Verify proc_two values
+        assert_eq!(start_time_array.value(proc_two_idx), 1500000);
+        assert_eq!(pid_array.value(proc_two_idx), 202);
+        assert_eq!(cgroup_id_array.value(proc_two_idx), 22222);
+        assert_eq!(cycles_array.value(proc_two_idx), 3000);
+        assert_eq!(instructions_array.value(proc_two_idx), 4000);
+        assert_eq!(llc_misses_array.value(proc_two_idx), 60);
+        assert_eq!(cache_references_array.value(proc_two_idx), 800);
+        assert_eq!(duration_array.value(proc_two_idx), 200000);
     }
 
     #[tokio::test]
@@ -301,69 +266,48 @@ mod tests {
         assert_eq!(batch.num_rows(), 2);
         assert_eq!(batch.schema(), schema);
 
-        // Verify content integrity - extract arrays and check values
+        // Verify content integrity - extract arrays and check values (accounting for unordered timeslot iteration)
         use arrow_array::{Int32Array, Int64Array, StringArray};
 
-        // Check start_time column (should be same for both rows)
-        let start_time_array = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(start_time_array.value(0), 2500000);
-        assert_eq!(start_time_array.value(1), 2500000);
+        let start_time_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+        let pid_array = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
+        let process_name_array = batch.column(2).as_any().downcast_ref::<StringArray>().unwrap();
+        let cgroup_id_array = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
+        let cycles_array = batch.column(4).as_any().downcast_ref::<Int64Array>().unwrap();
+        let instructions_array = batch.column(5).as_any().downcast_ref::<Int64Array>().unwrap();
+        let duration_array = batch.column(8).as_any().downcast_ref::<Int64Array>().unwrap();
 
-        // Check pid column (should be different)
-        let pid_array = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(pid_array.value(0), 301);
-        assert_eq!(pid_array.value(1), 302);
+        // Find which row corresponds to which process by process name
+        let mut task_alpha_row = None;
+        let mut task_beta_row = None;
+        
+        for i in 0..batch.num_rows() {
+            let process_name = process_name_array.value(i);
+            if process_name == "task_alpha" {
+                task_alpha_row = Some(i);
+            } else if process_name == "task_beta" {
+                task_beta_row = Some(i);
+            }
+        }
+        
+        let task_alpha_idx = task_alpha_row.expect("task_alpha not found in batch");
+        let task_beta_idx = task_beta_row.expect("task_beta not found in batch");
 
-        // Check process_name column (should be different)
-        let process_name_array = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        assert_eq!(process_name_array.value(0), "task_alpha");
-        assert_eq!(process_name_array.value(1), "task_beta");
+        // Verify task_alpha values
+        assert_eq!(start_time_array.value(task_alpha_idx), 2500000);
+        assert_eq!(pid_array.value(task_alpha_idx), 301);
+        assert_eq!(cgroup_id_array.value(task_alpha_idx), 33333);
+        assert_eq!(cycles_array.value(task_alpha_idx), 5000);
+        assert_eq!(instructions_array.value(task_alpha_idx), 6000);
+        assert_eq!(duration_array.value(task_alpha_idx), 300000);
 
-        // Check cgroup_id column (should be different)
-        let cgroup_id_array = batch
-            .column(3)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(cgroup_id_array.value(0), 33333);
-        assert_eq!(cgroup_id_array.value(1), 44444);
-
-        // Check metrics columns to ensure no cross-contamination
-        let cycles_array = batch
-            .column(4)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(cycles_array.value(0), 5000);
-        assert_eq!(cycles_array.value(1), 7000);
-
-        let instructions_array = batch
-            .column(5)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(instructions_array.value(0), 6000);
-        assert_eq!(instructions_array.value(1), 8000);
-
-        let duration_array = batch
-            .column(8)
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(duration_array.value(0), 300000);
-        assert_eq!(duration_array.value(1), 400000);
+        // Verify task_beta values
+        assert_eq!(start_time_array.value(task_beta_idx), 2500000);
+        assert_eq!(pid_array.value(task_beta_idx), 302);
+        assert_eq!(cgroup_id_array.value(task_beta_idx), 44444);
+        assert_eq!(cycles_array.value(task_beta_idx), 7000);
+        assert_eq!(instructions_array.value(task_beta_idx), 8000);
+        assert_eq!(duration_array.value(task_beta_idx), 400000);
 
         // Close the sender to trigger task shutdown
         drop(timeslot_sender);
