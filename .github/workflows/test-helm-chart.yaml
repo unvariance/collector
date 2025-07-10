@@ -300,94 +300,47 @@ jobs:
           pqrs schema "$PARQUET_FILE" > schema.txt
           cat schema.txt
           
-          # Verify required fields are present
-          echo "Verifying required fields..."
-          
-          # Check for Process ID field
-          if ! grep -q "pid" schema.txt; then
-            echo "ERROR: Process ID field not found in schema"
-            exit 1
-          fi
-          
-          # Check for timestamp field
-          if ! grep -q "timestamp" schema.txt; then
-            echo "ERROR: Timestamp field not found in schema"
-            exit 1
-          fi
-          
-          # For trace mode, check for CPU core information
+          # Define field lists for different modes
           if [ "${{ matrix.trace-mode }}" = "true" ]; then
-            echo "Verifying trace mode specific fields..."
-            if ! grep -q "cpu" schema.txt; then
-              echo "ERROR: CPU core field not found in trace mode schema"
-              exit 1
-            fi
+            echo "Setting up trace mode field verification..."
+            REQUIRED_FIELDS=("pid" "timestamp" "cpu_id" "is_context_switch" "cgroup_id" "cache_references_delta" "cycles_delta" "instructions_delta" "llc_misses_delta")
+          else
+            echo "Setting up aggregated mode field verification..."
+            REQUIRED_FIELDS=("pid" "start_time" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses")
           fi
+          
+          # Verify all required fields are present in schema
+          echo "Verifying required fields in schema..."
+          for field in "${REQUIRED_FIELDS[@]}"; do
+            if ! grep -q "$field" schema.txt; then
+              echo "ERROR: Required field '$field' not found in schema"
+              exit 1
+            else
+              echo "✓ Found required field: $field"
+            fi
+          done
           
           # Sample records and verify content using JSON output
           echo "Sampling records with JSON output..."
-          pqrs sample --records 10 --json "$PARQUET_FILE" > sample.json
+          pqrs sample --records 100 --json "$PARQUET_FILE" > sample.json
           
-          # Check that we have actual data (not all zeros) using jq
-          echo "Checking for non-zero readings in specific fields..."
+          # Verify field values - check that each field has at least 2 different values
+          echo "Verifying field values have sufficient diversity..."
           
-          # Check for non-zero values in cache_references_delta
-          CACHE_REFS_NONZERO=$(jq -r '.cache_references_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero cache_references_delta values: $CACHE_REFS_NONZERO"
-          
-          # Check for non-zero values in cycles_delta
-          CYCLES_NONZERO=$(jq -r '.cycles_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero cycles_delta values: $CYCLES_NONZERO"
-          
-          # Check for non-zero values in instructions_delta
-          INSTRUCTIONS_NONZERO=$(jq -r '.instructions_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero instructions_delta values: $INSTRUCTIONS_NONZERO"
-          
-          # Check for non-zero values in llc_misses_delta
-          LLC_MISSES_NONZERO=$(jq -r '.llc_misses_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero llc_misses_delta values: $LLC_MISSES_NONZERO"
-          
-          # Check for valid PIDs (non-zero)
-          PID_NONZERO=$(jq -r '.pid // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero PID values: $PID_NONZERO"
-          
-          # Check for valid timestamps (should all be non-zero)
-          TIMESTAMP_NONZERO=$(jq -r '.timestamp // 0' sample.json | grep -c '^[1-9]' || echo "0")
-          echo "Non-zero timestamp values: $TIMESTAMP_NONZERO"
-          
-          # Verify we have at least some non-zero counter values
-          TOTAL_NONZERO_COUNTERS=$((CACHE_REFS_NONZERO + CYCLES_NONZERO + INSTRUCTIONS_NONZERO + LLC_MISSES_NONZERO))
-          
-          if [ "$TOTAL_NONZERO_COUNTERS" -eq 0 ]; then
-            echo "WARNING: All counter values appear to be zero - this might indicate no activity during collection"
-          else
-            echo "SUCCESS: Found $TOTAL_NONZERO_COUNTERS non-zero counter readings across all performance counters"
-          fi
-          
-          if [ "$TIMESTAMP_NONZERO" -eq 0 ]; then
-            echo "ERROR: No valid timestamps found"
-            exit 1
-          else
-            echo "SUCCESS: Found $TIMESTAMP_NONZERO valid timestamps"
-          fi
-          
-          # Verify context switch and CPU ID fields are present for trace mode
-          if [ "${{ matrix.trace-mode }}" = "true" ]; then
-            echo "Verifying trace mode specific field values..."
+          for field in "${REQUIRED_FIELDS[@]}"; do
+            echo "Checking field: $field"
             
-            # Check for context switch events
-            CONTEXT_SWITCH_COUNT=$(jq -r '.is_context_switch // false' sample.json | grep -c 'true' || echo "0")
-            echo "Context switch events: $CONTEXT_SWITCH_COUNT"
+            # Extract all values for this field and count unique values
+            UNIQUE_VALUES=$(jq -r ".${field} // null" sample.json | sort -u | wc -l)
+            echo "  Unique values in $field: $UNIQUE_VALUES"
             
-            # Check for CPU ID values
-            CPU_ID_COUNT=$(jq -r '.cpu_id // null' sample.json | grep -c '^[0-9]' || echo "0")
-            echo "CPU ID values: $CPU_ID_COUNT"
-            
-            if [ "$CPU_ID_COUNT" -eq 0 ]; then
-              echo "ERROR: No CPU ID values found in trace mode"
+            if [ "$UNIQUE_VALUES" -lt 2 ]; then
+              echo "ERROR: Field '$field' has less than 2 different values ($UNIQUE_VALUES)"
               exit 1
+            else
+              echo "  ✓ Field '$field' has sufficient diversity"
             fi
-          fi
+          done
           
           echo "Parquet file verification completed successfully for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode"
 
