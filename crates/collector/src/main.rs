@@ -16,6 +16,7 @@ use uuid::Uuid;
 // Import local modules
 mod bpf_error_handler;
 mod bpf_perf_to_timeslot;
+mod bpf_perf_to_trace;
 mod bpf_task_tracker;
 mod bpf_timeslot_tracker;
 mod metrics;
@@ -29,7 +30,7 @@ mod timeslot_to_recordbatch_task;
 
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
-use perf_event_processor::PerfEventProcessor;
+use perf_event_processor::{PerfEventProcessor, ProcessorMode};
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
@@ -68,6 +69,10 @@ struct Command {
     /// Maximum total bytes to write to object store
     #[arg(long)]
     storage_quota: Option<usize>,
+
+    /// Enable trace mode (outputs individual events instead of aggregated timeslots)
+    #[arg(long, default_value = "false")]
+    trace: bool,
 }
 
 /// Duration timeout handler - exits when duration completes or cancellation token is triggered
@@ -191,34 +196,47 @@ async fn main() -> Result<()> {
     };
 
     // Create channels for the pipeline
-    let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
     let (batch_sender, batch_receiver) = mpsc::channel::<RecordBatch>(1000);
     let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
-
-    // Create the conversion task
-    let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
-    let schema = conversion_task.schema();
-
-    // Create the ParquetWriter with the store, schema, and config
-    debug!(
-        "Writing metrics to {} storage with prefix: {}",
-        &opts.storage_type, &config.storage_prefix
-    );
-    let writer = ParquetWriter::new(store, schema, config)?;
 
     // Create shutdown token and task tracker
     let shutdown_token = CancellationToken::new();
     let task_tracker = TaskTracker::new();
 
+    // Configure processor mode and schema based on trace flag
+    let (processor_mode, schema) = if opts.trace {
+        // Trace mode: direct RecordBatch output
+        let schema = crate::bpf_perf_to_trace::create_schema();
+        (ProcessorMode::Trace(batch_sender), schema)
+    } else {
+        // Timeslot mode: aggregated output with conversion
+        let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
+
+        // Create the conversion task and get schema
+        let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
+        let schema = conversion_task.schema();
+
+        // Spawn the conversion task
+        task_tracker.spawn(task_completion_handler(
+            conversion_task.run(),
+            shutdown_token.clone(),
+            "TimeslotToRecordBatchTask",
+        ));
+
+        (ProcessorMode::Timeslot(timeslot_sender), schema)
+    };
+
+    // Create the ParquetWriter with the appropriate schema
+    debug!(
+        "Writing {} data to {} storage with prefix: {}",
+        if opts.trace { "trace" } else { "timeslot" },
+        &opts.storage_type,
+        &config.storage_prefix
+    );
+    let writer = ParquetWriter::new(store, schema, config)?;
+
     // Create ParquetWriterTask with pre-configured channels
     let writer_task = ParquetWriterTask::new(writer, batch_receiver, rotate_receiver);
-
-    // Spawn the conversion task
-    task_tracker.spawn(task_completion_handler(
-        conversion_task.run(),
-        shutdown_token.clone(),
-        "TimeslotToRecordBatchTask",
-    ));
 
     // Spawn the writer task with completion handler using task tracker
     task_tracker.spawn(task_completion_handler(
@@ -265,13 +283,13 @@ async fn main() -> Result<()> {
     // Determine the number of available CPUs
     let num_cpus = libbpf_rs::num_possible_cpus()?;
 
-    // Create PerfEventProcessor with the timeslot sender and BPF loader
-    let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, timeslot_sender);
+    // Create PerfEventProcessor with the appropriate mode
+    let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, processor_mode);
 
     // Attach BPF programs
     bpf_loader.attach()?;
 
-    info!("Successfully started! Tracing and aggregating task performance...");
+    info!("Collection started.");
 
     // Run BPF polling in the main thread until signaled to stop
     loop {
