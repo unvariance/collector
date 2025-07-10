@@ -52,14 +52,9 @@ impl BpfTaskTracker {
         self.task_collection.lookup(pid)
     }
 
-    /// Flush queued task removals
-    pub fn flush_removals(&mut self) {
-        self.task_collection.flush_removals();
-    }
-
     /// Handle new timeslot events - triggers flush_removals maintenance
     fn on_new_timeslot(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
-        self.flush_removals();
+        self.task_collection.flush_removals();
     }
 
     /// Handle task metadata events
