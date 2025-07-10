@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
-use arrow_array::builder::{Int32Builder, Int64Builder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use chrono::Utc;
 use log::{debug, info};
@@ -12,8 +11,6 @@ use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
-
-use crate::timeslot_data::TimeslotData;
 
 /// Create the schema for parquet files
 pub fn create_parquet_schema() -> SchemaRef {
@@ -58,7 +55,7 @@ impl Default for ParquetWriterConfig {
     }
 }
 
-/// Handles writing timeslot data to parquet files in object storage
+/// Handles writing record batches to parquet files in object storage
 pub struct ParquetWriter {
     store: Arc<dyn ObjectStore>,
     schema: SchemaRef,
@@ -75,10 +72,12 @@ pub struct ParquetWriter {
 }
 
 impl ParquetWriter {
-    /// Creates a new ParquetWriter with the provided object store and config
-    pub fn new(store: Arc<dyn ObjectStore>, config: ParquetWriterConfig) -> Result<Self> {
-        let schema = create_parquet_schema();
-
+    /// Creates a new ParquetWriter with the provided object store, schema, and config
+    pub fn new(
+        store: Arc<dyn ObjectStore>,
+        schema: SchemaRef,
+        config: ParquetWriterConfig,
+    ) -> Result<Self> {
         let mut writer = Self {
             store,
             schema,
@@ -221,7 +220,7 @@ impl ParquetWriter {
         Ok(())
     }
 
-    /// Write a timeslot to the parquet file
+    /// Write a record batch to the parquet file
     pub async fn write(&mut self, batch: RecordBatch) -> Result<()> {
         // Skip writing if we've exceeded quota
         if !self.is_below_quota() {
@@ -262,72 +261,6 @@ impl ParquetWriter {
         }
 
         Ok(())
-    }
-
-    /// Convert a TimeslotData to an Arrow RecordBatch
-    pub fn timeslot_to_batch(&self, timeslot: TimeslotData) -> Result<RecordBatch> {
-        // Get the task count to preallocate builders
-        let task_count = timeslot.task_count();
-
-        // Create array builders for each column
-        let mut start_time_builder = Int64Builder::with_capacity(task_count);
-        let mut pid_builder = Int32Builder::with_capacity(task_count);
-        // For StringBuilder, we need both item capacity and estimated data capacity
-        // Estimate 16 bytes per string for process names
-        let mut process_name_builder = StringBuilder::with_capacity(task_count, task_count * 16);
-        let mut cgroup_id_builder = Int64Builder::with_capacity(task_count);
-        let mut cycles_builder = Int64Builder::with_capacity(task_count);
-        let mut instructions_builder = Int64Builder::with_capacity(task_count);
-        let mut llc_misses_builder = Int64Builder::with_capacity(task_count);
-        let mut cache_references_builder = Int64Builder::with_capacity(task_count);
-        let mut duration_builder = Int64Builder::with_capacity(task_count);
-
-        // Convert timeslot data to arrays
-        for (pid, task_data) in timeslot.iter_tasks() {
-            // Add start timestamp (common for all tasks in this timeslot)
-            start_time_builder.append_value(timeslot.start_timestamp as i64);
-
-            // Add PID
-            pid_builder.append_value(*pid as i32);
-
-            // Add process name and cgroup_id (from metadata if available)
-            if let Some(ref metadata) = task_data.metadata {
-                // Convert bytes to string, trimming null bytes
-                let comm = std::str::from_utf8(&metadata.comm)
-                    .unwrap_or("<invalid utf8>")
-                    .trim_end_matches(char::from(0))
-                    .to_string();
-                process_name_builder.append_value(comm);
-                cgroup_id_builder.append_value(metadata.cgroup_id as i64);
-            } else {
-                process_name_builder.append_null();
-                cgroup_id_builder.append_value(0); // Default value when no metadata available
-            }
-
-            // Add metrics
-            cycles_builder.append_value(task_data.metrics.cycles as i64);
-            instructions_builder.append_value(task_data.metrics.instructions as i64);
-            llc_misses_builder.append_value(task_data.metrics.llc_misses as i64);
-            cache_references_builder.append_value(task_data.metrics.cache_references as i64);
-            duration_builder.append_value(task_data.metrics.time_ns as i64);
-        }
-
-        // Finish building arrays
-        let arrays: Vec<ArrayRef> = vec![
-            Arc::new(start_time_builder.finish()),
-            Arc::new(pid_builder.finish()),
-            Arc::new(process_name_builder.finish()),
-            Arc::new(cgroup_id_builder.finish()),
-            Arc::new(cycles_builder.finish()),
-            Arc::new(instructions_builder.finish()),
-            Arc::new(llc_misses_builder.finish()),
-            Arc::new(cache_references_builder.finish()),
-            Arc::new(duration_builder.finish()),
-        ];
-
-        // Create and return the RecordBatch
-        RecordBatch::try_new(self.schema.clone(), arrays)
-            .map_err(|e| anyhow!("Failed to create RecordBatch: {}", e))
     }
 
     /// Flush any pending data
@@ -418,11 +351,17 @@ mod tests {
 
         // Create a test writer using an in-memory cursor
         let memory_storage = InMemory::new();
-        let mut writer =
-            ParquetWriter::new(Arc::new(memory_storage), ParquetWriterConfig::default()).unwrap();
+        let schema = create_parquet_schema();
+        let mut writer = ParquetWriter::new(
+            Arc::new(memory_storage),
+            schema.clone(),
+            ParquetWriterConfig::default(),
+        )
+        .unwrap();
 
-        // Write the timeslot and close
-        let batch = writer.timeslot_to_batch(timeslot).unwrap();
+        // Convert timeslot to batch and write
+        let batch =
+            crate::timeslot_to_recordbatch_task::timeslot_to_batch(timeslot, schema).unwrap();
         writer.write(batch).await.unwrap();
         writer.close().await.unwrap();
 
@@ -464,10 +403,13 @@ mod tests {
             storage_quota: None,
         };
 
-        let mut writer = ParquetWriter::new(memory_storage.clone(), config).unwrap();
+        let schema = create_parquet_schema();
+        let mut writer =
+            ParquetWriter::new(memory_storage.clone(), schema.clone(), config).unwrap();
 
         // Write the same timeslot multiple times to exceed the file size limit
-        let batch = writer.timeslot_to_batch(timeslot).unwrap();
+        let batch =
+            crate::timeslot_to_recordbatch_task::timeslot_to_batch(timeslot, schema).unwrap();
 
         // Write enough batches to ensure rotation
         for _ in 0..50 {

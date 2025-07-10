@@ -1,4 +1,5 @@
 use anyhow::Result;
+use arrow_array::RecordBatch;
 use bpf::BpfLoader;
 use clap::Parser;
 use env_logger;
@@ -23,12 +24,14 @@ mod perf_event_processor;
 mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
+mod timeslot_to_recordbatch_task;
 
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
 use perf_event_processor::PerfEventProcessor;
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
+use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
 
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
@@ -186,23 +189,35 @@ async fn main() -> Result<()> {
         storage_quota: opts.storage_quota,
     };
 
-    // Create the ParquetWriter with the store and config
+    // Create channels for the pipeline
+    let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
+    let (batch_sender, batch_receiver) = mpsc::channel::<RecordBatch>(1000);
+    let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
+
+    // Create the conversion task
+    let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
+    let schema = conversion_task.schema();
+
+    // Create the ParquetWriter with the store, schema, and config
     debug!(
         "Writing metrics to {} storage with prefix: {}",
         &opts.storage_type, &config.storage_prefix
     );
-    let writer = ParquetWriter::new(store, config)?;
-
-    // Create channels for the ParquetWriterTask
-    let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
-    let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
+    let writer = ParquetWriter::new(store, schema, config)?;
 
     // Create shutdown token and task tracker
     let shutdown_token = CancellationToken::new();
     let task_tracker = TaskTracker::new();
 
     // Create ParquetWriterTask with pre-configured channels
-    let writer_task = ParquetWriterTask::new(writer, timeslot_receiver, rotate_receiver);
+    let writer_task = ParquetWriterTask::new(writer, batch_receiver, rotate_receiver);
+
+    // Spawn the conversion task
+    task_tracker.spawn(task_completion_handler(
+        conversion_task.run(),
+        shutdown_token.clone(),
+        "TimeslotToRecordBatchTask",
+    ));
 
     // Spawn the writer task with completion handler using task tracker
     task_tracker.spawn(task_completion_handler(
