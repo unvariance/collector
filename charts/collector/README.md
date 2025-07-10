@@ -178,6 +178,7 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `securityContext.runAsUser` | User ID to run as | `0` |
 | `collector.verbose` | Enable verbose debug output | `false` |
 | `collector.duration` | Track duration in seconds (0 = unlimited) | `0` |
+| `collector.trace` | Enable trace mode to output raw telemetry events at nanosecond granularity to parquet | `false` |
 | `collector.parquetBufferSize` | Maximum memory buffer before flushing (bytes) | `104857600` |
 | `collector.parquetFileSize` | Maximum Parquet file size (bytes) | `1073741824` |
 | `collector.maxRowGroupSize` | Maximum row group size in Parquet | `1048576` |

@@ -41,6 +41,9 @@ collector:
   verbose: false
   # Track duration in seconds (0 = unlimited)
   duration: 0
+  # Enable trace mode to output raw telemetry events instead of 1ms aggregated data
+  # This provides nanosecond-granular context switch and timer events for detailed analysis
+  trace: false
   # Maximum memory buffer size before flushing (bytes)
   parquetBufferSize: "104857600"  # 100MB
   # Maximum size for each Parquet file before rotation (bytes)

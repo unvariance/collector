@@ -71,6 +71,9 @@ spec:
             {{- if .Values.collector.duration }}
             - --duration={{ .Values.collector.duration }}
             {{- end }}
+            {{- if .Values.collector.trace }}
+            - --trace
+            {{- end }}
             - --storage-type={{ .Values.storage.type }}
             - --prefix={{ .Values.storage.prefix }}
             - --parquet-buffer-size={{ .Values.collector.parquetBufferSize }}

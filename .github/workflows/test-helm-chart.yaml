@@ -108,14 +108,18 @@ jobs:
     needs: [setup-runner, k3s-deployment]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 15
+    strategy:
+      matrix:
+        trace-mode: [false, true]
     env:
-      RELEASE_NAME: collector
+      RELEASE_NAME: collector-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
       S3_BUCKET: "unvariance-collector-test-irsa"  # Same bucket used in IAM role testing
       AWS_REGION: ${{ secrets.AWS_REGION }}
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       HOME: /root
       IMAGE_REPOSITORY: ${{ inputs.image-repository || 'ghcr.io/unvariance/collector/collector' }}
       IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+      TRACE_MODE: ${{ matrix.trace-mode }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -153,6 +157,7 @@ jobs:
             
           collector:
             verbose: true
+            trace: ${TRACE_MODE}
           
           storage:
             type: "s3"
@@ -228,9 +233,152 @@ jobs:
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
         with:
-          name: helm-chart-test-results
+          name: helm-chart-test-results-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
           path: /tmp/test-parquet.parquet
           if-no-files-found: warn
+
+  verify-artifacts:
+    name: Verify Parquet Artifacts
+    needs: [helm-chart-deployment]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if helm-chart-deployment fails
+    strategy:
+      matrix:
+        trace-mode: [false, true]
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: helm-chart-test-results-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
+          path: parquet-data
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+          pqrs --version
+
+      - name: Verify Parquet File Schema and Contents
+        run: |
+          echo "Verifying Parquet files for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode..."
+          
+          # Find the parquet file
+          PARQUET_FILE=$(find parquet-data -name "*.parquet" -type f | head -n 1)
+          
+          if [ -z "$PARQUET_FILE" ]; then
+            echo "ERROR: No parquet file found in artifacts"
+            exit 1
+          fi
+          
+          echo "Found parquet file: $PARQUET_FILE"
+          
+          # Check file size
+          FILE_SIZE=$(stat -c %s "$PARQUET_FILE")
+          echo "File size: ${FILE_SIZE} bytes"
+          
+          if [ "$FILE_SIZE" -eq 0 ]; then
+            echo "ERROR: Parquet file is empty"
+            exit 1
+          fi
+          
+          # Generate and examine schema
+          echo "Generating schema..."
+          pqrs schema "$PARQUET_FILE" > schema.txt
+          cat schema.txt
+          
+          # Verify required fields are present
+          echo "Verifying required fields..."
+          
+          # Check for Process ID field
+          if ! grep -q "pid" schema.txt; then
+            echo "ERROR: Process ID field not found in schema"
+            exit 1
+          fi
+          
+          # Check for timestamp field
+          if ! grep -q "timestamp" schema.txt; then
+            echo "ERROR: Timestamp field not found in schema"
+            exit 1
+          fi
+          
+          # For trace mode, check for CPU core information
+          if [ "${{ matrix.trace-mode }}" = "true" ]; then
+            echo "Verifying trace mode specific fields..."
+            if ! grep -q "cpu" schema.txt; then
+              echo "ERROR: CPU core field not found in trace mode schema"
+              exit 1
+            fi
+          fi
+          
+          # Sample records and verify content using JSON output
+          echo "Sampling records with JSON output..."
+          pqrs sample --records 10 --json "$PARQUET_FILE" > sample.json
+          
+          # Check that we have actual data (not all zeros) using jq
+          echo "Checking for non-zero readings in specific fields..."
+          
+          # Check for non-zero values in cache_references_delta
+          CACHE_REFS_NONZERO=$(jq -r '.cache_references_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero cache_references_delta values: $CACHE_REFS_NONZERO"
+          
+          # Check for non-zero values in cycles_delta
+          CYCLES_NONZERO=$(jq -r '.cycles_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero cycles_delta values: $CYCLES_NONZERO"
+          
+          # Check for non-zero values in instructions_delta
+          INSTRUCTIONS_NONZERO=$(jq -r '.instructions_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero instructions_delta values: $INSTRUCTIONS_NONZERO"
+          
+          # Check for non-zero values in llc_misses_delta
+          LLC_MISSES_NONZERO=$(jq -r '.llc_misses_delta // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero llc_misses_delta values: $LLC_MISSES_NONZERO"
+          
+          # Check for valid PIDs (non-zero)
+          PID_NONZERO=$(jq -r '.pid // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero PID values: $PID_NONZERO"
+          
+          # Check for valid timestamps (should all be non-zero)
+          TIMESTAMP_NONZERO=$(jq -r '.timestamp // 0' sample.json | grep -c '^[1-9]' || echo "0")
+          echo "Non-zero timestamp values: $TIMESTAMP_NONZERO"
+          
+          # Verify we have at least some non-zero counter values
+          TOTAL_NONZERO_COUNTERS=$((CACHE_REFS_NONZERO + CYCLES_NONZERO + INSTRUCTIONS_NONZERO + LLC_MISSES_NONZERO))
+          
+          if [ "$TOTAL_NONZERO_COUNTERS" -eq 0 ]; then
+            echo "WARNING: All counter values appear to be zero - this might indicate no activity during collection"
+          else
+            echo "SUCCESS: Found $TOTAL_NONZERO_COUNTERS non-zero counter readings across all performance counters"
+          fi
+          
+          if [ "$TIMESTAMP_NONZERO" -eq 0 ]; then
+            echo "ERROR: No valid timestamps found"
+            exit 1
+          else
+            echo "SUCCESS: Found $TIMESTAMP_NONZERO valid timestamps"
+          fi
+          
+          # Verify context switch and CPU ID fields are present for trace mode
+          if [ "${{ matrix.trace-mode }}" = "true" ]; then
+            echo "Verifying trace mode specific field values..."
+            
+            # Check for context switch events
+            CONTEXT_SWITCH_COUNT=$(jq -r '.is_context_switch // false' sample.json | grep -c 'true' || echo "0")
+            echo "Context switch events: $CONTEXT_SWITCH_COUNT"
+            
+            # Check for CPU ID values
+            CPU_ID_COUNT=$(jq -r '.cpu_id // null' sample.json | grep -c '^[0-9]' || echo "0")
+            echo "CPU ID values: $CPU_ID_COUNT"
+            
+            if [ "$CPU_ID_COUNT" -eq 0 ]; then
+              echo "ERROR: No CPU ID values found in trace mode"
+              exit 1
+            fi
+          fi
+          
+          echo "Parquet file verification completed successfully for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode"
 
   stop-runner:
     name: Stop EC2 runner
