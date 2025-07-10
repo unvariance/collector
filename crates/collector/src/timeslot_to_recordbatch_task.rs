@@ -180,20 +180,56 @@ mod tests {
         // Verify content - extract arrays and check values (accounting for unordered timeslot iteration)
         use arrow_array::{Int32Array, Int64Array, StringArray};
 
-        let start_time_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-        let pid_array = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
-        let process_name_array = batch.column(2).as_any().downcast_ref::<StringArray>().unwrap();
-        let cgroup_id_array = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
-        let cycles_array = batch.column(4).as_any().downcast_ref::<Int64Array>().unwrap();
-        let instructions_array = batch.column(5).as_any().downcast_ref::<Int64Array>().unwrap();
-        let llc_misses_array = batch.column(6).as_any().downcast_ref::<Int64Array>().unwrap();
-        let cache_references_array = batch.column(7).as_any().downcast_ref::<Int64Array>().unwrap();
-        let duration_array = batch.column(8).as_any().downcast_ref::<Int64Array>().unwrap();
+        let start_time_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let pid_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let process_name_array = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let cgroup_id_array = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let cycles_array = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let instructions_array = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let llc_misses_array = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let cache_references_array = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let duration_array = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
 
         // Find which row corresponds to which process by process name
         let mut proc_one_row = None;
         let mut proc_two_row = None;
-        
+
         for i in 0..batch.num_rows() {
             let process_name = process_name_array.value(i);
             if process_name == "proc_one" {
@@ -202,7 +238,7 @@ mod tests {
                 proc_two_row = Some(i);
             }
         }
-        
+
         let proc_one_idx = proc_one_row.expect("proc_one not found in batch");
         let proc_two_idx = proc_two_row.expect("proc_two not found in batch");
 
@@ -269,18 +305,46 @@ mod tests {
         // Verify content integrity - extract arrays and check values (accounting for unordered timeslot iteration)
         use arrow_array::{Int32Array, Int64Array, StringArray};
 
-        let start_time_array = batch.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
-        let pid_array = batch.column(1).as_any().downcast_ref::<Int32Array>().unwrap();
-        let process_name_array = batch.column(2).as_any().downcast_ref::<StringArray>().unwrap();
-        let cgroup_id_array = batch.column(3).as_any().downcast_ref::<Int64Array>().unwrap();
-        let cycles_array = batch.column(4).as_any().downcast_ref::<Int64Array>().unwrap();
-        let instructions_array = batch.column(5).as_any().downcast_ref::<Int64Array>().unwrap();
-        let duration_array = batch.column(8).as_any().downcast_ref::<Int64Array>().unwrap();
+        let start_time_array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let pid_array = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        let process_name_array = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let cgroup_id_array = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let cycles_array = batch
+            .column(4)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let instructions_array = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let duration_array = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
 
         // Find which row corresponds to which process by process name
         let mut task_alpha_row = None;
         let mut task_beta_row = None;
-        
+
         for i in 0..batch.num_rows() {
             let process_name = process_name_array.value(i);
             if process_name == "task_alpha" {
@@ -289,7 +353,7 @@ mod tests {
                 task_beta_row = Some(i);
             }
         }
-        
+
         let task_alpha_idx = task_alpha_row.expect("task_alpha not found in batch");
         let task_beta_idx = task_beta_row.expect("task_beta not found in batch");
 

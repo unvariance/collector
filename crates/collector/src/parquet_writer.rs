@@ -309,7 +309,10 @@ impl ParquetWriter {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{builder::{BooleanBuilder, Float64Builder, Int32Builder, StringBuilder}, ArrayRef};
+    use arrow_array::{
+        builder::{BooleanBuilder, Float64Builder, Int32Builder, StringBuilder},
+        ArrayRef,
+    };
     use arrow_schema::{DataType, Field, Schema};
     use futures::StreamExt;
     use object_store::memory::InMemory;
