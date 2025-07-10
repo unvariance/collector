@@ -23,10 +23,10 @@ pub fn create_schema() -> SchemaRef {
         Field::new("process_name", DataType::Utf8, true),
         Field::new("cgroup_id", DataType::Int64, false),
         Field::new("cpu_id", DataType::Int32, false),
-        Field::new("cycles_delta", DataType::Int64, false),
-        Field::new("instructions_delta", DataType::Int64, false),
-        Field::new("llc_misses_delta", DataType::Int64, false),
-        Field::new("cache_references_delta", DataType::Int64, false),
+        Field::new("cycles", DataType::Int64, false),
+        Field::new("instructions", DataType::Int64, false),
+        Field::new("llc_misses", DataType::Int64, false),
+        Field::new("cache_references", DataType::Int64, false),
         Field::new("is_context_switch", DataType::Boolean, false),
     ]))
 }
