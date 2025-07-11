@@ -469,6 +469,7 @@ mod tests {
             buffer_size: 1_000,      // Small buffer to force frequent flushes
             max_row_group_size: 10,  // Small row group size
             storage_quota: None,
+            key_value_metadata: None,
         };
 
         let mut writer =
@@ -531,5 +532,90 @@ mod tests {
             let size = file.as_ref().unwrap().size;
             assert!(size > 0, "File should have content");
         }
+    }
+
+    #[tokio::test]
+    async fn test_key_value_metadata() {
+        // Create test schema and data
+        let schema = create_test_schema();
+        let test_batch = create_test_batch(schema.clone()).unwrap();
+
+        // Create key-value metadata
+        let metadata = vec![
+            KeyValue {
+                key: "num_cpus".to_string(),
+                value: Some("8".to_string()),
+            },
+            KeyValue {
+                key: "collection_version".to_string(),
+                value: Some("1.0.0".to_string()),
+            },
+        ];
+
+        // Create a test writer using in-memory storage with metadata
+        let memory_storage = Arc::new(InMemory::new());
+        let config = ParquetWriterConfig {
+            storage_prefix: "metadata-test-".to_string(),
+            buffer_size: 100 * 1024 * 1024,
+            file_size_limit: 1024 * 1024 * 1024,
+            max_row_group_size: 1024 * 1024,
+            storage_quota: None,
+            key_value_metadata: Some(metadata.clone()),
+        };
+
+        let mut writer = ParquetWriter::new(
+            memory_storage.clone(),
+            schema.clone(),
+            config,
+        )
+        .unwrap();
+
+        // Write the batch
+        writer.write(test_batch.clone()).await.unwrap();
+        writer.close().await.unwrap();
+
+        // Verify files were created
+        let list_stream = memory_storage.list(None);
+        let files: Vec<_> = list_stream.collect().await;
+        assert_eq!(files.len(), 1, "Expected exactly one parquet file");
+
+        let file_path = &files[0].as_ref().unwrap().location;
+
+        // Read back the parquet file and verify metadata
+        let file_data = memory_storage.get(file_path).await.unwrap();
+        let bytes = file_data.bytes().await.unwrap();
+
+        // Create parquet reader and check metadata
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        let parquet_metadata = reader_builder.metadata();
+
+        // Verify key-value metadata is present
+        let file_metadata = parquet_metadata.file_metadata();
+        let kv_metadata = file_metadata.key_value_metadata();
+
+        assert!(kv_metadata.is_some(), "Key-value metadata should be present");
+        let kv_map = kv_metadata.unwrap();
+
+        println!("kv_map: {:?}", kv_map);
+
+        // Check num_cpus metadata
+        let num_cpus_value = kv_map.iter()
+            .find(|kv| kv.key == "num_cpus")
+            .expect("Should find num_cpus key");
+        assert_eq!(
+            num_cpus_value.value.as_ref().unwrap(),
+            "8",
+            "num_cpus value should match"
+        );
+
+        // Check collection_version metadata
+        let version_value = kv_map.iter()
+            .find(|kv| kv.key == "collection_version")
+            .expect("Should find collection_version key");
+        assert_eq!(
+            version_value.value.as_ref().unwrap(),
+            "1.0.0",
+            "collection_version value should match"
+        );
     }
 }
