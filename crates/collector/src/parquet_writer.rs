@@ -9,6 +9,7 @@ use object_store::{path::Path, ObjectStore};
 use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use parquet::basic::Compression;
+use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
@@ -26,6 +27,8 @@ pub struct ParquetWriterConfig {
     pub max_row_group_size: usize,
     /// Optional total storage quota (bytes)
     pub storage_quota: Option<usize>,
+    /// Optional key-value metadata to include in parquet files
+    pub key_value_metadata: Option<Vec<KeyValue>>,
 }
 
 impl Default for ParquetWriterConfig {
@@ -36,6 +39,7 @@ impl Default for ParquetWriterConfig {
             file_size_limit: 1024 * 1024 * 1024, // 1GB
             max_row_group_size: 1024 * 1024,     // Default max row group size
             storage_quota: None,
+            key_value_metadata: None,
         }
     }
 }
@@ -122,6 +126,7 @@ impl ParquetWriter {
         let props = WriterProperties::builder()
             .set_compression(Compression::SNAPPY)
             .set_max_row_group_size(self.config.max_row_group_size)
+            .set_key_value_metadata(self.config.key_value_metadata.clone())
             .build();
 
         let object_writer = ParquetObjectWriter::new(self.store.clone(), path.clone());

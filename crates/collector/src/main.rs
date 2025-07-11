@@ -183,16 +183,26 @@ async fn main() -> Result<()> {
     // Create object store based on storage type
     let store = create_object_storage(&opts.storage_type)?;
 
+    // Determine the number of available CPUs
+    let num_cpus = libbpf_rs::num_possible_cpus()?;
+
     // Compose storage prefix with node identity
     let storage_prefix = format!("{}{}", opts.prefix, node_id);
 
-    // Create ParquetWriterConfig with the storage prefix
+    // Create CPU count metadata for parquet files
+    let cpu_metadata = vec![parquet::file::metadata::KeyValue {
+        key: "num_cpus".to_string(),
+        value: Some(num_cpus.to_string()),
+    }];
+
+    // Create ParquetWriterConfig with the storage prefix and metadata
     let config = ParquetWriterConfig {
         storage_prefix,
         buffer_size: opts.parquet_buffer_size,
         file_size_limit: opts.parquet_file_size,
         max_row_group_size: opts.max_row_group_size,
         storage_quota: opts.storage_quota,
+        key_value_metadata: Some(cpu_metadata),
     };
 
     // Create channels for the pipeline
@@ -279,9 +289,6 @@ async fn main() -> Result<()> {
 
     // Initialize the sync timer
     bpf_loader.start_sync_timer()?;
-
-    // Determine the number of available CPUs
-    let num_cpus = libbpf_rs::num_possible_cpus()?;
 
     // Create PerfEventProcessor with the appropriate mode
     let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, processor_mode);
