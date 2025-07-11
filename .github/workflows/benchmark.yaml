@@ -522,7 +522,7 @@ jobs:
             --network host \
             --pid host \
             --volume /tmp/trace_data:/tmp/trace_data \
-            --volume /sys:/sys:ro \
+            --volume /sys:/sys \
             --volume /proc:/proc:ro \
             --volume /dev:/dev:ro \
             "${COLLECTOR_IMAGE}" \
