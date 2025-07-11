@@ -303,7 +303,7 @@ jobs:
           # Define field lists for different modes
           if [ "${{ matrix.trace-mode }}" = "true" ]; then
             echo "Setting up trace mode field verification..."
-            REQUIRED_FIELDS=("pid" "timestamp" "cpu_id" "is_context_switch" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses")
+            REQUIRED_FIELDS=("pid" "timestamp" "cpu_id" "is_context_switch" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses" "next_tgid")
           else
             echo "Setting up aggregated mode field verification..."
             REQUIRED_FIELDS=("pid" "start_time" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses")

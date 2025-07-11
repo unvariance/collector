@@ -28,6 +28,7 @@ pub fn create_schema() -> SchemaRef {
         Field::new("llc_misses", DataType::Int64, false),
         Field::new("cache_references", DataType::Int64, false),
         Field::new("is_context_switch", DataType::Boolean, false),
+        Field::new("next_tgid", DataType::Int32, true),
     ]))
 }
 
@@ -46,6 +47,7 @@ pub struct BpfPerfToTrace {
     llc_misses_builder: Int64Builder,
     cache_references_builder: Int64Builder,
     is_context_switch_builder: BooleanBuilder,
+    next_tgid_builder: Int32Builder,
     // Channel for sending completed record batches
     batch_tx: Option<mpsc::Sender<RecordBatch>>,
     // Task tracker for metadata lookup
@@ -79,6 +81,7 @@ impl BpfPerfToTrace {
             llc_misses_builder: Int64Builder::with_capacity(capacity),
             cache_references_builder: Int64Builder::with_capacity(capacity),
             is_context_switch_builder: BooleanBuilder::with_capacity(capacity),
+            next_tgid_builder: Int32Builder::with_capacity(capacity),
             batch_tx: Some(batch_tx),
             task_tracker,
             last_flush: Instant::now(),
@@ -146,6 +149,13 @@ impl BpfPerfToTrace {
         self.is_context_switch_builder
             .append_value(event.is_context_switch != 0);
 
+        // Add next TGID field - only valid for context switch events, null for timer events
+        if event.is_context_switch != 0 {
+            self.next_tgid_builder.append_value(event.next_tgid as i32);
+        } else {
+            self.next_tgid_builder.append_null();
+        }
+
         self.current_rows += 1;
 
         // Check if we should flush
@@ -177,6 +187,7 @@ impl BpfPerfToTrace {
             Arc::new(self.llc_misses_builder.finish()),
             Arc::new(self.cache_references_builder.finish()),
             Arc::new(self.is_context_switch_builder.finish()),
+            Arc::new(self.next_tgid_builder.finish()),
         ];
 
         // Create record batch
@@ -201,6 +212,7 @@ impl BpfPerfToTrace {
         self.llc_misses_builder = Int64Builder::with_capacity(self.capacity);
         self.cache_references_builder = Int64Builder::with_capacity(self.capacity);
         self.is_context_switch_builder = BooleanBuilder::with_capacity(self.capacity);
+        self.next_tgid_builder = Int32Builder::with_capacity(self.capacity);
         self.current_rows = 0;
         self.last_flush = Instant::now();
 
