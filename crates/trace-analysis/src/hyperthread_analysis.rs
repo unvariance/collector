@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
-use arrow_array::{RecordBatch, Int64Array, Int32Array, BooleanArray, ArrayRef};
+use arrow_array::{Array, RecordBatch, Int64Array, Int32Array, BooleanArray, ArrayRef};
 use arrow_schema::{Schema, Field, DataType};
 
 #[derive(Debug, Clone)]
 struct CpuState {
-    current_pid: i32,
+    current_pid: Option<i32>,
     last_counter_update: i64,
     ns_peer_same_process: i64,
     ns_peer_different_process: i64,
@@ -20,7 +20,7 @@ struct CpuState {
 impl CpuState {
     fn new() -> Self {
         Self {
-            current_pid: 0,
+            current_pid: None,
             last_counter_update: 0,
             ns_peer_same_process: 0,
             ns_peer_different_process: 0,
@@ -61,27 +61,51 @@ impl HyperthreadAnalysis {
     }
     
     fn update_hyperthread(&mut self, cpu_a: usize, cpu_b: usize, event_timestamp: i64) {
+        // Only update if we have previous timestamps (skip initial state)
+        if self.cpu_states[cpu_a].last_counter_update == 0 || self.cpu_states[cpu_b].last_counter_update == 0 {
+            self.cpu_states[cpu_a].last_counter_update = event_timestamp;
+            self.cpu_states[cpu_b].last_counter_update = event_timestamp;
+            return;
+        }
+        
+        // Skip updates if either CPU has unknown state (None)
+        if self.cpu_states[cpu_a].current_pid.is_none() || self.cpu_states[cpu_b].current_pid.is_none() {
+            self.cpu_states[cpu_a].last_counter_update = event_timestamp;
+            self.cpu_states[cpu_b].last_counter_update = event_timestamp;
+            return;
+        }
+        
         let time_since_a = event_timestamp - self.cpu_states[cpu_a].last_counter_update;
         let time_since_b = event_timestamp - self.cpu_states[cpu_b].last_counter_update;
         
         // Update counters for CPU A based on CPU B's state
-        let peer_b_pid = self.cpu_states[cpu_b].current_pid;
-        if peer_b_pid == 0 {
-            self.cpu_states[cpu_a].ns_peer_kernel += time_since_a;
-        } else if peer_b_pid == self.cpu_states[cpu_a].current_pid {
-            self.cpu_states[cpu_a].ns_peer_same_process += time_since_a;
-        } else {
-            self.cpu_states[cpu_a].ns_peer_different_process += time_since_a;
+        match self.cpu_states[cpu_b].current_pid {
+            Some(0) => {
+                self.cpu_states[cpu_a].ns_peer_kernel += time_since_a;
+            },
+            Some(peer_b_pid) => {
+                if Some(peer_b_pid) == self.cpu_states[cpu_a].current_pid {
+                    self.cpu_states[cpu_a].ns_peer_same_process += time_since_a;
+                } else {
+                    self.cpu_states[cpu_a].ns_peer_different_process += time_since_a;
+                }
+            },
+            None => unreachable!("None case handled above")
         }
         
         // Update counters for CPU B based on CPU A's state  
-        let peer_a_pid = self.cpu_states[cpu_a].current_pid;
-        if peer_a_pid == 0 {
-            self.cpu_states[cpu_b].ns_peer_kernel += time_since_b;
-        } else if peer_a_pid == self.cpu_states[cpu_b].current_pid {
-            self.cpu_states[cpu_b].ns_peer_same_process += time_since_b;
-        } else {
-            self.cpu_states[cpu_b].ns_peer_different_process += time_since_b;
+        match self.cpu_states[cpu_a].current_pid {
+            Some(0) => {
+                self.cpu_states[cpu_b].ns_peer_kernel += time_since_b;
+            },
+            Some(peer_a_pid) => {
+                if Some(peer_a_pid) == self.cpu_states[cpu_b].current_pid {
+                    self.cpu_states[cpu_b].ns_peer_same_process += time_since_b;
+                } else {
+                    self.cpu_states[cpu_b].ns_peer_different_process += time_since_b;
+                }
+            },
+            None => unreachable!("None case handled above")
         }
         
         // Update timestamps
@@ -145,17 +169,18 @@ impl HyperthreadAnalysis {
             .downcast_ref::<Int32Array>()
             .ok_or_else(|| anyhow::anyhow!("cpu_id column is not Int32Array"))?;
             
-        let pid_col = batch.column_by_name("pid")
-            .ok_or_else(|| anyhow::anyhow!("pid column not found"))?
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .ok_or_else(|| anyhow::anyhow!("pid column is not Int32Array"))?;
             
         let is_context_switch_col = batch.column_by_name("is_context_switch")
             .ok_or_else(|| anyhow::anyhow!("is_context_switch column not found"))?
             .as_any()
             .downcast_ref::<BooleanArray>()
             .ok_or_else(|| anyhow::anyhow!("is_context_switch column is not BooleanArray"))?;
+            
+        let next_tgid_col = batch.column_by_name("next_tgid")
+            .ok_or_else(|| anyhow::anyhow!("next_tgid column not found"))?
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| anyhow::anyhow!("next_tgid column is not Int32Array"))?;
         
         // Prepare output arrays for hyperthread counters
         let mut ns_peer_same_process = Vec::with_capacity(num_rows);
@@ -166,7 +191,6 @@ impl HyperthreadAnalysis {
         for i in 0..num_rows {
             let timestamp = timestamp_col.value(i);
             let cpu_id = cpu_id_col.value(i) as usize;
-            let pid = pid_col.value(i);
             let is_context_switch = is_context_switch_col.value(i);
             
             if cpu_id >= self.num_cpus {
@@ -190,7 +214,11 @@ impl HyperthreadAnalysis {
             
             // Update CPU state for context switches
             if is_context_switch {
-                self.cpu_states[cpu_id].current_pid = pid;
+                if next_tgid_col.is_null(i) {
+                    return Err(anyhow::anyhow!("next_tgid is null for context switch at row {}", i));
+                }
+                let next_tgid = next_tgid_col.value(i);
+                self.cpu_states[cpu_id].current_pid = Some(next_tgid);
             }
             
             // Reset counters after recording
