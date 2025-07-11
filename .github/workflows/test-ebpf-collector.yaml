@@ -7,7 +7,7 @@ on:
         required: false
         default: 'c7i.metal-24xl'
         type: string
-  pull_request:
+  pull_request_target:
     paths:
       - crates/**
       - Cargo.toml
@@ -32,6 +32,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install dependencies
         run: |
@@ -122,6 +124,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Download collector binary
@@ -321,6 +324,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         
       - name: Start AWS Runner
         id: start-runner
@@ -525,6 +530,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         
       - name: Stop AWS Runner
         uses: ./.github/actions/aws-runner/cleanup

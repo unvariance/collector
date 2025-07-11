@@ -32,7 +32,7 @@ on:
         required: false
         default: 'ghcr.io/unvariance/collector/collector'
         type: string
-  pull_request:
+  pull_request_target:
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml
@@ -61,6 +61,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         
       - name: Calculate timeout
         id: calculate-timeout
@@ -104,6 +106,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: (k8s) Increase inotify limits
         run: |
@@ -806,6 +810,8 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: (install) Install Rust and addr2line
         run: |
@@ -889,6 +895,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install R Dependencies
         run: |
@@ -1145,6 +1153,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install R Dependencies
         run: |
@@ -1195,6 +1205,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
         
       - name: Stop AWS Runner
         uses: ./.github/actions/aws-runner/cleanup
