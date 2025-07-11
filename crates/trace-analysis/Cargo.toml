@@ -1,0 +1,15 @@
+[package]
+name = "trace-analysis"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "trace-analysis"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+parquet = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+anyhow = { workspace = true }
