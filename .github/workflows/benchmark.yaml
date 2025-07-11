@@ -516,8 +516,8 @@ jobs:
           
           echo "Starting trace collection for ${TRACE_DURATION} seconds..."
           
-          # Run collector in trace mode using podman
-          podman run --rm \
+          # Run collector in trace mode using podman with sudo for BPF access
+          sudo podman run --rm \
             --privileged \
             --network host \
             --pid host \
