@@ -22,6 +22,11 @@ on:
         required: false
         default: '1'
         type: string
+      trace-duration:
+        description: 'Duration for trace collection in seconds'
+        required: false
+        default: '10'
+        type: string
       collector-repository:
         description: 'Collector image repository to use'
         required: false
@@ -288,14 +293,16 @@ jobs:
           # Update again with HTTPS now configure
           sudo apt-get update
 
-      - name: (install) Install sysstat
+      - name: (install) Install dependencies using apt
         run: |
           sudo apt-get update
-          sudo apt-get install -y sysstat linux-tools-common linux-tools-generic linux-tools-`uname -r` bzip2
+          sudo apt-get install -y sysstat linux-tools-common linux-tools-generic linux-tools-`uname -r` bzip2 podman
           
           # Verify installations
           perf_version=$(perf --version 2>&1)
           echo "Installed perf: $perf_version"
+          podman_version=$(podman --version 2>&1)
+          echo "Installed podman: $podman_version"
 
       - name: (install) Install awscli
         run: |
@@ -350,6 +357,13 @@ jobs:
           UUID=$(python3 -c "import uuid; print(uuid.uuid4())")
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
+
+      - name: (collector) Pre-fetch Collector Image
+        run: |
+          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
+          echo "Pre-fetching collector image: ${COLLECTOR_IMAGE}"
+          podman pull "${COLLECTOR_IMAGE}" || true
+          echo "Pre-fetch completed"
 
       - name: (collector) Deploy Collector Helm Chart
         env:
@@ -491,6 +505,37 @@ jobs:
 
           echo "Pod top..."
           kubectl top pods --all-namespaces || echo "No pod metrics available"
+
+      - name: (trace) Collect Trace Data
+        run: |
+          # Create directory for trace output
+          mkdir -p /tmp/trace_data
+          
+          TRACE_DURATION="${{ inputs.trace-duration || '10' }}"
+          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
+          
+          echo "Starting trace collection for ${TRACE_DURATION} seconds..."
+          
+          # Run collector in trace mode using podman
+          podman run --rm \
+            --privileged \
+            --network host \
+            --pid host \
+            --volume /tmp/trace_data:/tmp/trace_data \
+            --volume /sys:/sys:ro \
+            --volume /proc:/proc:ro \
+            --volume /dev:/dev:ro \
+            "${COLLECTOR_IMAGE}" \
+            --trace \
+            --prefix "/tmp/trace_data/trace-" \
+            --duration "${TRACE_DURATION}" \
+            --storage-type local
+          
+          echo "Trace collection completed"
+          
+          # List trace files
+          echo "Generated trace files:"
+          ls -la /tmp/trace_data/
 
       - name: (metrics) Record system performance with perf
         run: |
@@ -638,6 +683,14 @@ jobs:
           name: collector-parquet-results
           path: /tmp/collector-parquet.parquet
           retention-days: 28
+
+      - name: (trace) Upload Trace Results as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-parquet-results
+          path: /tmp/trace_data/
+          retention-days: 28
+        if: always()
           
       - name: (status) Print Events
         run: | 
@@ -974,15 +1027,18 @@ jobs:
           retention-days: 28
 
   analyze-parquet:
-    name: Analyze Collector Parquet
+    name: Analyze Parquet Data
     needs: [run-workload]
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        data-type: [timeslot, trace]
     steps:
-      - name: Download collector parquet artifact
+      - name: Download parquet artifact
         uses: actions/download-artifact@v4
         with:
-          name: collector-parquet-results
-          path: collector-data
+          name: ${{ matrix.data-type == 'timeslot' && 'collector-parquet-results' || 'trace-parquet-results' }}
+          path: parquet-data
 
       - name: Install pqrs
         run: |
@@ -997,8 +1053,13 @@ jobs:
         run: |
           mkdir -p parquet-analysis
           
-          PARQUET_FILE=$(find collector-data -name "*.parquet" -type f)
+          PARQUET_FILE=$(find parquet-data -name "*.parquet" -type f | head -1)
           echo "Found parquet file: $PARQUET_FILE"
+          
+          if [ -z "$PARQUET_FILE" ]; then
+            echo "No parquet files found for ${{ matrix.data-type }} data"
+            exit 0
+          fi
           
           # Generate simple schema (non-detailed)
           echo "Generating simple schema..."
@@ -1029,7 +1090,7 @@ jobs:
       - name: Upload parquet analysis results
         uses: actions/upload-artifact@v4
         with:
-          name: parquet-analysis-results
+          name: parquet-analysis-${{ matrix.data-type }}-results
           path: parquet-analysis/
           retention-days: 28
 
