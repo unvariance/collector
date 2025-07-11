@@ -7,9 +7,15 @@ on:
         required: false
         default: 'c7i.metal-24xl'
         type: string
+  pull_request:
+    paths:
+      - crates/**
+      - Cargo.toml
+      - .github/workflows/test-ebpf-collector.yaml
   push:
     branches:
       - main
+      - '**'
     paths:
       - crates/**
       - Cargo.toml

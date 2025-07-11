@@ -32,9 +32,14 @@ on:
         required: false
         default: 'ghcr.io/unvariance/collector/collector'
         type: string
+  pull_request:
+    paths:
+      - deploy/opentelemetry-demo/values.yaml
+      - .github/workflows/benchmark.yaml
   push:
     branches:
       - main
+      - '**'
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml
