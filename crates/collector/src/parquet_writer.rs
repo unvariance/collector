@@ -563,12 +563,8 @@ mod tests {
             key_value_metadata: Some(metadata.clone()),
         };
 
-        let mut writer = ParquetWriter::new(
-            memory_storage.clone(),
-            schema.clone(),
-            config,
-        )
-        .unwrap();
+        let mut writer =
+            ParquetWriter::new(memory_storage.clone(), schema.clone(), config).unwrap();
 
         // Write the batch
         writer.write(test_batch.clone()).await.unwrap();
@@ -593,13 +589,17 @@ mod tests {
         let file_metadata = parquet_metadata.file_metadata();
         let kv_metadata = file_metadata.key_value_metadata();
 
-        assert!(kv_metadata.is_some(), "Key-value metadata should be present");
+        assert!(
+            kv_metadata.is_some(),
+            "Key-value metadata should be present"
+        );
         let kv_map = kv_metadata.unwrap();
 
         println!("kv_map: {:?}", kv_map);
 
         // Check num_cpus metadata
-        let num_cpus_value = kv_map.iter()
+        let num_cpus_value = kv_map
+            .iter()
             .find(|kv| kv.key == "num_cpus")
             .expect("Should find num_cpus key");
         assert_eq!(
@@ -609,7 +609,8 @@ mod tests {
         );
 
         // Check collection_version metadata
-        let version_value = kv_map.iter()
+        let version_value = kv_map
+            .iter()
             .find(|kv| kv.key == "collection_version")
             .expect("Should find collection_version key");
         assert_eq!(
