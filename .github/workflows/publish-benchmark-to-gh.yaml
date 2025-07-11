@@ -66,7 +66,7 @@ jobs:
       - name: Download parquet analysis artifacts
         uses: actions/download-artifact@v4
         with:
-          name: parquet-analysis-results
+          name: parquet-analysis-timeslot-results
           path: artifacts/parquet-analysis
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ steps.get-run-id.outputs.run_id }}
