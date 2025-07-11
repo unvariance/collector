@@ -314,6 +314,13 @@ jobs:
           chmod +x /usr/local/bin/aws || true
           echo version: `/usr/local/bin/aws --version` || true
 
+      - name: (collector) Pre-fetch Collector Image
+        run: |
+          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
+          echo "Pre-fetching collector image: ${COLLECTOR_IMAGE}"
+          podman pull "${COLLECTOR_IMAGE}" || true
+          echo "Pre-fetch completed"
+
       #### Wait for services to be ready
 
 
@@ -357,13 +364,6 @@ jobs:
           UUID=$(python3 -c "import uuid; print(uuid.uuid4())")
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
-
-      - name: (collector) Pre-fetch Collector Image
-        run: |
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          echo "Pre-fetching collector image: ${COLLECTOR_IMAGE}"
-          podman pull "${COLLECTOR_IMAGE}" || true
-          echo "Pre-fetch completed"
 
       - name: (collector) Deploy Collector Helm Chart
         env:
