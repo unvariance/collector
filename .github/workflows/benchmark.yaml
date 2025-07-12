@@ -354,6 +354,7 @@ jobs:
             --trace \
             --prefix "/tmp/trace_data/trace-" \
             --duration "${TRACE_DURATION}" \
+            --parquet-file-size 4000000000 \
             --storage-type local
           
           echo "Trace collection completed"
