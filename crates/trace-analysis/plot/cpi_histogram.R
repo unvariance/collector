@@ -5,7 +5,7 @@
 # cycles per instruction (CPI) for the top 20 processes, weighted by instructions
 # and categorized by peer hyperthread activity.
 
-library(arrow)
+library(nanoparquet)
 library(dplyr)
 library(ggplot2)
 library(tidyr)
@@ -25,7 +25,7 @@ output_file <- str_replace(input_file, "\\.parquet$", "_cpi_histogram.png")
 cat("Reading parquet file:", input_file, "\n")
 
 # Read the augmented trace data
-df <- read_parquet(input_file)
+df <- nanoparquet::read_parquet(input_file)
 
 cat("Loaded", nrow(df), "rows\n")
 
