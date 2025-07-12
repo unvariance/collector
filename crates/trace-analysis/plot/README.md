@@ -2,7 +2,7 @@
 
 This directory contains plotting scripts for analyzing the output of the trace-analysis tool.
 
-## cpi_histogram.R
+## hyperthread_cpi_histogram.R
 
 Creates probability density plots showing the distribution of cycles per instruction (CPI) for the top 20 processes, categorized by peer hyperthread activity.
 
@@ -23,13 +23,13 @@ Creates probability density plots showing the distribution of cycles per instruc
 
 Install required R packages:
 ```r
-install.packages(c("arrow", "dplyr", "ggplot2", "tidyr", "stringr"))
+install.packages(c("nanoparquet", "dplyr", "ggplot2", "tidyr", "stringr"))
 ```
 
 ### Usage
 
 ```bash
-Rscript cpi_histogram.R <input_hyperthread_analysis.parquet>
+Rscript hyperthread_cpi_histogram.R <input_hyperthread_analysis.parquet>
 ```
 
 Example:
@@ -38,7 +38,7 @@ Example:
 cargo run --bin trace-analysis -- -f trace_data.parquet --output-prefix analysis
 
 # Generate plots
-Rscript plot/cpi_histogram.R analysis_hyperthread_analysis.parquet
+Rscript hyperthread_cpi_histogram.R analysis_hyperthread_analysis.parquet
 ```
 
 ### Output
