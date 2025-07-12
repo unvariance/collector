@@ -56,6 +56,25 @@ df_top <- df %>%
 
 cat("After filtering to top processes with hyperthread data:", nrow(df_top), "rows\n")
 
+# Calculate CPU seconds for each process and category for statistical significance
+cpu_seconds_summary <- df_top %>%
+  select(process_name, ns_peer_same_process, ns_peer_different_process, ns_peer_kernel) %>%
+  group_by(process_name) %>%
+  summarise(
+    cpu_seconds_same = sum(ns_peer_same_process) / 1e9,
+    cpu_seconds_different = sum(ns_peer_different_process) / 1e9,
+    cpu_seconds_kernel = sum(ns_peer_kernel) / 1e9,
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    # Create formatted title with CPU seconds
+    process_title = sprintf("%s\nSame: %.2fs | Diff: %.2fs | Kernel: %.2fs",
+                           process_name,
+                           cpu_seconds_same,
+                           cpu_seconds_different, 
+                           cpu_seconds_kernel)
+  )
+
 # Reshape data for the three hyperthread categories
 # For each category, calculate weight = nanoseconds / CPI (proportional to instructions)
 df_long <- df_top %>%
@@ -74,7 +93,9 @@ df_long <- df_top %>%
     ),
     # Calculate weight proportional to instructions
     instruction_weight = nanoseconds / cpi
-  )
+  ) %>%
+  # Add process titles with CPU seconds
+  left_join(cpu_seconds_summary, by = "process_name")
 
 cat("After reshaping:", nrow(df_long), "rows\n")
 
@@ -83,13 +104,14 @@ cat("Creating plot...\n")
 
 p <- ggplot(df_long, aes(x = cpi, weight = instruction_weight, color = peer_category)) +
   geom_density(alpha = 0.7, size = 1) +
-  facet_wrap(~ process_name, scales = "free", ncol = 4) +
+  facet_wrap(~ process_title, scales = "free_y", ncol = 4) +
+  coord_cartesian(xlim = c(0, 10)) +
   scale_color_manual(values = c("Same Process" = "#2E8B57", 
                                "Different Process" = "#FF6347", 
                                "Kernel" = "#4169E1")) +
   labs(
-    title = "CPI Distribution by Peer Hyperthread Activity",
-    subtitle = "Top 20 processes by instruction count, weighted by instructions",
+    title = "CPI Distribution by Peer Hyperthread Activity", 
+    subtitle = "Top 20 processes by instruction count, weighted by instructions\nProcess titles show CPU seconds for statistical significance assessment\n[Display limited to CPI ≤ 10]",
     x = "Cycles Per Instruction (CPI)",
     y = "Density (Instruction-weighted)",
     color = "Peer Hyperthread"
@@ -97,10 +119,11 @@ p <- ggplot(df_long, aes(x = cpi, weight = instruction_weight, color = peer_cate
   theme_minimal() +
   theme(
     plot.title = element_text(size = 16, hjust = 0.5),
-    plot.subtitle = element_text(size = 12, hjust = 0.5),
-    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.subtitle = element_text(size = 10, hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    axis.text.y = element_text(size = 8),
     legend.position = "bottom",
-    strip.text = element_text(size = 8),
+    strip.text = element_text(size = 7),
     panel.grid.minor = element_blank()
   ) +
   guides(color = guide_legend(override.aes = list(size = 2)))
@@ -109,6 +132,10 @@ p <- ggplot(df_long, aes(x = cpi, weight = instruction_weight, color = peer_cate
 ggsave(output_file, plot = p, width = 16, height = 12, dpi = 300)
 
 cat("Plot saved to:", output_file, "\n")
+
+# Print CPU seconds summary for statistical significance assessment
+cat("\nCPU seconds by process and category (for statistical significance):\n")
+print(cpu_seconds_summary)
 
 # Print summary statistics
 cat("\nSummary statistics:\n")
