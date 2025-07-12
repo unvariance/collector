@@ -103,7 +103,7 @@ cat("After reshaping:", nrow(df_long), "rows\n")
 cat("Creating plot...\n")
 
 p <- ggplot(df_long, aes(x = cpi, weight = instruction_weight, color = peer_category)) +
-  geom_density(alpha = 0.7, size = 1) +
+  geom_density(alpha = 0.7, linewidth = 1) +
   facet_wrap(~ process_title, scales = "free_y", ncol = 4) +
   coord_cartesian(xlim = c(0, 10)) +
   scale_color_manual(values = c("Same Process" = "#2E8B57", 
