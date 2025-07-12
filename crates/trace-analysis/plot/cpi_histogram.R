@@ -135,20 +135,7 @@ cat("Plot saved to:", output_file, "\n")
 
 # Print CPU seconds summary for statistical significance assessment
 cat("\nCPU seconds by process and category (for statistical significance):\n")
-print(cpu_seconds_summary)
-
-# Print summary statistics
-cat("\nSummary statistics:\n")
-summary_stats <- df_long %>%
-  group_by(process_name, peer_category) %>%
-  summarise(
-    mean_cpi = weighted.mean(cpi, instruction_weight),
-    median_cpi = median(rep(cpi, times = round(instruction_weight / min(instruction_weight[instruction_weight > 0])))),
-    total_weight = sum(instruction_weight),
-    .groups = 'drop'
-  ) %>%
-  arrange(process_name, peer_category)
-
-print(summary_stats)
+cpu_seconds_clean <- cpu_seconds_summary %>% select(-process_title)
+print(cpu_seconds_clean)
 
 cat("\nAnalysis complete!\n")
