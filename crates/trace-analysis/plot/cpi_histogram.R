@@ -20,7 +20,7 @@ if (length(args) != 1) {
 }
 
 input_file <- args[1]
-output_file <- str_replace(input_file, "\\.parquet$", "_cpi_histogram.png")
+output_file <- str_replace(input_file, "\\.parquet$", "_cpi_histogram.pdf")
 
 cat("Reading parquet file:", input_file, "\n")
 
