@@ -330,41 +330,6 @@ jobs:
           podman pull "${COLLECTOR_IMAGE}" || true
           echo "Pre-fetch completed"
 
-      - name: test (trace) Collect Trace Data
-        run: |
-          # Create directory for trace output
-          mkdir -p /tmp/trace_data
-          
-          TRACE_DURATION="${{ inputs.trace-duration || '10' }}"
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          
-          echo "Starting trace collection for ${TRACE_DURATION} seconds..."
-          
-          # Run collector in trace mode using podman with sudo for BPF access
-          sudo podman run --rm \
-            --privileged \
-            --network host \
-            --pid host \
-            --volume /tmp/trace_data:/tmp/trace_data \
-            --volume /sys:/sys \
-            --volume /proc:/proc:ro \
-            --volume /dev:/dev:ro \
-            --user 0 \
-            "${COLLECTOR_IMAGE}" \
-            --trace \
-            --prefix "/tmp/trace_data/trace-" \
-            --duration "${TRACE_DURATION}" \
-            --parquet-file-size 4000000000 \
-            --storage-type local
-          
-          echo "Trace collection completed"
-          
-          # List trace files
-          echo "Generated trace files:"
-          ls -la /tmp/trace_data/
-
-          rm -rf /tmp/trace_data
-
       #### Wait for services to be ready
 
 
@@ -574,6 +539,7 @@ jobs:
             --trace \
             --prefix "/tmp/trace_data/trace-" \
             --duration "${TRACE_DURATION}" \
+            --parquet-file-size 4000000000 \
             --storage-type local
           
           echo "Trace collection completed"
