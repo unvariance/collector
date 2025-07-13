@@ -64,6 +64,7 @@ impl PerfEventProcessor {
                 // Create trace processor with default capacity of 1000 rows
                 let perf_to_trace = BpfPerfToTrace::new(
                     bpf_loader,
+                    timeslot_tracker.clone(),
                     task_tracker.clone(),
                     batch_tx,
                     32 * 1024, // Default batch capacity

@@ -14,6 +14,7 @@ use bpf::{msg_type, BpfLoader, PerfMeasurementMsg};
 use plain;
 
 use crate::bpf_task_tracker::BpfTaskTracker;
+use crate::bpf_timeslot_tracker::BpfTimeslotTracker;
 
 /// Create the schema for trace record batches
 pub fn create_schema() -> SchemaRef {
@@ -63,6 +64,7 @@ impl BpfPerfToTrace {
     /// Create a new BpfPerfToTrace processor
     pub fn new(
         bpf_loader: &mut BpfLoader,
+        timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
         task_tracker: Rc<RefCell<BpfTaskTracker>>,
         batch_tx: mpsc::Sender<RecordBatch>,
         capacity: usize,
@@ -99,6 +101,11 @@ impl BpfPerfToTrace {
                 BpfPerfToTrace::handle_perf_measurement,
             );
         }
+
+        // Subscribe to timeslot events for time-based flushing
+        timeslot_tracker
+            .borrow_mut()
+            .subscribe_method(processor.clone(), BpfPerfToTrace::on_new_timeslot);
 
         processor
     }
@@ -159,10 +166,9 @@ impl BpfPerfToTrace {
         self.current_rows += 1;
 
         // Check if we should flush
-        let should_flush_capacity = self.current_rows >= self.capacity;
-        let should_flush_time = self.last_flush.elapsed().as_secs() >= 1;
+        let should_flush = self.current_rows >= self.capacity;
 
-        if should_flush_capacity || should_flush_time {
+        if should_flush {
             if let Err(e) = self.flush_batch() {
                 error!("Failed to flush trace batch: {}", e);
             }
@@ -217,6 +223,16 @@ impl BpfPerfToTrace {
         self.last_flush = Instant::now();
 
         Ok(())
+    }
+
+    /// Handle new timeslot events - triggers time-based flush check
+    fn on_new_timeslot(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
+        // Check if we should flush based on time elapsed
+        if self.last_flush.elapsed().as_secs() >= 1 {
+            if let Err(e) = self.flush_batch() {
+                error!("Failed to flush trace batch on timeslot: {}", e);
+            }
+        }
     }
 
     /// Shutdown the processor and close the batch channel
