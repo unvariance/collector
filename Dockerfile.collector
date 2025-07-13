@@ -35,7 +35,7 @@ RUN mkdir -p crates/collector/src \
     && echo "fn main() { println!(\"Hello, world!\"); }" > crates/collector/src/main.rs
 
 # Build dependencies only (this will be cached)
-RUN cargo build --release
+RUN cargo build --release --bin collector
 
 # Now copy the actual source code
 COPY crates ./crates/
@@ -49,7 +49,7 @@ RUN     touch crates/collector/src/lib.rs \
     && touch crates/collector/src/main.rs
 
 # Build the actual application
-RUN cargo build --release
+RUN cargo build --release --bin collector
 
 # Stage 2: Create a lightweight runtime image
 FROM debian:bookworm-slim
