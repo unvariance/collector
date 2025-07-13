@@ -125,7 +125,6 @@ static __always_inline int send_task_metadata(void *ctx, struct task_struct *tas
     
     struct task_metadata_msg msg = {};
     
-    msg.header.timestamp = bpf_ktime_get_ns();
     msg.header.type = MSG_TYPE_TASK_METADATA;
     // size field is filled by the kernel
     msg.pid = task->pid;
@@ -134,6 +133,8 @@ static __always_inline int send_task_metadata(void *ctx, struct task_struct *tas
     
     // Get cgroup ID for the current task
     msg.cgroup_id = bpf_get_current_cgroup_id();
+
+    msg.header.timestamp = bpf_ktime_get_ns();
     
     // Skip the size field (first 4 bytes) when sending
     return bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, 
@@ -146,10 +147,10 @@ static __always_inline int send_task_free(void *ctx, __u32 pid)
 {
     struct task_free_msg msg = {};
     
-    msg.header.timestamp = bpf_ktime_get_ns();
     msg.header.type = MSG_TYPE_TASK_FREE;
     // size field is filled by the kernel
     msg.pid = pid;
+    msg.header.timestamp = bpf_ktime_get_ns();
     
     // Skip the size field (first 4 bytes) when sending
     return bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, 
@@ -264,7 +265,6 @@ static __always_inline int collect_and_send_perf_measurements(void *ctx, struct 
     __u64 instructions_delta = 0;
     __u64 llc_misses_delta = 0;
     __u64 cache_references_delta = 0;
-    __u64 now = bpf_ktime_get_ns();
     __u64 time_delta_ns = 0;
     
     int err = bpf_perf_event_read_value(&cycles, BPF_F_CURRENT_CPU, &cycles_val, sizeof(cycles_val));
@@ -293,14 +293,18 @@ static __always_inline int collect_and_send_perf_measurements(void *ctx, struct 
     
     // Compute time delta and update timestamp
     // If prev->timestamp is 0, this is the first event, don't emit it
-    if (prev->timestamp != 0) {
-        time_delta_ns = compute_delta(now, prev->timestamp);
-        send_perf_measurement(ctx, pid, cycles_delta, instructions_delta, 
-                              llc_misses_delta, cache_references_delta, time_delta_ns, now,
-                              is_context_switch, next_tgid);
+    {
+        __u64 now = bpf_ktime_get_ns();
+
+        if (prev->timestamp != 0) {
+            time_delta_ns = compute_delta(now, prev->timestamp);
+            send_perf_measurement(ctx, pid, cycles_delta, instructions_delta, 
+                                llc_misses_delta, cache_references_delta, time_delta_ns, now,
+                                is_context_switch, next_tgid);
+        }
+        prev->timestamp = now;
     }
-    prev->timestamp = now;
-    
+
     return 0;
 }
 
@@ -371,8 +375,8 @@ static __always_inline int send_timer_finished_processing(void *ctx)
 {
     struct timer_finished_processing_msg msg = {};
     
-    msg.header.timestamp = bpf_ktime_get_ns();
     msg.header.type = MSG_TYPE_TIMER_FINISHED_PROCESSING;
+    msg.header.timestamp = bpf_ktime_get_ns();
     
     // Skip the size field (first 4 bytes) when sending
     return bpf_perf_event_output(ctx, &events, BPF_F_CURRENT_CPU, 
