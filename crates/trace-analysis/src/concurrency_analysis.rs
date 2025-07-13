@@ -42,6 +42,9 @@ impl CpuTimeCounter {
     /// Update aggregate CPU time with elapsed time since last update
     pub fn update(&mut self, timestamp: u64) {
         if self.last_update_timestamp > 0 {
+            if timestamp < self.last_update_timestamp {
+                panic!("Timestamp regression detected: {} < {}", timestamp, self.last_update_timestamp);
+            }
             let elapsed_time = timestamp - self.last_update_timestamp;
             self.aggregate_cpu_time += elapsed_time * (self.current_thread_count as u64);
         }
@@ -315,9 +318,18 @@ impl ConcurrencyAnalysis {
             0.0
         };
 
+        let next_tgid_same_process_cpu_time = if let Some(next_tgid) = next_tgid {
+            self.per_pid_counters
+                .get(&next_tgid)
+                .expect("on context switch, we add a counter for next_tgid if it doesn't exist)")
+                .get_ns()
+        } else {
+            end_same_process_cpu_time
+        };
+
         // Update per-CPU state for next interval
         self.per_cpu_state[cpu_id].start_total_cpu_time = end_total_cpu_time;
-        self.per_cpu_state[cpu_id].start_same_process_cpu_time = end_same_process_cpu_time;
+        self.per_cpu_state[cpu_id].start_same_process_cpu_time = next_tgid_same_process_cpu_time;
         self.per_cpu_state[cpu_id].last_timestamp = timestamp;
 
         // Return computed concurrency metrics
