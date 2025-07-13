@@ -21,17 +21,20 @@ COPY crates/perf_events/Cargo.toml ./crates/perf_events/
 COPY crates/timeslot/Cargo.toml ./crates/timeslot/
 COPY crates/bpf/Cargo.toml ./crates/bpf/
 COPY crates/nri/Cargo.toml ./crates/nri/
+COPY crates/trace-analysis/Cargo.toml ./crates/trace-analysis/
 # Create dummy source files to build dependencies
 RUN mkdir -p crates/collector/src \
     crates/perf_events/src \
     crates/timeslot/src \
     crates/bpf/src \
     crates/nri/src \
+    crates/trace-analysis/src \
     && touch crates/collector/src/lib.rs \
     && touch crates/perf_events/src/lib.rs \
     && touch crates/timeslot/src/lib.rs \
     && touch crates/bpf/src/lib.rs \
     && touch crates/nri/src/lib.rs \
+    && touch crates/trace-analysis/src/lib.rs \
     && echo "fn main() { println!(\"Hello, world!\"); }" > crates/collector/src/main.rs
 
 # Build dependencies only (this will be cached)
@@ -46,6 +49,7 @@ RUN     touch crates/collector/src/lib.rs \
     && touch crates/timeslot/src/lib.rs \
     && touch crates/bpf/src/lib.rs \
     && touch crates/nri/src/lib.rs \
+    && touch crates/trace-analysis/src/lib.rs \
     && touch crates/collector/src/main.rs
 
 # Build the actual application
