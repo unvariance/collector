@@ -4,9 +4,11 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+mod analyzer;
 mod concurrency_analysis;
 mod hyperthread_analysis;
 
+use analyzer::Analyzer;
 use concurrency_analysis::ConcurrencyAnalysis;
 use hyperthread_analysis::HyperthreadAnalysis;
 
@@ -73,20 +75,23 @@ fn main() -> Result<()> {
         output_filename.display()
     );
 
+    // Create analyzer
+    let analyzer = Analyzer::new(output_filename);
+
     match cli.analysis_type.as_str() {
         "concurrency" => {
             // Create concurrency analysis module
-            let mut analysis = ConcurrencyAnalysis::new(num_cpus, output_filename)?;
+            let analysis = ConcurrencyAnalysis::new(num_cpus)?;
 
             // Process the Parquet file
-            analysis.process_parquet_file(builder)?;
+            analyzer.process_parquet_file(builder, analysis)?;
         }
         "hyperthread" => {
             // Create hyperthread analysis module
-            let mut analysis = HyperthreadAnalysis::new(num_cpus, output_filename)?;
+            let analysis = HyperthreadAnalysis::new(num_cpus)?;
 
             // Process the Parquet file
-            analysis.process_parquet_file(builder)?;
+            analyzer.process_parquet_file(builder, analysis)?;
         }
         _ => {
             return Err(anyhow::anyhow!(

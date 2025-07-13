@@ -1,12 +1,10 @@
 use anyhow::{Context, Result};
-use arrow_array::{Array, ArrayRef, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
+use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch};
+use arrow_schema::{DataType, Field};
 use std::collections::HashMap;
-use std::fs::File;
-use std::path::PathBuf;
 use std::sync::Arc;
+
+use crate::analyzer::Analysis;
 
 /// CPU time counter for tracking aggregate CPU time and thread counts
 #[derive(Debug, Clone)]
@@ -43,7 +41,10 @@ impl CpuTimeCounter {
     pub fn update(&mut self, timestamp: u64) {
         if self.last_update_timestamp > 0 {
             if timestamp < self.last_update_timestamp {
-                panic!("Timestamp regression detected: {} < {}", timestamp, self.last_update_timestamp);
+                panic!(
+                    "Timestamp regression detected: {} < {}",
+                    timestamp, self.last_update_timestamp
+                );
             }
             let elapsed_time = timestamp - self.last_update_timestamp;
             self.aggregate_cpu_time += elapsed_time * (self.current_thread_count as u64);
@@ -80,7 +81,6 @@ impl PerCpuState {
 /// Main concurrency analysis processor
 pub struct ConcurrencyAnalysis {
     num_cpus: usize,
-    output_filename: PathBuf,
 
     // State tracking
     per_pid_counters: HashMap<u32, CpuTimeCounter>,
@@ -90,10 +90,9 @@ pub struct ConcurrencyAnalysis {
 
 impl ConcurrencyAnalysis {
     /// Create a new concurrency analysis processor
-    pub fn new(num_cpus: usize, output_filename: PathBuf) -> Result<Self> {
+    pub fn new(num_cpus: usize) -> Result<Self> {
         Ok(Self {
             num_cpus,
-            output_filename,
             per_pid_counters: HashMap::new(),
             total_counter: CpuTimeCounter::new(),
             per_cpu_state: (0..num_cpus).map(|_| PerCpuState::new()).collect(),
@@ -103,138 +102,6 @@ impl ConcurrencyAnalysis {
     /// Check if a process ID represents a kernel thread
     fn is_kernel(pid: u32) -> bool {
         pid == 0
-    }
-
-    /// Process a Parquet file with trace data
-    pub fn process_parquet_file(
-        &mut self,
-        builder: ParquetRecordBatchReaderBuilder<File>,
-    ) -> Result<()> {
-        let input_schema = builder.schema().clone();
-        let mut arrow_reader = builder
-            .build()
-            .with_context(|| "Failed to build Arrow reader")?;
-
-        // Create output schema with additional concurrency columns
-        let output_schema = self.create_output_schema(&input_schema)?;
-
-        // Create Arrow writer
-        let output_file = File::create(&self.output_filename).with_context(|| {
-            format!(
-                "Failed to create output file: {}",
-                self.output_filename.display()
-            )
-        })?;
-
-        let mut writer = ArrowWriter::try_new(output_file, Arc::new(output_schema.clone()), None)
-            .with_context(|| "Failed to create Arrow writer")?;
-
-        // Process record batches
-        while let Some(batch) = arrow_reader.next() {
-            let batch = batch.with_context(|| "Failed to read record batch")?;
-            let augmented_batch = self.process_record_batch(&batch, &output_schema)?;
-            writer
-                .write(&augmented_batch)
-                .with_context(|| "Failed to write augmented batch")?;
-        }
-
-        writer.close().with_context(|| "Failed to close writer")?;
-        Ok(())
-    }
-
-    fn create_output_schema(&self, input_schema: &Schema) -> Result<Schema> {
-        let mut fields: Vec<Arc<Field>> = input_schema.fields().iter().cloned().collect();
-
-        // Add concurrency counter fields
-        fields.push(Arc::new(Field::new(
-            "avg_total_threads",
-            DataType::Float64,
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "avg_same_process_threads",
-            DataType::Float64,
-            false,
-        )));
-
-        Ok(Schema::new(fields))
-    }
-
-    fn process_record_batch(
-        &mut self,
-        batch: &RecordBatch,
-        output_schema: &Schema,
-    ) -> Result<RecordBatch> {
-        let num_rows = batch.num_rows();
-
-        // Extract required columns
-        let timestamp_array = batch
-            .column_by_name("timestamp")
-            .context("Missing timestamp column")?
-            .as_any()
-            .downcast_ref::<arrow_array::Int64Array>()
-            .context("Invalid timestamp column type")?;
-        let pid_array = batch
-            .column_by_name("pid")
-            .context("Missing pid column")?
-            .as_any()
-            .downcast_ref::<arrow_array::Int32Array>()
-            .context("Invalid pid column type")?;
-        let cpu_id_array = batch
-            .column_by_name("cpu_id")
-            .context("Missing cpu_id column")?
-            .as_any()
-            .downcast_ref::<arrow_array::Int32Array>()
-            .context("Invalid cpu_id column type")?;
-        let is_context_switch_array = batch
-            .column_by_name("is_context_switch")
-            .context("Missing is_context_switch column")?
-            .as_any()
-            .downcast_ref::<arrow_array::BooleanArray>()
-            .context("Invalid is_context_switch column type")?;
-        let next_tgid_array = batch
-            .column_by_name("next_tgid")
-            .context("Missing next_tgid column")?
-            .as_any()
-            .downcast_ref::<arrow_array::Int32Array>()
-            .context("Invalid next_tgid column type")?;
-
-        // Prepare output arrays for concurrency metrics
-        let mut avg_total_threads = Vec::with_capacity(num_rows);
-        let mut avg_same_process_threads = Vec::with_capacity(num_rows);
-
-        // Process each row
-        for i in 0..num_rows {
-            let timestamp = timestamp_array.value(i) as u64;
-            let pid = pid_array.value(i) as u32;
-            let cpu_id = cpu_id_array.value(i) as usize;
-            let is_context_switch = is_context_switch_array.value(i);
-            let next_tgid = if next_tgid_array.is_null(i) {
-                None
-            } else {
-                Some(next_tgid_array.value(i) as u32)
-            };
-
-            if cpu_id >= self.num_cpus {
-                return Err(anyhow::anyhow!("Invalid CPU ID: {}", cpu_id));
-            }
-
-            let (avg_total, avg_same_process) =
-                self.process_event(timestamp, pid, cpu_id, is_context_switch, next_tgid)?;
-
-            avg_total_threads.push(avg_total);
-            avg_same_process_threads.push(avg_same_process);
-        }
-
-        // Create output arrays
-        let mut output_columns: Vec<ArrayRef> = batch.columns().to_vec();
-        output_columns.push(Arc::new(arrow_array::Float64Array::from(avg_total_threads)));
-        output_columns.push(Arc::new(arrow_array::Float64Array::from(
-            avg_same_process_threads,
-        )));
-
-        RecordBatch::try_new(Arc::new(output_schema.clone()), output_columns)
-            .with_context(|| "Failed to create output record batch")
     }
 
     /// Process a single event
@@ -334,5 +201,87 @@ impl ConcurrencyAnalysis {
 
         // Return computed concurrency metrics
         Ok((avg_total_threads, avg_same_process_threads))
+    }
+}
+
+impl Analysis for ConcurrencyAnalysis {
+    fn process_record_batch(&mut self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
+        let num_rows = batch.num_rows();
+
+        // Extract required columns
+        let timestamp_array = batch
+            .column_by_name("timestamp")
+            .context("Missing timestamp column")?
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .context("Invalid timestamp column type")?;
+        let pid_array = batch
+            .column_by_name("pid")
+            .context("Missing pid column")?
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .context("Invalid pid column type")?;
+        let cpu_id_array = batch
+            .column_by_name("cpu_id")
+            .context("Missing cpu_id column")?
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .context("Invalid cpu_id column type")?;
+        let is_context_switch_array = batch
+            .column_by_name("is_context_switch")
+            .context("Missing is_context_switch column")?
+            .as_any()
+            .downcast_ref::<arrow_array::BooleanArray>()
+            .context("Invalid is_context_switch column type")?;
+        let next_tgid_array = batch
+            .column_by_name("next_tgid")
+            .context("Missing next_tgid column")?
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .context("Invalid next_tgid column type")?;
+
+        // Prepare output arrays for concurrency metrics
+        let mut avg_total_threads = Vec::with_capacity(num_rows);
+        let mut avg_same_process_threads = Vec::with_capacity(num_rows);
+
+        // Process each row
+        for i in 0..num_rows {
+            let timestamp = timestamp_array.value(i) as u64;
+            let pid = pid_array.value(i) as u32;
+            let cpu_id = cpu_id_array.value(i) as usize;
+            let is_context_switch = is_context_switch_array.value(i);
+            let next_tgid = if next_tgid_array.is_null(i) {
+                None
+            } else {
+                Some(next_tgid_array.value(i) as u32)
+            };
+
+            if cpu_id >= self.num_cpus {
+                return Err(anyhow::anyhow!("Invalid CPU ID: {}", cpu_id));
+            }
+
+            let (avg_total, avg_same_process) =
+                self.process_event(timestamp, pid, cpu_id, is_context_switch, next_tgid)?;
+
+            avg_total_threads.push(avg_total);
+            avg_same_process_threads.push(avg_same_process);
+        }
+
+        // Return new columns as ArrayRef
+        Ok(vec![
+            Arc::new(Float64Array::from(avg_total_threads)),
+            Arc::new(Float64Array::from(avg_same_process_threads)),
+        ])
+    }
+
+    fn new_columns_schema(&self) -> Vec<Arc<Field>> {
+        vec![
+            Arc::new(Field::new("avg_total_threads", DataType::Float64, false)),
+            Arc::new(Field::new(
+                "avg_same_process_threads",
+                DataType::Float64,
+                false,
+            )),
+        ]
     }
 }

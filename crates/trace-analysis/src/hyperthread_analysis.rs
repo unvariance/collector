@@ -1,11 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, Int64Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::ArrowWriter;
-use std::fs::File;
-use std::path::PathBuf;
+use arrow_schema::{DataType, Field};
 use std::sync::Arc;
+
+use crate::analyzer::Analysis;
 
 #[derive(Debug, Clone)]
 struct CpuState {
@@ -37,17 +35,15 @@ impl CpuState {
 pub struct HyperthreadAnalysis {
     num_cpus: usize,
     cpu_states: Vec<CpuState>,
-    output_filename: PathBuf,
 }
 
 impl HyperthreadAnalysis {
-    pub fn new(num_cpus: usize, output_filename: PathBuf) -> Result<Self> {
+    pub fn new(num_cpus: usize) -> Result<Self> {
         let cpu_states = vec![CpuState::new(); num_cpus];
 
         Ok(Self {
             num_cpus,
             cpu_states,
-            output_filename,
         })
     }
 
@@ -115,72 +111,10 @@ impl HyperthreadAnalysis {
         self.cpu_states[cpu_a].last_counter_update = event_timestamp;
         self.cpu_states[cpu_b].last_counter_update = event_timestamp;
     }
+}
 
-    pub fn process_parquet_file(
-        &mut self,
-        builder: ParquetRecordBatchReaderBuilder<File>,
-    ) -> Result<()> {
-        let input_schema = builder.schema().clone();
-        let mut arrow_reader = builder
-            .build()
-            .with_context(|| "Failed to build Arrow reader")?;
-
-        // Create output schema with additional hyperthread columns
-        let output_schema = self.create_output_schema(&input_schema)?;
-
-        // Create Arrow writer
-        let output_file = File::create(&self.output_filename).with_context(|| {
-            format!(
-                "Failed to create output file: {}",
-                self.output_filename.display()
-            )
-        })?;
-
-        let mut writer = ArrowWriter::try_new(output_file, Arc::new(output_schema.clone()), None)
-            .with_context(|| "Failed to create Arrow writer")?;
-
-        // Process record batches
-        while let Some(batch) = arrow_reader.next() {
-            let batch = batch.with_context(|| "Failed to read record batch")?;
-            let augmented_batch = self.process_record_batch(&batch, &output_schema)?;
-            writer
-                .write(&augmented_batch)
-                .with_context(|| "Failed to write augmented batch")?;
-        }
-
-        writer.close().with_context(|| "Failed to close writer")?;
-
-        Ok(())
-    }
-
-    fn create_output_schema(&self, input_schema: &Schema) -> Result<Schema> {
-        let mut fields: Vec<Arc<Field>> = input_schema.fields().iter().cloned().collect();
-
-        // Add hyperthread counter fields
-        fields.push(Arc::new(Field::new(
-            "ns_peer_same_process",
-            DataType::Int64,
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ns_peer_different_process",
-            DataType::Int64,
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ns_peer_kernel",
-            DataType::Int64,
-            false,
-        )));
-
-        Ok(Schema::new(fields))
-    }
-
-    fn process_record_batch(
-        &mut self,
-        batch: &RecordBatch,
-        output_schema: &Schema,
-    ) -> Result<RecordBatch> {
+impl Analysis for HyperthreadAnalysis {
+    fn process_record_batch(&mut self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
         let num_rows = batch.num_rows();
 
         // Extract required columns
@@ -258,14 +192,24 @@ impl HyperthreadAnalysis {
             self.cpu_states[cpu_id].reset_counters();
         }
 
-        // Create output arrays
-        let mut output_columns: Vec<ArrayRef> = batch.columns().to_vec();
-        output_columns.push(Arc::new(Int64Array::from(ns_peer_same_process)));
-        output_columns.push(Arc::new(Int64Array::from(ns_peer_different_process)));
-        output_columns.push(Arc::new(Int64Array::from(ns_peer_kernel)));
+        // Return new columns as ArrayRef
+        Ok(vec![
+            Arc::new(Int64Array::from(ns_peer_same_process)),
+            Arc::new(Int64Array::from(ns_peer_different_process)),
+            Arc::new(Int64Array::from(ns_peer_kernel)),
+        ])
+    }
 
-        RecordBatch::try_new(Arc::new(output_schema.clone()), output_columns)
-            .with_context(|| "Failed to create output record batch")
+    fn new_columns_schema(&self) -> Vec<Arc<Field>> {
+        vec![
+            Arc::new(Field::new("ns_peer_same_process", DataType::Int64, false)),
+            Arc::new(Field::new(
+                "ns_peer_different_process",
+                DataType::Int64,
+                false,
+            )),
+            Arc::new(Field::new("ns_peer_kernel", DataType::Int64, false)),
+        ]
     }
 }
 
@@ -312,16 +256,28 @@ mod tests {
 
     #[test]
     fn test_initial_state_produces_zero_counters() {
-        let mut analysis = HyperthreadAnalysis::new(4, PathBuf::from("/tmp/test.parquet")).unwrap();
-        let input_schema = create_test_schema();
-        let output_schema = analysis.create_output_schema(&input_schema).unwrap();
+        let mut analysis = HyperthreadAnalysis::new(4).unwrap();
 
         // First event on CPU 0 - should have zero counters since no prior state
         let batch = create_test_batch(vec![1000], vec![0], vec![true], vec![Some(100)]);
 
-        let result = analysis
-            .process_record_batch(&batch, &output_schema)
-            .unwrap();
+        let new_columns = analysis.process_record_batch(&batch).unwrap();
+
+        // Create test output batch to check values
+        let mut output_columns = batch.columns().to_vec();
+        output_columns.extend(new_columns);
+        let result = RecordBatch::try_new(
+            Arc::new(Schema::new(
+                create_test_schema()
+                    .fields()
+                    .iter()
+                    .cloned()
+                    .chain(analysis.new_columns_schema().into_iter())
+                    .collect::<Vec<_>>(),
+            )),
+            output_columns,
+        )
+        .unwrap();
 
         // Check that all counters are zero for the first event
         let same_process_col = result
@@ -350,9 +306,7 @@ mod tests {
 
     #[test]
     fn test_hyperthread_counter_logic() {
-        let mut analysis = HyperthreadAnalysis::new(4, PathBuf::from("/tmp/test.parquet")).unwrap();
-        let input_schema = create_test_schema();
-        let output_schema = analysis.create_output_schema(&input_schema).unwrap();
+        let mut analysis = HyperthreadAnalysis::new(4).unwrap();
 
         // Create a sequence of events to test counter logic
         // CPU 0 and CPU 2 are hyperthread peers (0 + 4/2 = 2)
@@ -363,9 +317,23 @@ mod tests {
             vec![Some(100), Some(200), Some(100), Some(0), Some(0), Some(0)], // Same process, different process, same process, kernel
         );
 
-        let result = analysis
-            .process_record_batch(&batch, &output_schema)
-            .unwrap();
+        let new_columns = analysis.process_record_batch(&batch).unwrap();
+
+        // Create test output batch to check values
+        let mut output_columns = batch.columns().to_vec();
+        output_columns.extend(new_columns);
+        let result = RecordBatch::try_new(
+            Arc::new(Schema::new(
+                create_test_schema()
+                    .fields()
+                    .iter()
+                    .cloned()
+                    .chain(analysis.new_columns_schema().into_iter())
+                    .collect::<Vec<_>>(),
+            )),
+            output_columns,
+        )
+        .unwrap();
 
         let same_process_col = result
             .column_by_name("ns_peer_same_process")
@@ -421,9 +389,7 @@ mod tests {
 
     #[test]
     fn test_same_process_detection() {
-        let mut analysis = HyperthreadAnalysis::new(4, PathBuf::from("/tmp/test.parquet")).unwrap();
-        let input_schema = create_test_schema();
-        let output_schema = analysis.create_output_schema(&input_schema).unwrap();
+        let mut analysis = HyperthreadAnalysis::new(4).unwrap();
 
         // Both CPUs 0 and 2 run the same process (PID 100)
         let batch = create_test_batch(
@@ -433,9 +399,23 @@ mod tests {
             vec![Some(100), Some(100), Some(100)],
         );
 
-        let result = analysis
-            .process_record_batch(&batch, &output_schema)
-            .unwrap();
+        let new_columns = analysis.process_record_batch(&batch).unwrap();
+
+        // Create test output batch to check values
+        let mut output_columns = batch.columns().to_vec();
+        output_columns.extend(new_columns);
+        let result = RecordBatch::try_new(
+            Arc::new(Schema::new(
+                create_test_schema()
+                    .fields()
+                    .iter()
+                    .cloned()
+                    .chain(analysis.new_columns_schema().into_iter())
+                    .collect::<Vec<_>>(),
+            )),
+            output_columns,
+        )
+        .unwrap();
 
         let same_process_col = result
             .column_by_name("ns_peer_same_process")
@@ -451,9 +431,7 @@ mod tests {
 
     #[test]
     fn test_null_next_tgid_on_context_switch_errors() {
-        let mut analysis = HyperthreadAnalysis::new(4, PathBuf::from("/tmp/test.parquet")).unwrap();
-        let input_schema = create_test_schema();
-        let output_schema = analysis.create_output_schema(&input_schema).unwrap();
+        let mut analysis = HyperthreadAnalysis::new(4).unwrap();
 
         // Context switch with null next_tgid should error
         let batch = create_test_batch(
@@ -463,7 +441,7 @@ mod tests {
             vec![None], // null next_tgid on context switch
         );
 
-        let result = analysis.process_record_batch(&batch, &output_schema);
+        let result = analysis.process_record_batch(&batch);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -473,9 +451,7 @@ mod tests {
 
     #[test]
     fn test_non_context_switch_with_null_next_tgid() {
-        let mut analysis = HyperthreadAnalysis::new(4, PathBuf::from("/tmp/test.parquet")).unwrap();
-        let input_schema = create_test_schema();
-        let output_schema = analysis.create_output_schema(&input_schema).unwrap();
+        let mut analysis = HyperthreadAnalysis::new(4).unwrap();
 
         // Non-context switch with null next_tgid should be fine
         let batch = create_test_batch(
@@ -485,7 +461,7 @@ mod tests {
             vec![None],  // null next_tgid is OK for non-context switch
         );
 
-        let result = analysis.process_record_batch(&batch, &output_schema);
+        let result = analysis.process_record_batch(&batch);
         assert!(result.is_ok());
     }
 }
