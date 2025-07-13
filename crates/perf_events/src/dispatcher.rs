@@ -157,6 +157,19 @@ impl Dispatcher {
         }
         Ok(())
     }
+
+    /// Dispatches events until the reader is empty or the next event timestamp is >= until_timestamp_ns
+    pub fn dispatch_until(&mut self, reader: &mut Reader, until_timestamp_ns: u64) -> Result<(), DispatchError> {
+        while !reader.is_empty() {
+            // Check if the next event's timestamp is past our cutoff
+            let timestamp = reader.peek_timestamp()?;
+            if timestamp >= until_timestamp_ns {
+                return Ok(());
+            }
+            self.dispatch(reader)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Dispatcher {

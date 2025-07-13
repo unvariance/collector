@@ -7,6 +7,17 @@ use std::time::Duration;
 
 pub mod sync_timer;
 
+/// Get the current monotonic time in nanoseconds
+pub fn now_monotonic_ns() -> u64 {
+    let mut time = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let ret = unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) };
+    assert!(ret == 0);
+    (time.tv_sec as u64) * 1_000_000_000 + (time.tv_nsec as u64)
+}
+
 // Include the generated skeletons
 mod bpf {
     include!("bpf/collector.skel.rs");
@@ -166,8 +177,11 @@ impl BpfLoader {
         // Start a read batch
         reader_mut.start()?;
 
-        // Dispatch all available events
-        self.dispatcher.dispatch_all(reader_mut)?;
+        // Get current monotonic time in nanoseconds as the cutoff
+        let now_ns = now_monotonic_ns();
+
+        // Dispatch events until current time
+        self.dispatcher.dispatch_until(reader_mut, now_ns)?;
 
         // Finish the read batch
         reader_mut.finish()?;
