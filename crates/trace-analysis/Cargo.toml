@@ -13,3 +13,4 @@ parquet = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 anyhow = { workspace = true }
+csv = { workspace = true }

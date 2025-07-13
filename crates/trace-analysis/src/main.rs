@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 mod analyzer;
 mod concurrency_analysis;
 mod hyperthread_analysis;
+mod monotonicity_analysis;
 
 use analyzer::Analyzer;
 use concurrency_analysis::ConcurrencyAnalysis;
 use hyperthread_analysis::HyperthreadAnalysis;
+use monotonicity_analysis::MonotonicityAnalysis;
 
 #[derive(Parser)]
 #[command(name = "trace-analysis")]
@@ -27,7 +29,7 @@ struct Cli {
 
     #[arg(
         long,
-        help = "Analysis type to run: 'concurrency' or 'hyperthread'",
+        help = "Analysis type to run: 'concurrency', 'hyperthread', or 'monotonicity'",
         default_value = "hyperthread"
     )]
     analysis_type: String,
@@ -93,9 +95,20 @@ fn main() -> Result<()> {
             // Process the Parquet file
             analyzer.process_parquet_file(builder, analysis)?;
         }
+        "monotonicity" => {
+            // Create CSV output filename for monotonicity analysis
+            let csv_output =
+                determine_csv_output_filename(&cli.filename, cli.output_prefix.as_deref())?;
+
+            // Create monotonicity analysis module
+            let analysis = MonotonicityAnalysis::new(csv_output)?;
+
+            // Process the Parquet file
+            analyzer.process_parquet_file(builder, analysis)?;
+        }
         _ => {
             return Err(anyhow::anyhow!(
-                "Invalid analysis type: {}. Must be 'concurrency' or 'hyperthread'",
+                "Invalid analysis type: {}. Must be 'concurrency', 'hyperthread', or 'monotonicity'",
                 cli.analysis_type
             ));
         }
@@ -118,6 +131,25 @@ fn determine_output_filename(
 
     let prefix = output_prefix.unwrap_or(&base_name);
     let output_filename = format!("{}_{}_analysis.parquet", prefix, analysis_type);
+
+    if let Some(parent) = input_path.parent() {
+        Ok(parent.join(output_filename))
+    } else {
+        Ok(PathBuf::from(output_filename))
+    }
+}
+
+fn determine_csv_output_filename(
+    input_path: &Path,
+    output_prefix: Option<&str>,
+) -> Result<PathBuf> {
+    let base_name = input_path
+        .file_stem()
+        .ok_or_else(|| anyhow::anyhow!("Invalid input filename"))?
+        .to_string_lossy();
+
+    let prefix = output_prefix.unwrap_or(&base_name);
+    let output_filename = format!("{}_monotonicity_analysis.csv", prefix);
 
     if let Some(parent) = input_path.parent() {
         Ok(parent.join(output_filename))
