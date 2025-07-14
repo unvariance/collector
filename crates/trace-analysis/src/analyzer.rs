@@ -6,6 +6,7 @@ use parquet::arrow::ArrowWriter;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tqdm::pbar;
 
 const READER_BATCH_SIZE: usize = 32 * 1024; // 32k rows per batch
 
@@ -36,6 +37,15 @@ impl Analyzer {
         mut analysis: A,
     ) -> Result<()> {
         let input_schema = builder.schema().clone();
+
+        // Calculate total rows from metadata
+        let total_rows: usize = builder
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|rg| rg.num_rows() as usize)
+            .sum();
+
         let mut arrow_reader = builder
             .with_batch_size(READER_BATCH_SIZE)
             .build()
@@ -55,6 +65,9 @@ impl Analyzer {
         let mut writer = ArrowWriter::try_new(output_file, Arc::new(output_schema.clone()), None)
             .with_context(|| "Failed to create Arrow writer")?;
 
+        // Initialize progress bar
+        let mut progress_bar = pbar(Some(total_rows));
+
         // Process record batches
         while let Some(batch) = arrow_reader.next() {
             let batch = batch.with_context(|| "Failed to read record batch")?;
@@ -63,8 +76,12 @@ impl Analyzer {
             writer
                 .write(&augmented_batch)
                 .with_context(|| "Failed to write augmented batch")?;
+
+            // Update progress bar
+            progress_bar.update(batch.num_rows()).unwrap();
         }
 
+        progress_bar.close()?;
         writer.close().with_context(|| "Failed to close writer")?;
         Ok(())
     }
