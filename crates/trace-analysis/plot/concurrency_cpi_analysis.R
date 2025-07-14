@@ -124,7 +124,7 @@ create_concurrency_plots <- function(data, plot_title) {
     # Create CPI heat map
     heatmap_plot <- ggplot(proc_heatmap_data, aes(x = concurrency_midpoint, y = cpi_midpoint, fill = proportion)) +
       geom_tile(width = proc_heatmap_data$concurrency_width[1], height = proc_heatmap_data$cpi_width[1]) +
-      scale_fill_viridis_c(name = "Proportion\nof Instructions", trans = "sqrt") +
+      scale_fill_viridis_c(name = "Proportion\nof Instructions", trans = "sqrt", na.value = "#2c2c54") +
       labs(
         title = proc,
         x = NULL,
@@ -133,6 +133,8 @@ create_concurrency_plots <- function(data, plot_title) {
       theme_minimal() +
       theme(
         panel.grid = element_blank(),
+        panel.background = element_rect(fill = "#2c2c54", color = NA),  # Dark background for missing data
+        plot.background = element_rect(fill = "white", color = NA),
         axis.title = element_text(size = 8),
         axis.text = element_text(size = 7),
         axis.text.x = element_blank(),
