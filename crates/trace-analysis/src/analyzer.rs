@@ -7,6 +7,8 @@ use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+const READER_BATCH_SIZE: usize = 32 * 1024; // 32k rows per batch
+
 /// Trait for analysis modules that process record batches and add new columns
 pub trait Analysis {
     /// Process a record batch and return new columns to be added
@@ -35,6 +37,7 @@ impl Analyzer {
     ) -> Result<()> {
         let input_schema = builder.schema().clone();
         let mut arrow_reader = builder
+            .with_batch_size(READER_BATCH_SIZE)
             .build()
             .with_context(|| "Failed to build Arrow reader")?;
 
