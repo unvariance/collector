@@ -34,7 +34,9 @@ cat("Loaded", nrow(df), "rows\n")
 df <- df %>%
   mutate(
     concurrency_midpoint = (concurrency_min + concurrency_max) / 2,
-    cpi_midpoint = (cpi_min + cpi_max) / 2
+    cpi_midpoint = (cpi_min + cpi_max) / 2,
+    concurrency_width = concurrency_max - concurrency_min,
+    cpi_width = cpi_max - cpi_min
   ) %>%
   filter(instructions > 0)
 
@@ -65,7 +67,11 @@ create_concurrency_plots <- function(data, plot_title) {
   # Prepare data for instruction count bar chart
   instruction_data <- data %>%
     group_by(process_name, concurrency_midpoint) %>%
-    summarise(total_instructions = sum(instructions), .groups = 'drop')
+    summarise(
+      total_instructions = sum(instructions),
+      concurrency_width = first(concurrency_width),
+      .groups = 'drop'
+    )
   
   # Prepare data for CPI heat map
   # The data is already in the format we need (concurrency_midpoint, cpi_midpoint, instructions)
@@ -97,7 +103,7 @@ create_concurrency_plots <- function(data, plot_title) {
     
     # Create instruction count bar chart
     bar_plot <- ggplot(proc_instruction_data, aes(x = concurrency_midpoint, y = total_instructions)) +
-      geom_col(fill = "#2E86AB", alpha = 0.7, width = 0.4) +
+      geom_col(fill = "#2E86AB", alpha = 0.7, width = proc_instruction_data$concurrency_width[1]) +
       scale_y_continuous(labels = function(x) {
         ifelse(x >= 1e9, paste0(round(x/1e9, 1), "B"),
                ifelse(x >= 1e6, paste0(round(x/1e6, 1), "M"),
@@ -117,7 +123,7 @@ create_concurrency_plots <- function(data, plot_title) {
     
     # Create CPI heat map
     heatmap_plot <- ggplot(proc_heatmap_data, aes(x = concurrency_midpoint, y = cpi_midpoint, fill = proportion)) +
-      geom_tile(width = 0.5, height = 0.5) +
+      geom_tile(width = proc_heatmap_data$concurrency_width[1], height = proc_heatmap_data$cpi_width[1]) +
       scale_fill_viridis_c(name = "Proportion\nof Instructions", trans = "sqrt") +
       labs(
         title = proc,
