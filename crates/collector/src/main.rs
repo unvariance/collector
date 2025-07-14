@@ -35,6 +35,12 @@ use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
 
+/// Number of perf ring buffer pages for timeslot mode
+const TIMESLOT_PERF_RING_PAGES: u32 = 32;
+
+/// Number of perf ring buffer pages for trace mode (needs more buffering)
+const TRACE_PERF_RING_PAGES: u32 = 256;
+
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
 struct Command {
@@ -284,8 +290,13 @@ async fn main() -> Result<()> {
     // Close the tracker since we've added all tasks
     task_tracker.close();
 
-    // Create a BPF loader with the specified verbosity
-    let mut bpf_loader = BpfLoader::new()?;
+    // Create a BPF loader with the specified verbosity and appropriate buffer size
+    let perf_ring_pages = if opts.trace {
+        TRACE_PERF_RING_PAGES
+    } else {
+        TIMESLOT_PERF_RING_PAGES
+    };
+    let mut bpf_loader = BpfLoader::new(perf_ring_pages)?;
 
     // Initialize the sync timer
     bpf_loader.start_sync_timer()?;

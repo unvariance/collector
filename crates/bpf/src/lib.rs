@@ -56,7 +56,7 @@ pub struct BpfLoader {
 
 impl BpfLoader {
     /// Create a new BPF loader with initialized skeleton
-    pub fn new() -> Result<Self> {
+    pub fn new(perf_ring_pages: u32) -> Result<Self> {
         fn print_to_log(level: PrintLevel, msg: String) {
             match level {
                 PrintLevel::Debug => log::debug!("{}", msg),
@@ -111,10 +111,9 @@ impl BpfLoader {
         }
 
         // Set up the perf map reader for the events map
-        let buffer_pages = 32;
         let watermark_bytes = 0; // Wake up on every event
         let perf_map_reader =
-            PerfMapReader::new(&mut skel.maps.events, buffer_pages, watermark_bytes)
+            PerfMapReader::new(&mut skel.maps.events, perf_ring_pages, watermark_bytes)
                 .map_err(|e| anyhow!("Failed to create PerfMapReader: {}", e))?;
 
         // Create a dispatcher to handle events
