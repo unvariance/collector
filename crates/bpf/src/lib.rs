@@ -51,7 +51,7 @@ pub struct BpfLoader {
     skel: bpf::CollectorSkel<'static>,
     dispatcher: Dispatcher,
     perf_map_reader: PerfMapReader,
-    perf_timing_grace_ns: u64,
+    _perf_timing_grace_ns: u64,
 }
 
 impl BpfLoader {
@@ -124,7 +124,7 @@ impl BpfLoader {
             skel,
             dispatcher,
             perf_map_reader,
-            perf_timing_grace_ns: 100_000, // 100 microseconds grace period for timing
+            _perf_timing_grace_ns: 100_000, // 100 microseconds grace period for timing
         })
     }
 
@@ -179,16 +179,10 @@ impl BpfLoader {
         // Start a read batch
         reader_mut.start()?;
 
-        // Get current monotonic time in nanoseconds
-        let now_ns = now_monotonic_ns();
-
-        // Dispatch events until current time less than grace period
-        // be extra careful not to underflow when computing cutoff (such underflow should be extremely unlikely)
-        if now_ns > self.perf_timing_grace_ns {
-            // Compute cutoff
-            let cutoff_ns = now_ns - self.perf_timing_grace_ns;
-            self.dispatcher.dispatch_until(reader_mut, cutoff_ns)?;
-        }
+        // Use conservative dispatch to prevent event reordering
+        // This only processes events when all CPU rings have events available,
+        // ensuring no earlier timestamp can appear from any ring
+        self.dispatcher.dispatch_conservative(reader_mut)?;
 
         // Finish the read batch
         reader_mut.finish()?;

@@ -139,6 +139,15 @@ impl Reader {
         self.heap.is_empty()
     }
 
+    /// Returns true if all rings have events available (all rings are in the heap)
+    pub fn all_rings_non_empty(&self) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        self.rings.len() == self.heap.len()
+    }
+
     /// Returns the timestamp of the next event
     pub fn peek_timestamp(&self) -> Result<u64, ReaderError> {
         if !self.active {

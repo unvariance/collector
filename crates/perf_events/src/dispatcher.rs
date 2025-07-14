@@ -174,6 +174,17 @@ impl Dispatcher {
         }
         Ok(())
     }
+
+    /// Dispatches events conservatively while all rings have events available.
+    /// This ensures no event reordering by only processing events when we know
+    /// no earlier timestamp can appear from any ring (since each ring outputs
+    /// events in monotonically increasing timestamp order).
+    pub fn dispatch_conservative(&mut self, reader: &mut Reader) -> Result<(), DispatchError> {
+        while reader.all_rings_non_empty() {
+            self.dispatch(reader)?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for Dispatcher {
