@@ -1,19 +1,34 @@
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use log::error;
+use tokio::sync::mpsc;
+use tokio::time;
 
 use bpf::{msg_type, BpfLoader, TimerMigrationMsg};
+use plain;
+
+/// Event types that can be sent to the error reporting channel
+#[derive(Debug)]
+pub enum ErrorEvent {
+    LostEvents,
+}
 
 /// BPF Error Handler manages error-related BPF events like timer migration and lost samples
 pub struct BpfErrorHandler {
-    // Currently no internal state needed, but struct is kept for future extensibility
+    error_sender: Option<mpsc::Sender<ErrorEvent>>,
+    error_receiver: Option<mpsc::Receiver<ErrorEvent>>,
 }
 
 impl BpfErrorHandler {
     /// Create a new BpfErrorHandler and subscribe to error events
     pub fn new(bpf_loader: &mut BpfLoader) -> Rc<RefCell<Self>> {
-        let handler = Rc::new(RefCell::new(Self {}));
+        let (sender, receiver) = mpsc::channel(1000);
+        let handler = Rc::new(RefCell::new(Self {
+            error_sender: Some(sender),
+            error_receiver: Some(receiver),
+        }));
 
         // Subscribe to timer migration events
         let dispatcher = bpf_loader.dispatcher_mut();
@@ -30,6 +45,51 @@ impl BpfErrorHandler {
         });
 
         handler
+    }
+
+    /// Take the receiver for running the error reporting task
+    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<ErrorEvent>> {
+        self.error_receiver.take()
+    }
+
+    /// Run the error reporting task that batches and reports errors
+    pub async fn run_error_reporting(mut receiver: mpsc::Receiver<ErrorEvent>) {
+        let mut interval = time::interval(Duration::from_secs(1));
+        let mut lost_events_count = 0;
+
+        loop {
+            tokio::select! {
+                // Check for new error events
+                event = receiver.recv() => {
+                    match event {
+                        Some(ErrorEvent::LostEvents) => {
+                            lost_events_count += 1;
+                        }
+                        None => {
+                            // Channel closed, shutdown gracefully
+                            if lost_events_count > 0 {
+                                error!("Lost {} events in the last second", lost_events_count);
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Timer tick every second
+                _ = interval.tick() => {
+                    if lost_events_count > 0 {
+                        error!("Lost {} events in the last second", lost_events_count);
+                        lost_events_count = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Shutdown the error handler by closing the sender
+    pub fn shutdown(&mut self) {
+        if let Some(sender) = self.error_sender.take() {
+            drop(sender);
+        }
     }
 
     /// Handle timer migration detection events
@@ -60,6 +120,22 @@ Exiting to prevent incorrect performance measurements."#,
 
     /// Handle lost events
     fn handle_lost_events(&self, ring_index: usize, _data: &[u8]) {
-        error!("Lost events notification on ring {}", ring_index);
+        if let Some(sender) = &self.error_sender {
+            let event = ErrorEvent::LostEvents;
+            // Block on send to ensure we don't lose visibility into errors
+            if let Err(_) = sender.blocking_send(event) {
+                // Channel is closed, fall back to direct logging
+                error!(
+                    "Lost events notification on ring {} (error channel closed)",
+                    ring_index
+                );
+            }
+        } else {
+            // No sender available, fall back to direct logging
+            error!(
+                "Lost events notification on ring {} (no error sender)",
+                ring_index
+            );
+        }
     }
 }

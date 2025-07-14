@@ -304,6 +304,16 @@ async fn main() -> Result<()> {
     // Create PerfEventProcessor with the appropriate mode
     let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, processor_mode);
 
+    // Spawn error reporting task
+    let error_receiver = processor
+        .borrow_mut()
+        .take_error_receiver()
+        .ok_or_else(|| anyhow::anyhow!("Failed to take error receiver from BpfErrorHandler"))?;
+
+    task_tracker.spawn(async move {
+        PerfEventProcessor::run_error_reporting(error_receiver).await;
+    });
+
     // Attach BPF programs
     bpf_loader.attach()?;
 

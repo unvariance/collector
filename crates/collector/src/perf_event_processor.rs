@@ -6,7 +6,7 @@ use tokio::sync::mpsc;
 
 use bpf::BpfLoader;
 
-use crate::bpf_error_handler::BpfErrorHandler;
+use crate::bpf_error_handler::{BpfErrorHandler, ErrorEvent};
 use crate::bpf_perf_to_timeslot::BpfPerfToTimeslot;
 use crate::bpf_perf_to_trace::BpfPerfToTrace;
 use crate::bpf_task_tracker::BpfTaskTracker;
@@ -24,7 +24,7 @@ pub struct PerfEventProcessor {
     // BPF timeslot tracker
     _timeslot_tracker: Rc<RefCell<BpfTimeslotTracker>>,
     // BPF error handler
-    _error_handler: Rc<RefCell<BpfErrorHandler>>,
+    error_handler: Rc<RefCell<BpfErrorHandler>>,
     // BPF task tracker
     _task_tracker: Rc<RefCell<BpfTaskTracker>>,
     // Processors (exactly one will be Some based on mode)
@@ -75,7 +75,7 @@ impl PerfEventProcessor {
 
         let processor = Rc::new(RefCell::new(Self {
             _timeslot_tracker: timeslot_tracker,
-            _error_handler: error_handler,
+            error_handler: error_handler,
             _task_tracker: task_tracker,
             _perf_to_timeslot: perf_to_timeslot,
             _perf_to_trace: perf_to_trace,
@@ -84,8 +84,21 @@ impl PerfEventProcessor {
         processor
     }
 
+    /// Take the receiver from the error handler for running the error reporting task
+    pub fn take_error_receiver(&mut self) -> Option<mpsc::Receiver<ErrorEvent>> {
+        self.error_handler.borrow_mut().take_receiver()
+    }
+
+    /// Run the error reporting task
+    pub async fn run_error_reporting(receiver: mpsc::Receiver<ErrorEvent>) {
+        BpfErrorHandler::run_error_reporting(receiver).await;
+    }
+
     // Shutdown the processor and close all channels
     pub fn shutdown(&mut self) {
+        // Shutdown the error handler first
+        self.error_handler.borrow_mut().shutdown();
+
         // Shutdown the active processor based on mode
         if let Some(ref timeslot_proc) = self._perf_to_timeslot {
             timeslot_proc.borrow_mut().shutdown();
