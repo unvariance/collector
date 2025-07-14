@@ -3,6 +3,8 @@ use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{Field, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,8 +64,14 @@ impl Analyzer {
             )
         })?;
 
-        let mut writer = ArrowWriter::try_new(output_file, Arc::new(output_schema.clone()), None)
-            .with_context(|| "Failed to create Arrow writer")?;
+        // Create writer properties with Snappy compression
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        let mut writer =
+            ArrowWriter::try_new(output_file, Arc::new(output_schema.clone()), Some(props))
+                .with_context(|| "Failed to create Arrow writer")?;
 
         // Initialize progress bar
         let mut progress_bar = pbar(Some(total_rows));
