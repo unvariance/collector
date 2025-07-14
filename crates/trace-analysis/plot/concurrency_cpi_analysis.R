@@ -38,7 +38,7 @@ df <- df %>%
     concurrency_width = concurrency_max - concurrency_min,
     cpi_width = cpi_max - cpi_min
   ) %>%
-  filter(instructions > 0)
+  filter(instructions > 0, concurrency_midpoint >= 1.0)  # Remove concurrency < 1 and zero instructions
 
 cat("After processing:", nrow(df), "rows\n")
 
@@ -99,6 +99,55 @@ create_concurrency_plots <- function(data, plot_title) {
     # Skip if no data
     if (nrow(proc_instruction_data) == 0 || nrow(proc_heatmap_data) == 0) {
       next
+    }
+    
+    # Check if we should filter out extreme concurrency values for this process
+    # Calculate instruction-weighted 99th percentile for concurrency values
+    total_instructions_for_process <- sum(proc_instruction_data$total_instructions)
+    cumulative_instructions <- 0
+    
+    # Sort by concurrency and calculate cumulative instruction percentage
+    proc_sorted <- proc_instruction_data %>%
+      arrange(concurrency_midpoint) %>%
+      mutate(
+        cumulative_instructions = cumsum(total_instructions),
+        cumulative_pct = cumulative_instructions / total_instructions_for_process
+      )
+    
+    # Find the 99th percentile by instruction count
+    concurrency_99th_idx <- which(proc_sorted$cumulative_pct >= 0.99)[1]
+    if (is.na(concurrency_99th_idx)) {
+      concurrency_99th <- max(proc_sorted$concurrency_midpoint)
+    } else {
+      concurrency_99th <- proc_sorted$concurrency_midpoint[concurrency_99th_idx]
+    }
+    
+    concurrency_max <- max(proc_instruction_data$concurrency_midpoint, na.rm = TRUE)
+    concurrency_min <- min(proc_instruction_data$concurrency_midpoint, na.rm = TRUE)
+    
+    # Calculate axis ranges
+    range_with_outliers <- concurrency_max - concurrency_min
+    range_without_outliers <- concurrency_99th - concurrency_min
+    
+    # Check if removing top 1% (by instruction count) makes axis more than 1.5x smaller
+    should_filter <- (range_with_outliers > 1.5 * range_without_outliers) && (range_without_outliers > 0)
+    
+    if (should_filter) {
+      cat("  Filtering extreme concurrency values for", proc, 
+          "(range reduced from", round(range_with_outliers, 2), 
+          "to", round(range_without_outliers, 2), ")\n")
+      
+      # Filter both datasets to remove top 1%
+      proc_instruction_data <- proc_instruction_data %>%
+        filter(concurrency_midpoint <= concurrency_99th)
+      
+      proc_heatmap_data <- proc_heatmap_data %>%
+        filter(concurrency_midpoint <= concurrency_99th)
+      
+      # Skip if no data left after filtering
+      if (nrow(proc_instruction_data) == 0 || nrow(proc_heatmap_data) == 0) {
+        next
+      }
     }
     
     # Create instruction count bar chart
