@@ -83,7 +83,13 @@ fn main() -> Result<()> {
     match cli.analysis_type.as_str() {
         "concurrency" => {
             // Create concurrency analysis module
-            let analysis = ConcurrencyAnalysis::new(num_cpus)?;
+            let mut analysis = ConcurrencyAnalysis::new(num_cpus)?;
+            
+            // Set CSV output paths
+            let total_csv_path = determine_csv_output_filename(&cli.filename, cli.output_prefix.as_deref(), "total_concurrency")?;
+            let same_process_csv_path = determine_csv_output_filename(&cli.filename, cli.output_prefix.as_deref(), "same_process_concurrency")?;
+            analysis.set_csv_paths(total_csv_path.to_string_lossy().to_string(), 
+                                  same_process_csv_path.to_string_lossy().to_string());
 
             // Process the Parquet file
             analyzer.process_parquet_file(builder, analysis)?;
@@ -98,7 +104,7 @@ fn main() -> Result<()> {
         "monotonicity" => {
             // Create CSV output filename for monotonicity analysis
             let csv_output =
-                determine_csv_output_filename(&cli.filename, cli.output_prefix.as_deref())?;
+                determine_csv_output_filename(&cli.filename, cli.output_prefix.as_deref(), "monotonicity_analysis")?;
 
             // Create monotonicity analysis module
             let analysis = MonotonicityAnalysis::new(csv_output)?;
@@ -142,6 +148,7 @@ fn determine_output_filename(
 fn determine_csv_output_filename(
     input_path: &Path,
     output_prefix: Option<&str>,
+    suffix: &str,
 ) -> Result<PathBuf> {
     let base_name = input_path
         .file_stem()
@@ -149,7 +156,7 @@ fn determine_csv_output_filename(
         .to_string_lossy();
 
     let prefix = output_prefix.unwrap_or(&base_name);
-    let output_filename = format!("{}_monotonicity_analysis.csv", prefix);
+    let output_filename = format!("{}_{}.csv", prefix, suffix);
 
     if let Some(parent) = input_path.parent() {
         Ok(parent.join(output_filename))
