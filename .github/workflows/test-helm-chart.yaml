@@ -90,7 +90,7 @@ jobs:
           echo "Node(s) registered, waiting for Ready status..."
           kubectl wait --for=condition=Ready nodes --all --timeout=300s      
 
-      - name: Wait for kube-system pods
+      - name: (k8s) Wait for kube-system pods
         run: |
           echo "Waiting for at least one kube-system pod to be registered..."
           until [ $(kubectl get pods --namespace kube-system --no-headers | wc -l) -gt 0 ]; do
@@ -98,7 +98,37 @@ jobs:
             echo "Still waiting for kube-system pod registration..."
           done
           echo "Kube-system pod(s) registered, waiting for Ready status..."
-          kubectl wait --namespace kube-system --for=condition=Ready pods --all --timeout=300s
+          for i in {1..10}; do
+            echo "Attempt $i of 10: Waiting for kube-system pods (10s timeout)..."
+            if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout=10s; then
+              echo "All kube-system pods are ready!"
+              break
+            elif [ $i -eq 10 ]; then
+              echo "Final attempt failed. Gathering diagnostic information..."
+              
+              echo "=== KUBE-SYSTEM PODS STATUS ==="
+              kubectl get pods --namespace kube-system -o wide
+              
+              echo "=== KUBE-SYSTEM PODS DESCRIPTIONS ==="
+              kubectl get pods --namespace kube-system --no-headers | awk '{print $1}' | while read pod; do
+                echo "--- Describing pod: $pod ---"
+                kubectl describe pod "$pod" --namespace kube-system
+                echo
+              done
+              
+              echo "=== NODE DESCRIPTION ==="
+              NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+              kubectl describe node "$NODE_NAME"
+              
+              echo "=== CLUSTER EVENTS ==="
+              kubectl get events --all-namespaces --sort-by='.lastTimestamp'
+              
+              echo "Exiting with error."
+              exit 1
+            else
+              echo "Attempt $i failed. Retrying..."
+            fi
+          done
 
       - name: Get Default objects in kube-system
         run: | 
