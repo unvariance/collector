@@ -1,5 +1,5 @@
 [![Collector](https://github.com/unvariance/collector/actions/workflows/test-ebpf-collector.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/test-ebpf-collector.yaml)
-[![Helm Chart](https://github.com/yonch/memory-collector/actions/workflows/test-helm-chart.yaml/badge.svg)](https://github.com/yonch/memory-collector/actions/workflows/test-helm-chart.yaml)
+[![Helm Chart](https://github.com/unvariance/collector/actions/workflows/test-helm-chart.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/test-helm-chart.yaml)
 [![Benchmark](https://github.com/unvariance/collector/actions/workflows/benchmark.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/benchmark.yaml)
 
 
