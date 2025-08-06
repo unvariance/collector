@@ -1,6 +1,6 @@
 {
     "name": "Rust + eBPF Collector Development",
-    "dockerFile": "Dockerfile.devcontainer",
+    "dockerFile": "Containerfile",
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
     "customizations": {
