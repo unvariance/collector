@@ -29,6 +29,10 @@ inputs:
     description: 'Script to run before installing the GitHub runner'
     required: false
     default: ''
+  runner-home-dir:
+    description: 'Home directory for the GitHub runner'
+    required: false
+    default: ''
   aws-resource-tags:
     description: 'Custom resource tags in JSON format'
     required: false
@@ -85,6 +89,10 @@ inputs:
           "us-east-2": "ami-04f167a56786e4b09"
         }
       }
+  packages:
+    description: 'Additional packages to install on the runner as JSON array'
+    required: false
+    default: '[]'
 
 outputs:
   runner-label:
@@ -207,7 +215,7 @@ runs:
     # Start EC2 runner with availability-zones-config
     - name: Start EC2 runner
       id: start-ec2-runner
-      uses: yonch/ec2-github-runner@feature/multiple-az
+      uses: yonch/ec2-github-runner@feature/packages-installation
       continue-on-error: true
       with:
         mode: start
@@ -218,8 +226,10 @@ runs:
         market-type: ${{ inputs.market-type }}
         ec2-volume-size: ${{ inputs.volume-size }}
         pre-runner-script: ${{ inputs.pre-runner-script }}
+        runner-home-dir: ${{ inputs.runner-home-dir }}
         iam-role-name: ${{ inputs.iam-role-name }}
         availability-zones-config: ${{ steps.generate-configs.outputs.availability_zones_config }}
+        packages: ${{ inputs.packages }}
         aws-resource-tags: >
           [
             {"Key": "Name", "Value": "${{ inputs.runner-name-prefix }}"},
