@@ -44,7 +44,7 @@ log = "0.4.27"
 env_logger = "0.11.8"
 protobuf = "3.7.2"
 ttrpc = { git = "https://github.com/containerd/ttrpc-rust", rev = "8ac79f1ce81808ff5781cf03a11fb08c29c9ffe1", features = ["async"] }
-ttrpc-codegen = "0.5"
+ttrpc-codegen = "0.6"
 protobuf-codegen = "3.7.2"
 async-trait = "0.1"
 bytes = "1.5"
