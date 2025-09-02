@@ -12,18 +12,36 @@ The Noisy Neighbor Collector is a Kubernetes-native monitoring system that ident
 
 This project uses a pull request (PR) based workflow with squash-and-merge strategy:
 
-1. **Create a feature branch** for your changes:
+1. **Ensure upstream remote is configured**:
+   ```bash
+   # Check if upstream exists
+   git remote -v
+   
+   # If not, add upstream
+   git remote add upstream https://github.com/unvariance/collector.git
+   ```
+
+2. **Create a feature branch** for your changes:
    ```bash
    git checkout -b feature/your-feature-name
    ```
 
-2. **Make commits** on your branch (these will be squashed later)
+3. **Make commits** on your branch (these will be squashed later)
 
-3. **Submit a Pull Request** to the main branch
+4. **Push to your fork**:
+   ```bash
+   git push -u origin feature/your-feature-name
+   ```
 
-4. **Squash and merge**: The upstream repository uses squash-and-merge, combining all commits into a single commit
+5. **Submit a Pull Request to upstream** (`unvariance/collector`):
+   ```bash
+   # Create PR against upstream repository
+   gh pr create --repo unvariance/collector --base main --head YOUR_GITHUB_USERNAME:feature/your-feature-name
+   ```
 
-5. **Commit message format**: The project follows [Conventional Commits](https://www.conventionalcommits.org/) format:
+6. **Squash and merge**: The upstream repository uses squash-and-merge, combining all commits into a single commit
+
+7. **Commit message format**: The project follows [Conventional Commits](https://www.conventionalcommits.org/) format:
    ```
    <type>(<scope>): <description>
    
