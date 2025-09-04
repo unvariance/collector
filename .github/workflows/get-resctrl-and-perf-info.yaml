@@ -75,7 +75,40 @@ jobs:
           grep -E "cat_l3|cdp_l3|cqm_occup_llc|cqm_mbm_total|cqm_mbm_local" /proc/cpuinfo || true
           
           # we do not unmount, maybe mounting affects the intel_cqm checks below
-          #sudo umount /sys/fs/resctrl || true           
+          #sudo umount /sys/fs/resctrl || true
+      - name: List all resctrl files
+        run: |
+          echo "=== Complete resctrl filesystem listing ==="
+          find /sys/fs/resctrl -type f 2>/dev/null | sort || true
+          
+          echo ""
+          echo "=== Directory structure ==="
+          find /sys/fs/resctrl -type d 2>/dev/null | sort || true
+          
+          echo ""
+          echo "=== Counting domains ==="
+          echo "L3 domains:"
+          ls -d /sys/fs/resctrl/info/L3/*/cpus 2>/dev/null | wc -l || echo "L3 not available"
+          
+          echo "L3_MON domains:"
+          ls -d /sys/fs/resctrl/info/L3_MON/*/cpus 2>/dev/null | wc -l || echo "L3_MON not available"
+          
+          echo "L2 domains (if present):"
+          ls -d /sys/fs/resctrl/info/L2/*/cpus 2>/dev/null | wc -l || echo "L2 not available"
+          
+          echo "MB domains (if present):"
+          ls -d /sys/fs/resctrl/info/MB/*/cpus 2>/dev/null | wc -l || echo "MB not available"
+          
+          echo ""
+          echo "=== Domain details ==="
+          for dir in /sys/fs/resctrl/info/*/; do
+            if [ -d "$dir" ]; then
+              resource=$(basename "$dir")
+              echo "Resource: $resource"
+              ls -la "$dir" 2>/dev/null || true
+              echo ""
+            fi
+          done
       - name: Check intel_cqm
         run: |
           echo "*** Listing /sys/devices/intel_cqm"
