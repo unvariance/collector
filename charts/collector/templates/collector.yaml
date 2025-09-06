@@ -58,6 +58,32 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: nri-init
+          image: "{{ .Values.nri.initContainer.image.repository }}:{{ .Values.nri.initContainer.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            {{- toYaml .Values.nri.initContainer.securityContext | nindent 12 }}
+          command: ["/scripts/nri-init.sh"]
+          env:
+            - name: NRI_CONFIGURE
+              value: "{{ .Values.nri.configure }}"
+            - name: NRI_RESTART
+              value: "{{ .Values.nri.restart }}"
+          resources:
+            {{- toYaml .Values.nri.initContainer.resources | nindent 12 }}
+          volumeMounts:
+            - name: nri-init-script
+              mountPath: /scripts
+            - name: etc-containerd
+              mountPath: /etc/containerd
+            - name: var-lib-rancher
+              mountPath: /var/lib/rancher
+            - name: var-run
+              mountPath: /var/run
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -115,6 +141,26 @@ spec:
         - name: data-volume
           emptyDir: {}
         {{- end }}
+        - name: nri-init-script
+          configMap:
+            name: {{ include "collector.fullname" . }}-nri-init
+            defaultMode: 0755
+        - name: etc-containerd
+          hostPath:
+            path: /etc/containerd
+            type: DirectoryOrCreate
+        - name: var-lib-rancher
+          hostPath:
+            path: /var/lib/rancher
+            type: DirectoryOrCreate
+        - name: var-run
+          hostPath:
+            path: /var/run
+            type: Directory
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
         - name: sys-kernel-debug
           hostPath:
             path: /sys/kernel/debug

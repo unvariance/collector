@@ -99,4 +99,25 @@ podAnnotations: {}
 podLabels: {}
 
 # Additional environment variables
-extraEnv: [] 
+extraEnv: []
+
+# NRI (Node Resource Interface) configuration
+# NRI enables the collector to access pod and container metadata
+nri:
+  # Whether to configure NRI when socket is missing
+  configure: true
+  # Whether to restart containerd after configuration (requires maintenance window)
+  restart: false
+  # Init container configuration
+  initContainer:
+    image:
+      # Default to busybox, can be overridden with custom image
+      repository: busybox
+      tag: "1.36"
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      # No requests specified for ephemeral init container 

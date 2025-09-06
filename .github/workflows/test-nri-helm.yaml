@@ -1,0 +1,356 @@
+name: Test NRI Helm Integration
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'charts/collector/**'
+      - '.github/workflows/test-nri-helm.yaml'
+  pull_request:
+    paths:
+      - 'charts/collector/**'
+      - '.github/workflows/test-nri-helm.yaml'
+  workflow_dispatch:
+
+jobs:
+  helm-lint:
+    name: Helm Chart Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+      
+      - name: Lint Helm chart
+        run: |
+          helm lint charts/collector
+      
+      - name: Lint with NRI disabled values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-disabled-values.yaml
+      
+      - name: Lint with NRI configure-only values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-configure-only-values.yaml
+      
+      - name: Lint with NRI full setup values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-full-setup-values.yaml
+
+  helm-template:
+    name: Test Helm Template Rendering
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        values:
+          - name: "Default values"
+            file: ""
+            checks:
+              - "nri-init container present"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*false"
+          - name: "NRI disabled"
+            file: "charts/collector/ci/nri-disabled-values.yaml"
+            checks:
+              - "nri-init container present"
+              - "NRI_CONFIGURE.*false"
+              - "NRI_RESTART.*false"
+          - name: "NRI configure only"
+            file: "charts/collector/ci/nri-configure-only-values.yaml"
+            checks:
+              - "nri-init container present"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*false"
+          - name: "NRI full setup"
+            file: "charts/collector/ci/nri-full-setup-values.yaml"
+            checks:
+              - "nri-init container present"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*true"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+      
+      - name: Template chart - ${{ matrix.values.name }}
+        run: |
+          if [ -z "${{ matrix.values.file }}" ]; then
+            helm template test-release charts/collector > /tmp/rendered.yaml
+          else
+            helm template test-release charts/collector -f ${{ matrix.values.file }} > /tmp/rendered.yaml
+          fi
+          
+          echo "=== Rendered template ==="
+          cat /tmp/rendered.yaml
+      
+      - name: Verify expected content
+        run: |
+          for check in ${{ join(matrix.values.checks, ' ') }}; do
+            if grep -q "$check" /tmp/rendered.yaml; then
+              echo "✓ Found: $check"
+            else
+              echo "✗ Missing: $check"
+              exit 1
+            fi
+          done
+      
+      - name: Verify ConfigMap exists
+        run: |
+          if grep -q "kind: ConfigMap" /tmp/rendered.yaml && grep -q "nri-init.sh" /tmp/rendered.yaml; then
+            echo "✓ NRI init ConfigMap found"
+          else
+            echo "✗ NRI init ConfigMap missing"
+            exit 1
+          fi
+      
+      - name: Verify volume mounts
+        run: |
+          required_volumes="nri-init-script etc-containerd var-lib-rancher var-run"
+          for vol in $required_volumes; do
+            if grep -q "name: $vol" /tmp/rendered.yaml; then
+              echo "✓ Volume $vol found"
+            else
+              echo "✗ Volume $vol missing"
+              exit 1
+            fi
+          done
+
+  test-helm-install:
+    name: Test Helm Installation
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        k8s_version: ["1.27", "1.28", "1.29", "1.30"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          node_image: kindest/node:v${{ matrix.k8s_version }}.0
+          cluster_name: test-cluster
+      
+      - name: Install Helm chart with NRI disabled
+        run: |
+          helm install test-collector charts/collector \
+            -f charts/collector/ci/nri-disabled-values.yaml \
+            --wait --timeout 2m
+      
+      - name: Check pod status
+        run: |
+          kubectl get pods -l app.kubernetes.io/name=collector
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
+      
+      - name: Check init container logs
+        run: |
+          # Get pod name
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          
+          echo "=== NRI Init Container Logs ==="
+          kubectl logs $POD -c nri-init
+          
+          # Verify expected log messages
+          if kubectl logs $POD -c nri-init | grep -q "NRI_CONFIGURE=false"; then
+            echo "✓ NRI configure disabled as expected"
+          else
+            echo "✗ NRI configure not properly disabled"
+            exit 1
+          fi
+      
+      - name: Uninstall chart
+        run: |
+          helm uninstall test-collector
+      
+      - name: Install Helm chart with NRI configure-only
+        run: |
+          helm install test-collector charts/collector \
+            -f charts/collector/ci/nri-configure-only-values.yaml \
+            --wait --timeout 2m
+      
+      - name: Check configuration was attempted
+        run: |
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          
+          echo "=== NRI Init Container Logs (Configure Only) ==="
+          kubectl logs $POD -c nri-init
+          
+          # Verify configuration was attempted
+          if kubectl logs $POD -c nri-init | grep -q "NRI_CONFIGURE=true"; then
+            echo "✓ NRI configure enabled as expected"
+          fi
+          
+          if kubectl logs $POD -c nri-init | grep -q "NRI_RESTART=false"; then
+            echo "✓ NRI restart disabled as expected"
+          fi
+
+  test-daemonset-deployment:
+    name: Test DaemonSet vs Deployment Modes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Create kind cluster with 3 nodes
+        uses: helm/kind-action@v1
+        with:
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+            - role: worker
+            - role: worker
+      
+      - name: Test DaemonSet mode (default)
+        run: |
+          helm install test-ds charts/collector \
+            --set deployment.mode=all \
+            --set storage.type=local \
+            --wait --timeout 2m
+          
+          # Verify DaemonSet created
+          kubectl get daemonset
+          
+          # Count pods - should be on all worker nodes (2)
+          POD_COUNT=$(kubectl get pods -l app.kubernetes.io/name=collector --no-headers | wc -l)
+          echo "Pod count in DaemonSet mode: $POD_COUNT"
+          
+          if [ "$POD_COUNT" -ge 2 ]; then
+            echo "✓ DaemonSet deployed on multiple nodes"
+          else
+            echo "✗ DaemonSet not deployed correctly"
+            exit 1
+          fi
+          
+          helm uninstall test-ds
+      
+      - name: Test Deployment mode
+        run: |
+          helm install test-deploy charts/collector \
+            --set deployment.mode=sample \
+            --set deployment.sampleSize=2 \
+            --set storage.type=local \
+            --wait --timeout 2m
+          
+          # Verify Deployment created
+          kubectl get deployment
+          
+          # Count pods - should be exactly sampleSize
+          POD_COUNT=$(kubectl get pods -l app.kubernetes.io/name=collector --no-headers | wc -l)
+          echo "Pod count in Deployment mode: $POD_COUNT"
+          
+          if [ "$POD_COUNT" -eq 2 ]; then
+            echo "✓ Deployment has correct replica count"
+          else
+            echo "✗ Deployment replica count incorrect"
+            exit 1
+          fi
+          
+          # Verify pods are on different nodes
+          NODES=$(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[*].spec.nodeName}' | tr ' ' '\n' | sort -u | wc -l)
+          echo "Pods distributed across $NODES nodes"
+          
+          if [ "$NODES" -eq 2 ]; then
+            echo "✓ Pods correctly distributed across nodes"
+          else
+            echo "✗ Pod anti-affinity not working"
+            exit 1
+          fi
+
+  test-init-container-failure-handling:
+    name: Test Init Container Failure Handling
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: test-cluster
+      
+      - name: Modify init script to simulate various scenarios
+        run: |
+          # Create a modified values file that uses busybox instead of our custom image
+          cat > /tmp/test-values.yaml <<EOF
+          storage:
+            type: local
+          nri:
+            configure: true
+            restart: false
+            initContainer:
+              image:
+                repository: busybox
+                tag: latest
+          EOF
+      
+      - name: Install chart with busybox init container
+        run: |
+          helm install test-collector charts/collector \
+            -f /tmp/test-values.yaml \
+            --wait --timeout 2m
+      
+      - name: Verify collector still runs despite init container
+        run: |
+          # Check that main collector container is running
+          kubectl get pods -l app.kubernetes.io/name=collector
+          
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          
+          # Check init container completed
+          INIT_STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[0].state}')
+          echo "Init container status: $INIT_STATUS"
+          
+          # Check main container is running
+          MAIN_STATUS=$(kubectl get pod $POD -o jsonpath='{.status.containerStatuses[0].state}')
+          echo "Main container status: $MAIN_STATUS"
+          
+          if echo "$MAIN_STATUS" | grep -q "running"; then
+            echo "✓ Main collector container is running"
+          else
+            echo "✗ Main collector container failed to start"
+            exit 1
+          fi
+
+  security-scan:
+    name: Security Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run Trivy on init container Dockerfile
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: 'images/nri-init/Dockerfile'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+      
+      - name: Validate init container runs as root (required for config changes)
+        run: |
+          if grep -q "privileged: true" charts/collector/values.yaml; then
+            echo "✓ Init container configured with required privileges"
+          else
+            echo "✗ Init container missing required privileges"
+            exit 1
+          fi
+      
+      - name: Check for sensitive data exposure
+        run: |
+          # Ensure no credentials or sensitive data in scripts
+          if grep -E "(password|secret|token|key)" charts/collector/scripts/nri-init.sh | grep -v "^#"; then
+            echo "✗ Potential sensitive data found in script"
+            exit 1
+          else
+            echo "✓ No sensitive data found in script"
+          fi

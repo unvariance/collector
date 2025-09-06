@@ -1,0 +1,7 @@
+# Test values for NRI disabled (detection only)
+nri:
+  configure: false
+  restart: false
+
+storage:
+  type: local

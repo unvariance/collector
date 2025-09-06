@@ -1,0 +1,7 @@
+# Test values for NRI configuration without restart (default)
+nri:
+  configure: true
+  restart: false
+
+storage:
+  type: local

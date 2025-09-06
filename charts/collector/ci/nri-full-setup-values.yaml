@@ -1,0 +1,8 @@
+# Test values for full NRI setup with restart
+# WARNING: Only use in test environments
+nri:
+  configure: true
+  restart: true
+
+storage:
+  type: local
