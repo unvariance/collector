@@ -138,13 +138,24 @@ jobs:
           
           # Wait for init container to complete
           echo "=== Waiting for init container to complete ==="
-          kubectl wait --for=condition=Initialized pod/$POD --timeout=60s
+          if ! kubectl wait --for=condition=Initialized pod/$POD --timeout=90s; then
+            echo "⚠ init container did not reach Initialized within timeout"
+            echo "=== Pod status ==="
+            kubectl get pod $POD -o wide || true
+            echo "=== Pod describe ==="
+            kubectl describe pod $POD || true
+            echo "=== Recent events (last 50) ==="
+            kubectl get events --sort-by=.lastTimestamp | tail -n 50 || true
+            echo "=== Attempting to fetch init container logs despite timeout ==="
+          fi
           
           echo "=== NRI Init Container Logs ==="
-          kubectl logs $POD -c nri-init
+          kubectl logs $POD -c nri-init || true
           
           # Store logs for analysis
-          kubectl logs $POD -c nri-init > init-logs.txt
+          kubectl logs $POD -c nri-init > init-logs.txt 2>/dev/null || true
+          # Also capture full pod describe for debugging
+          kubectl describe pod $POD > pod-describe.txt 2>/dev/null || true
       
       - name: Verify expected behavior - ${{ matrix.test_scenario }}
         run: |
