@@ -351,13 +351,24 @@ jobs:
             echo "✗ NRI is not enabled in config"
             exit 1
           fi
-          
+
           # Create NRI socket directory and verify socket appears
           sudo mkdir -p /var/run/nri
-          
+
           # Restart containerd one more time to apply config
           sudo systemctl restart containerd
-          sleep 3
+          # Wait a bit for NRI socket to be created (containerd >= 1.7)
+          for i in {1..30}; do
+            if [ -S /var/run/nri/nri.sock ]; then
+              echo "✓ NRI socket present after restart"
+              break
+            fi
+            sleep 1
+          done
+          if [ ! -S /var/run/nri/nri.sock ] && [ "${{ matrix.containerd_version }}" != "1.6.33" ]; then
+            echo "✗ NRI socket not found after restart"
+            exit 1
+          fi
           
           # Verify that running the script again with restart still works
           echo "=== Running NRI init script again with restart (should be idempotent) ==="
@@ -460,13 +471,20 @@ jobs:
           # Verify that running the script again with restart still works (idempotency)
           echo "=== Running NRI init script again with restart (should be idempotent) ==="
           sudo -E bash charts/collector/scripts/nri-init.sh || true
-          
+
           # Verify K3s is still running
           if sudo systemctl is-active k3s; then
             echo "✓ K3s is running after second restart attempt"
           else
             echo "✗ K3s failed after second restart attempt"
             exit 1
+          fi
+
+          # Best-effort check for NRI socket (may depend on K3s/containerd build)
+          if [ -S /var/run/nri/nri.sock ]; then
+            echo "✓ NRI socket present after K3s restart"
+          else
+            echo "ℹ NRI socket not found after K3s restart (non-fatal)"
           fi
           
           # Check if actual containerd config was updated (K3s generates this from template)
@@ -568,8 +586,15 @@ jobs:
           # Step 3: Manually restart containerd to apply config
           echo "=== Step 3: Manually restart containerd ==="
           sudo systemctl restart containerd
-          sleep 3
-          
+          # Wait for NRI socket to appear (containerd >= 1.7)
+          for i in {1..30}; do
+            if [ -S /var/run/nri/nri.sock ]; then
+              echo "✓ NRI socket present after manual restart"
+              break
+            fi
+            sleep 1
+          done
+
           # Verify containerd is running
           if ! sudo systemctl is-active containerd; then
             echo "✗ Containerd failed to restart"
@@ -591,7 +616,7 @@ jobs:
           export NRI_RESTART=true
           
           sudo -E bash charts/collector/scripts/nri-init.sh || true
-          
+
           # Step 5: Verify final state
           echo "=== Step 5: Verify final state ==="
           
@@ -614,5 +639,11 @@ jobs:
           # Display final config for debugging
           echo "=== Final NRI configuration ==="
           sudo grep -A 7 'plugins."io.containerd.nri.v1.nri"' /etc/containerd/config.toml || echo "NRI config not found"
-          
-          echo "✓ Configuration changes are effective after restart"
+
+          # Final assert for NRI socket presence for 1.7.x containerd
+          if [ -S /var/run/nri/nri.sock ]; then
+            echo "✓ Configuration changes are effective after restart (socket present)"
+          else
+            echo "✗ NRI socket not found after restart"
+            exit 1
+          fi
