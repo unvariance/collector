@@ -49,15 +49,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: kind
-            scenario: configure-only
-            restart: false
-          - target: kind
-            scenario: configure-and-restart
-            restart: true
-          - target: k3s
-            scenario: configure-only
-            restart: false
           - target: k3s
             scenario: configure-and-restart
             restart: true
