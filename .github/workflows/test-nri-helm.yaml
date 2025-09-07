@@ -93,7 +93,8 @@ jobs:
       
       - name: Verify expected content
         run: |
-          for check in ${{ join(matrix.values.checks, ' ') }}; do
+          checks='${{ toJson(matrix.values.checks) }}'
+          echo "$checks" | jq -r '.[]' | while IFS= read -r check; do
             if grep -q "$check" /tmp/rendered.yaml; then
               echo "✓ Found: $check"
             else
