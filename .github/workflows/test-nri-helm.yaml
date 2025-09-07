@@ -178,7 +178,29 @@ jobs:
       
       - name: Check configuration was attempted
         run: |
+          # Wait for pod to exist
+          echo "Waiting for collector pod to be created..."
+          for i in {1..30}; do
+            if kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null; then
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          
+          # Wait for init container to complete
+          echo "Waiting for init container to complete..."
+          for i in {1..30}; do
+            STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[?(@.name=="nri-init")].state}' 2>/dev/null || echo "{}")
+            if echo "$STATUS" | grep -q "terminated"; then
+              echo "Init container completed"
+              break
+            fi
+            echo "Waiting for init container... ($i/30)"
+            sleep 2
+          done
           
           echo "=== NRI Init Container Logs (Configure Only) ==="
           kubectl logs $POD -c nri-init
