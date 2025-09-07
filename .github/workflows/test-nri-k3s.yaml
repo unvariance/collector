@@ -110,6 +110,17 @@ jobs:
       
       - name: Check NRI init container logs
         run: |
+          # Wait for pod to exist first
+          echo "=== Waiting for collector pod to be created ==="
+          for i in {1..30}; do
+            if kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+              echo "Pod created"
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           
           # Wait for init container to complete
@@ -222,6 +233,16 @@ jobs:
           fi
           
           # Check new pod logs
+          echo "=== Waiting for new collector pod after restart ==="
+          for i in {1..30}; do
+            if kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+              echo "Pod found"
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           echo "=== Init container logs after restart ==="
           kubectl logs $POD -c nri-init || true
@@ -456,6 +477,18 @@ jobs:
       - name: Verify NRI is working
         run: |
           export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          
+          # Wait for pod to exist
+          echo "=== Waiting for collector pod to be created ==="
+          for i in {1..30}; do
+            if sudo kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+              echo "Pod created"
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          
           POD=$(sudo kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           
           echo "=== NRI Init Container Logs ==="

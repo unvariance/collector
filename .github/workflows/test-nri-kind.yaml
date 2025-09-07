@@ -123,6 +123,17 @@ jobs:
       
       - name: Check NRI init container logs
         run: |
+          # Wait for pod to exist first
+          echo "=== Waiting for collector pod to be created ==="
+          for i in {1..30}; do
+            if kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+              echo "Pod created"
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           
           # Wait for init container to complete
@@ -261,6 +272,10 @@ jobs:
             --set nri.configure=${{ matrix.nri_configure }} \
             --set nri.restart=false \
             --wait --timeout=2m
+          
+          # Wait for pod to be ready
+          echo "Waiting for second deployment pod to be ready..."
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
           
           # Capture config after second run
           docker exec nri-test-${{ matrix.test_scenario }}-control-plane cat /etc/containerd/config.toml > config-after.toml

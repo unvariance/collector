@@ -276,6 +276,10 @@ jobs:
             -f charts/collector/ci/nri-disabled-values.yaml \
             --wait --timeout 2m
           
+          # Wait for pod to be created and ready
+          echo "Waiting for collector pod to be ready..."
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
+          
           # Get pod name
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           
