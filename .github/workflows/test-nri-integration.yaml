@@ -112,7 +112,8 @@ jobs:
             echo "Checking if containerd is running with NRI..."
             docker exec nri-test-control-plane ps aux | grep containerd
             
-            echo "⚠️  Continuing without NRI socket - this may indicate configuration issues"
+            echo "NRI socket is required for integration tests to work properly"
+            exit 1
           fi
           
           echo "=== Verifying cluster readiness ==="

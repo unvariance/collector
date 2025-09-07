@@ -234,7 +234,10 @@ jobs:
             if kubectl logs $POD -c nri-init 2>/dev/null | grep -q "NRI initialization check completed"; then
               echo "✓ NRI init container completed successfully"
             else
-              echo "⚠ NRI init container may not have completed properly"
+              echo "✗ NRI init container did not complete properly"
+              echo "Expected 'NRI initialization check completed' in logs"
+              kubectl logs $POD -c nri-init
+              exit 1
             fi
           fi
 

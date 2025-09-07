@@ -222,7 +222,9 @@ jobs:
               if grep -A 5 'plugins."io.containerd.nri.v1.nri"' final-config.toml | grep -q "disable = false"; then
                 echo "✓ NRI properly enabled (disable = false)"
               else
-                echo "⚠ NRI configuration present but may not be enabled"
+                echo "✗ NRI configuration present but not properly enabled"
+                echo "Expected 'disable = false' in NRI configuration"
+                exit 1
               fi
               grep -A 7 'plugins."io.containerd.nri.v1.nri"' final-config.toml
             else
@@ -233,11 +235,18 @@ jobs:
             
             # Check if socket appeared after restart
             sleep 10
-            docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/nri.sock 2>/dev/null && {
+            if docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/nri.sock 2>/dev/null; then
               echo "✓ NRI socket exists after restart!"
-            } || {
-              echo "⚠️ NRI socket not found after restart (may need manual containerd restart)"
-            }
+            else
+              echo "✗ NRI socket not found after restart"
+              echo "Expected NRI socket at /var/run/nri/nri.sock after configuration and restart"
+              # For scenarios where we expect restart to work, this should fail
+              if [ "${{ matrix.test_scenario }}" = "with-restart" ]; then
+                exit 1
+              else
+                echo "Note: Socket may require manual containerd restart for scenario: ${{ matrix.test_scenario }}"
+              fi
+            fi
           fi
       
       - name: Verify collector is running

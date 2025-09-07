@@ -228,8 +228,13 @@ jobs:
             echo "✓ NRI socket exists after restart!"
             ls -la /var/run/nri/nri.sock
           else
-            echo "⚠ NRI socket not found after restart"
-            echo "This may be expected if K3s containerd doesn't support NRI"
+            echo "✗ NRI socket not found after restart"
+            echo "Expected NRI socket at /var/run/nri/nri.sock after restart with nri.restart=true"
+            # Check if the directory exists at least
+            ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
+            # This should fail for older K3s versions that don't support NRI
+            # For newer versions, the socket should exist after restart
+            exit 1
           fi
           
           # Check new pod logs
@@ -246,6 +251,14 @@ jobs:
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           echo "=== Init container logs after restart ==="
           kubectl logs $POD -c nri-init || true
+          
+          # Verify the init container detected NRI as enabled
+          if kubectl logs $POD -c nri-init | grep -q "NRI socket verified\|NRI is already enabled"; then
+            echo "✓ Init container verified NRI is working"
+          else
+            echo "✗ Init container did not verify NRI socket after restart"
+            exit 1
+          fi
       
       - name: Verify K3s is still functional
         run: |
