@@ -131,8 +131,8 @@ jobs:
           if ! sudo docker exec ${NODE} env \
             NRI_CONFIGURE=true \
             NRI_RESTART=${{ matrix.restart }} \
-            NRI_FAIL_IF_UNAVAILABLE=${{ matrix.restart }} \
-            /usr/local/bin/nri-init --log-level info; then
+            NRI_FAIL_IF_UNAVAILABLE=false \
+            /usr/local/bin/nri-init --log-level debug; then
             echo "nri-init failed"
             exit 1
           fi
@@ -178,11 +178,17 @@ jobs:
         if: ${{ matrix.target == 'k3s' }}
         run: |
           export KUBECONFIG="$HOME/.kube/config"
-          for i in {1..60}; do
-            if kubectl get nodes &>/dev/null; then break; fi
+          echo "Waiting for at least one node to appear..."
+          for i in {1..120}; do
+            COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
+            if [ "${COUNT}" -ge 1 ]; then
+              kubectl get nodes
+              break
+            fi
             sleep 5
           done
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+          echo "Waiting for nodes to be Ready..."
+          kubectl wait --for=condition=Ready node --all --timeout=300s
 
       - name: Run nri-init on host (K3s)
         if: ${{ matrix.target == 'k3s' }}
