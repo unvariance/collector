@@ -90,6 +90,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build nri-init (release)
+        if: ${{ matrix.target == 'k3s' }}
         run: cargo build -p nri-init --release --locked --verbose
 
       - name: Install kubectl
