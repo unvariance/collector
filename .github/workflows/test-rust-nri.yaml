@@ -128,12 +128,17 @@ jobs:
 
           echo "=== Run nri-init (configure=true, restart=${{ matrix.restart }}) ==="
           # Always configure=true in these tests; fail if unavailable when restart=true
+          set -x
           if ! sudo docker exec ${NODE} env \
             NRI_CONFIGURE=true \
             NRI_RESTART=${{ matrix.restart }} \
             NRI_FAIL_IF_UNAVAILABLE=false \
             /usr/local/bin/nri-init --log-level debug; then
             echo "nri-init failed"
+            echo "=== containerd and config state ==="
+            sudo docker exec ${NODE} containerd --version || true
+            sudo docker exec ${NODE} sh -lc 'ls -l /etc/containerd || true'
+            sudo docker exec ${NODE} sh -lc 'test -f /etc/containerd/config.toml && sed -n "1,160p" /etc/containerd/config.toml || true'
             exit 1
           fi
 
@@ -195,11 +200,18 @@ jobs:
         run: |
           echo "=== Run nri-init for K3s (configure=true restart=${{ matrix.restart }}) ==="
           set -x
-          sudo ./target/release/nri-init --log-level info \
+          if ! sudo ./target/release/nri-init --log-level debug \
             --mode k3s \
             $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart" || echo "--no-restart" ) \
             --configure \
-            $( [ "${{ matrix.restart }}" = "true" ] && echo "--fail-if-unavailable" )
+            $( [ "${{ matrix.restart }}" = "true" ] && echo "--fail-if-unavailable" ); then
+            echo "nri-init (k3s) failed; dumping k3s logs and template"
+            sudo journalctl -u k3s --no-pager | tail -n 200 || true
+            sudo ls -l /var/lib/rancher/k3s/agent/etc/containerd || true
+            sudo sed -n '1,200p' /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl || true
+            sudo sed -n '1,200p' /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl || true
+            exit 1
+          fi
 
           echo "=== Verify K3s template patched ==="
           if [ -f "/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl" ]; then
