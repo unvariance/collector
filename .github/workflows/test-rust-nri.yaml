@@ -30,7 +30,6 @@ jobs:
 
   # Real environment tests (require self-hosted runner with systemd privileges)
   integration-real:
-    if: ${{ startsWith(runner.name, 'self-hosted') }}
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
