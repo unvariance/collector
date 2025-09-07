@@ -155,7 +155,6 @@ EOF
   plugin_request_timeout = "2s"
   socket_path = "/var/run/nri/nri.sock"
 EOF
-        fi
     fi
     
     log "INFO" "K3s containerd template updated"
