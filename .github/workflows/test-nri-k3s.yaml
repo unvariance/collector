@@ -474,35 +474,77 @@ jobs:
             --set nri.failIfUnavailable=true \
             --wait --timeout=3m
       
+      - name: Wait for K3s to stabilize after restart
+        run: |
+          echo "=== Waiting for K3s to stabilize after restart ==="
+          # The init container may have restarted K3s, wait for it to be ready
+          sleep 10
+          
+          # Check K3s service status
+          sudo systemctl status k3s --no-pager || true
+          
+          # Wait for API to be available
+          echo "Waiting for Kubernetes API after potential restart..."
+          for i in {1..30}; do
+            if sudo k3s kubectl get nodes &>/dev/null; then
+              echo "API is responding"
+              break
+            fi
+            echo "Waiting for API... ($i/30)"
+            sleep 2
+          done
+          
+          # Wait for nodes to be ready
+          sudo k3s kubectl wait --for=condition=Ready nodes --all --timeout=60s || true
+      
       - name: Verify NRI is working
         run: |
-          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          # Use k3s kubectl directly to avoid KUBECONFIG issues
+          echo "=== Checking K3s cluster status after restart ==="
+          sudo k3s kubectl get nodes
+          sudo k3s kubectl get pods --all-namespaces
           
           # Wait for pod to exist
           echo "=== Waiting for collector pod to be created ==="
           for i in {1..30}; do
-            if sudo kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+            if sudo k3s kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
               echo "Pod created"
               break
             fi
             echo "Waiting for pod... ($i/30)"
+            # Debug output
+            echo "Current pods:"
+            sudo k3s kubectl get pods --all-namespaces || echo "Failed to get pods"
             sleep 2
           done
           
-          POD=$(sudo kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          # Debug: Show all pods if we couldn't find collector
+          if ! sudo k3s kubectl get pod -l app.kubernetes.io/name=collector --no-headers 2>/dev/null | grep -q .; then
+            echo "=== Debug: Could not find collector pod ==="
+            echo "All pods in default namespace:"
+            sudo k3s kubectl get pods
+            echo "All pods in all namespaces:"
+            sudo k3s kubectl get pods --all-namespaces
+            echo "DaemonSet status:"
+            sudo k3s kubectl get daemonset
+            exit 1
+          fi
+          
+          POD=$(sudo k3s kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "Found pod: $POD"
           
           echo "=== NRI Init Container Logs ==="
-          sudo kubectl logs $POD -c nri-init
+          sudo k3s kubectl logs $POD -c nri-init
           
           # Check that NRI was successfully enabled
-          if sudo kubectl logs $POD -c nri-init | grep -q "NRI socket verified, exiting successfully\|NRI is already enabled and available"; then
+          if sudo k3s kubectl logs $POD -c nri-init | grep -q "NRI socket verified, exiting successfully\|NRI is already enabled and available"; then
             echo "✓ NRI is working after restart"
           else
             echo "✗ NRI should be available after restart"
-            sudo kubectl logs $POD -c nri-init
+            sudo k3s kubectl logs $POD -c nri-init
             exit 1
           fi
           
           # Verify the collector pod is running
-          sudo kubectl wait --for=condition=Ready pod/$POD --timeout=60s
+          sudo k3s kubectl wait --for=condition=Ready pod/$POD --timeout=60s
           echo "✓ Collector is running with NRI enabled"
