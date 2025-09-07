@@ -5,14 +5,12 @@ on:
     branches: [ main ]
     paths:
       - 'charts/collector/scripts/nri-init.sh'
-      - 'images/nri-init/**'
       - 'charts/collector/templates/**'
       - 'charts/collector/values.yaml'
       - '.github/workflows/test-nri-init.yaml'
   pull_request:
     paths:
       - 'charts/collector/scripts/nri-init.sh'
-      - 'images/nri-init/**'
       - 'charts/collector/templates/**'
       - 'charts/collector/values.yaml'
       - '.github/workflows/test-nri-init.yaml'
@@ -54,20 +52,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Build init container image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./images/nri-init
-          platforms: linux/amd64
-          push: false
-          tags: nri-init:test
-          load: true
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
       - name: Test container can run script
         run: |
           # Create a test script locally
@@ -80,7 +64,7 @@ jobs:
             -e NRI_CONFIGURE=false \
             -e NRI_RESTART=false \
             --entrypoint /bin/sh \
-            nri-init:test \
+            busybox:1.36 \
             -c "ls -la /scripts && /scripts/nri-init.sh || true"
 
   test-nri-detection:

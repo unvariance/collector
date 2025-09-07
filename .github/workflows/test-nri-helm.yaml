@@ -128,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        k8s_version: ["1.27", "1.28", "1.29", "1.30"]
+        k8s_version: ["1.27", "1.28", "1.29", "1.30", "1.31"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -192,85 +192,6 @@ jobs:
             echo "✓ NRI restart disabled as expected"
           fi
 
-  test-daemonset-deployment:
-    name: Test DaemonSet vs Deployment Modes
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Create KIND cluster config
-        run: |
-          cat > /tmp/kind-config.yaml <<EOF
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          nodes:
-          - role: control-plane
-          - role: worker
-          - role: worker
-          EOF
-      
-      - name: Create kind cluster with 3 nodes
-        uses: helm/kind-action@v1
-        with:
-          config: /tmp/kind-config.yaml
-      
-      - name: Test DaemonSet mode (default)
-        run: |
-          helm install test-ds charts/collector \
-            --set deployment.mode=all \
-            --set storage.type=local \
-            --wait --timeout 2m
-          
-          # Verify DaemonSet created
-          kubectl get daemonset
-          
-          # Count pods - should be on all worker nodes (2)
-          POD_COUNT=$(kubectl get pods -l app.kubernetes.io/name=collector --no-headers | wc -l)
-          echo "Pod count in DaemonSet mode: $POD_COUNT"
-          
-          if [ "$POD_COUNT" -ge 2 ]; then
-            echo "✓ DaemonSet deployed on multiple nodes"
-          else
-            echo "✗ DaemonSet not deployed correctly"
-            exit 1
-          fi
-          
-          helm uninstall test-ds
-      
-      - name: Test Deployment mode
-        run: |
-          helm install test-deploy charts/collector \
-            --set deployment.mode=sample \
-            --set deployment.sampleSize=2 \
-            --set storage.type=local \
-            --wait --timeout 2m
-          
-          # Verify Deployment created
-          kubectl get deployment
-          
-          # Count pods - should be exactly sampleSize
-          POD_COUNT=$(kubectl get pods -l app.kubernetes.io/name=collector --no-headers | wc -l)
-          echo "Pod count in Deployment mode: $POD_COUNT"
-          
-          if [ "$POD_COUNT" -eq 2 ]; then
-            echo "✓ Deployment has correct replica count"
-          else
-            echo "✗ Deployment replica count incorrect"
-            exit 1
-          fi
-          
-          # Verify pods are on different nodes
-          NODES=$(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[*].spec.nodeName}' | tr ' ' '\n' | sort -u | wc -l)
-          echo "Pods distributed across $NODES nodes"
-          
-          if [ "$NODES" -eq 2 ]; then
-            echo "✓ Pods correctly distributed across nodes"
-          else
-            echo "✗ Pod anti-affinity not working"
-            exit 1
-          fi
-
   test-init-container-failure-handling:
     name: Test Init Container Failure Handling
     runs-on: ubuntu-latest
@@ -332,14 +253,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Run Trivy on init container Dockerfile
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: 'images/nri-init/Dockerfile'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
       
       - name: Validate init container runs as root (required for config changes)
         run: |

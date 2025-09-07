@@ -31,6 +31,7 @@ jobs:
             nri_preinstalled: false
           - k3s_version: "v1.32.8+k3s1"   # Latest v1.32
             nri_preinstalled: false
+          # Note: K3s doesn't provide a "latest" tag. Update versions periodically from https://github.com/k3s-io/k3s/releases
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

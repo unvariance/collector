@@ -13,7 +13,7 @@ NRI_SOCKET_PATH="/var/run/nri/nri.sock"
 log() {
     level=$1
     shift
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*" >&2
 }
 
 # Detect if running on K3s
@@ -78,26 +78,18 @@ configure_containerd() {
         mkdir -p /etc/containerd
         cat > "$config_file" <<EOF
 version = 2
-
-[plugins."io.containerd.nri.v1.nri"]
-  disable = false
-  disable_connections = false
-  plugin_config_path = "/etc/nri/conf.d"
-  plugin_path = "/opt/nri/plugins"
-  plugin_registration_timeout = "5s"
-  plugin_request_timeout = "2s"
-  socket_path = "$NRI_SOCKET_PATH"
 EOF
+    fi
+    
+    # Check if NRI is already configured
+    if grep -q 'plugins."io.containerd.nri.v1.nri"' "$config_file"; then
+        log "INFO" "NRI section found in config, updating disable flag"
+        # Use sed to update the disable flag with flexible whitespace
+        sed -i 's/disable[[:space:]]*=[[:space:]]*true/disable = false/g' "$config_file"
     else
-        # Check if NRI is already configured
-        if grep -q 'plugins."io.containerd.nri.v1.nri"' "$config_file"; then
-            log "INFO" "NRI section found in config, updating disable flag"
-            # Use sed to update the disable flag
-            sed -i 's/disable = true/disable = false/g' "$config_file"
-        else
-            log "INFO" "Adding NRI configuration to existing config"
-            # Append NRI configuration
-            cat >> "$config_file" <<EOF
+        log "INFO" "Adding NRI configuration to existing config"
+        # Append NRI configuration
+        cat >> "$config_file" <<EOF
 
 [plugins."io.containerd.nri.v1.nri"]
   disable = false
@@ -108,7 +100,6 @@ EOF
   plugin_request_timeout = "2s"
   socket_path = "$NRI_SOCKET_PATH"
 EOF
-        fi
     fi
     
     log "INFO" "Containerd configuration updated"
@@ -143,25 +134,17 @@ version = 2
 
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
   SystemdCgroup = {{ .SystemdCgroup }}
-
-[plugins."io.containerd.nri.v1.nri"]
-  disable = false
-  disable_connections = false
-  plugin_config_path = "/etc/nri/conf.d"
-  plugin_path = "/opt/nri/plugins"
-  plugin_registration_timeout = "5s"
-  plugin_request_timeout = "2s"
-  socket_path = "/var/run/nri/nri.sock"
 EOF
+    fi
+    
+    # Check if NRI is already configured in template
+    if grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_file"; then
+        log "INFO" "NRI section found in K3s template, updating disable flag"
+        sed -i 's/disable[[:space:]]*=[[:space:]]*true/disable = false/g' "$template_file"
     else
-        # Check if NRI is already configured in template
-        if grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_file"; then
-            log "INFO" "NRI section found in K3s template, updating disable flag"
-            sed -i 's/disable = true/disable = false/g' "$template_file"
-        else
-            log "INFO" "Adding NRI configuration to K3s template"
-            # Append NRI configuration to template
-            cat >> "$template_file" <<'EOF'
+        log "INFO" "Adding NRI configuration to K3s template"
+        # Append NRI configuration to template
+        cat >> "$template_file" <<'EOF'
 
 [plugins."io.containerd.nri.v1.nri"]
   disable = false
@@ -183,10 +166,7 @@ restart_containerd() {
     # Try to use nsenter to execute commands in host namespace if available
     # This allows the init container to restart services on the host
     NSENTER=""
-    if [ -e /host/proc/1/ns/mnt ]; then
-        NSENTER="nsenter --target 1 --mount --uts --ipc --net --pid --"
-        log "INFO" "Using nsenter to execute commands on host"
-    elif [ -e /proc/1/ns/mnt ] && [ "$(readlink /proc/1/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ]; then
+    if [ -e /host/proc/1/ns/mnt ] || ([ -e /proc/1/ns/mnt ] && [ "$(readlink /proc/1/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ]); then
         NSENTER="nsenter --target 1 --mount --uts --ipc --net --pid --"
         log "INFO" "Using nsenter to execute commands on host"
     fi
