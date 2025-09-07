@@ -42,14 +42,32 @@ jobs:
           curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="${{ matrix.k3s_version }}" sh -
           
           # Make kubectl accessible
-          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config || true
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
-          
-          # Wait for K3s to be ready
-          sleep 10
-          kubectl wait --for=condition=Ready nodes --all --timeout=60s
+      
+      - name: Check K3s Status
+        run: |
+          sudo systemctl status k3s --no-pager
+      
+      - name: Wait for Kubernetes API
+        run: |
+          echo "Waiting for Kubernetes API..."
+          until kubectl get nodes &>/dev/null; do
+            sleep 1
+            echo "Still waiting..."
+          done
+          echo "Kubernetes API is available!"
+      
+      - name: Wait for nodes to be ready
+        run: |
+          echo "Waiting for at least one node to be registered..."
+          until [ $(kubectl get nodes --no-headers 2>/dev/null | wc -l) -gt 0 ]; do
+            sleep 1
+            echo "Still waiting for node registration..."
+          done
+          echo "Node(s) registered, waiting for Ready status..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
       
       - name: Check K3s containerd version
         run: |
@@ -261,7 +279,29 @@ jobs:
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
-          kubectl wait --for=condition=Ready nodes --all --timeout=60s
+      
+      - name: Check K3s Status
+        run: |
+          sudo systemctl status k3s --no-pager
+      
+      - name: Wait for Kubernetes API
+        run: |
+          echo "Waiting for Kubernetes API..."
+          until kubectl get nodes &>/dev/null; do
+            sleep 1
+            echo "Still waiting..."
+          done
+          echo "Kubernetes API is available!"
+      
+      - name: Wait for nodes to be ready
+        run: |
+          echo "Waiting for at least one node to be registered..."
+          until [ $(kubectl get nodes --no-headers 2>/dev/null | wc -l) -gt 0 ]; do
+            sleep 1
+            echo "Still waiting for node registration..."
+          done
+          echo "Node(s) registered, waiting for Ready status..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
       
       - name: Install Helm
         run: |
@@ -368,14 +408,36 @@ jobs:
           # Install latest K3s
           curl -sfL https://get.k3s.io | sh -
           
-          # Wait for K3s to be ready
-          sudo k3s kubectl wait --for=condition=Ready nodes --all --timeout=60s
-          
           # Make kubectl accessible
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config || true
           sudo chown $USER:$USER ~/.kube/config || true
           export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      
+      - name: Check K3s Status
+        run: |
+          sudo systemctl status k3s --no-pager
+      
+      - name: Wait for Kubernetes API
+        run: |
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "Waiting for Kubernetes API..."
+          until sudo k3s kubectl get nodes &>/dev/null; do
+            sleep 1
+            echo "Still waiting..."
+          done
+          echo "Kubernetes API is available!"
+      
+      - name: Wait for nodes to be ready
+        run: |
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "Waiting for at least one node to be registered..."
+          until [ $(sudo k3s kubectl get nodes --no-headers 2>/dev/null | wc -l) -gt 0 ]; do
+            sleep 1
+            echo "Still waiting for node registration..."
+          done
+          echo "Node(s) registered, waiting for Ready status..."
+          sudo k3s kubectl wait --for=condition=Ready nodes --all --timeout=300s
       
       - name: Deploy collector with NRI restart enabled
         run: |
