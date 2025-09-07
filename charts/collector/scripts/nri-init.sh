@@ -108,35 +108,50 @@ EOF
 
 # Configure NRI for K3s
 configure_k3s() {
-    template_file="/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl"
+    template_dir="/var/lib/rancher/k3s/agent/etc/containerd"
+    template_v3="$template_dir/config-v3.toml.tmpl"
+    template_v2="$template_dir/config.toml.tmpl"
     
-    log "INFO" "Configuring NRI for K3s at $template_file"
+    log "INFO" "Configuring NRI for K3s"
     
-    # Check if template exists
-    if [ ! -f "$template_file" ]; then
-        log "WARN" "K3s containerd template not found at $template_file, creating one"
-        mkdir -p /var/lib/rancher/k3s/agent/etc/containerd
+    # Check which template version to use
+    # K3s with containerd 2.0 uses config-v3.toml.tmpl
+    # K3s with containerd 1.7 and earlier uses config.toml.tmpl
+    
+    # First check if config-v3.toml.tmpl exists (newer K3s with containerd 2.0)
+    if [ -f "$template_v3" ]; then
+        template_file="$template_v3"
+        log "INFO" "Found existing config-v3.toml.tmpl (containerd 2.0)"
+    elif [ -f "$template_v2" ]; then
+        template_file="$template_v2"
+        log "INFO" "Found existing config.toml.tmpl (containerd 1.7 or earlier)"
+    else
+        # No template exists, create based on K3s version
+        # Try to detect containerd version by checking K3s version
+        # K3s v1.31.6+ and v1.32.2+ include containerd 2.0
+        # For simplicity, we'll create both templates with the base template approach
+        log "WARN" "No K3s containerd template found, creating templates"
+        mkdir -p "$template_dir"
+        
+        # Create v2 template for older K3s versions
+        template_file="$template_v2"
         cat > "$template_file" <<'EOF'
 # K3s containerd config template with NRI enabled
-version = 2
-
-[plugins."io.containerd.grpc.v1.cri"]
-  enable_selinux = {{ .NodeConfig.SELinux }}
-  enable_unprivileged_ports = {{ .EnableUnprivilegedPorts }}
-  enable_unprivileged_icmp = {{ .EnableUnprivilegedICMP }}
-
-[plugins."io.containerd.grpc.v1.cri".containerd]
-  snapshotter = "{{ .NodeConfig.AgentConfig.Snapshotter }}"
-  disable_snapshot_annotations = {{ .DisableSnapshotAnnotations }}
-  discard_unpacked_layers = {{ .DiscardUnpackedLayers }}
-
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
-  runtime_type = "io.containerd.runc.v2"
-
-[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
-  SystemdCgroup = {{ .SystemdCgroup }}
+# This extends the K3s base template and adds NRI configuration
+{{ template "base" . }}
 EOF
+        log "INFO" "Created config.toml.tmpl for containerd 1.7 and earlier"
+        
+        # Also create v3 template for newer K3s versions
+        cat > "$template_v3" <<'EOF'
+# K3s containerd config template with NRI enabled (v3 format)
+# This extends the K3s base template and adds NRI configuration
+{{ template "base" . }}
+EOF
+        log "INFO" "Created config-v3.toml.tmpl for containerd 2.0"
     fi
+    
+    log "INFO" "Using template file: $template_file"
     
     # Check if NRI is already configured in template
     if grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_file"; then
@@ -158,7 +173,40 @@ EOF
 EOF
     fi
     
-    log "INFO" "K3s containerd template updated"
+    # If we modified v2 template, also update v3 if it exists (and vice versa)
+    if [ "$template_file" = "$template_v2" ] && [ -f "$template_v3" ]; then
+        if ! grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_v3"; then
+            log "INFO" "Also updating config-v3.toml.tmpl for consistency"
+            cat >> "$template_v3" <<'EOF'
+
+[plugins."io.containerd.nri.v1.nri"]
+  disable = false
+  disable_connections = false
+  plugin_config_path = "/etc/nri/conf.d"
+  plugin_path = "/opt/nri/plugins"
+  plugin_registration_timeout = "5s"
+  plugin_request_timeout = "2s"
+  socket_path = "/var/run/nri/nri.sock"
+EOF
+        fi
+    elif [ "$template_file" = "$template_v3" ] && [ -f "$template_v2" ]; then
+        if ! grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_v2"; then
+            log "INFO" "Also updating config.toml.tmpl for consistency"
+            cat >> "$template_v2" <<'EOF'
+
+[plugins."io.containerd.nri.v1.nri"]
+  disable = false
+  disable_connections = false
+  plugin_config_path = "/etc/nri/conf.d"
+  plugin_path = "/opt/nri/plugins"
+  plugin_registration_timeout = "5s"
+  plugin_request_timeout = "2s"
+  socket_path = "/var/run/nri/nri.sock"
+EOF
+        fi
+    fi
+    
+    log "INFO" "K3s containerd template(s) updated"
 }
 
 # Restart containerd service
