@@ -90,14 +90,21 @@ jobs:
           docker exec nri-test-${{ matrix.test_scenario }}-control-plane cat /etc/containerd/config.toml > initial-config.toml
           
           if grep -q 'plugins."io.containerd.nri.v1.nri"' initial-config.toml; then
-            echo "⚠️ NRI already configured in KIND (unexpected)"
+            echo "✗ NRI already configured in KIND (unexpected)"
             cat initial-config.toml
+            exit 1
           else
             echo "✓ NRI not configured initially (expected)"
           fi
           
-          # Check for NRI socket
-          docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/ 2>/dev/null || echo "✓ NRI socket directory does not exist (expected)"
+          # Check for NRI socket - should NOT exist initially
+          if docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/ 2>/dev/null; then
+            echo "✗ NRI socket directory exists when it shouldn't!"
+            docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/
+            exit 1
+          else
+            echo "✓ NRI socket directory does not exist (expected)"
+          fi
       
       - name: Install Helm
         run: |
