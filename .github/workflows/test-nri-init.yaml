@@ -630,6 +630,21 @@ jobs:
           export NRI_RESTART=true
           
           sudo -E bash charts/collector/scripts/nri-init.sh || true
+          
+          # Ensure NRI socket is present after script with restart
+          for i in {1..30}; do
+            if [ -S /var/run/nri/nri.sock ]; then
+              echo "✓ NRI socket present after script with restart"
+              break
+            fi
+            sleep 1
+          done
+          if [ ! -S /var/run/nri/nri.sock ]; then
+            echo "✗ NRI socket not found after script with restart"
+            sudo ls -la /var/run/nri || true
+            sudo systemctl status containerd || true
+            exit 1
+          fi
 
           # Step 5: Verify final state
           echo "=== Step 5: Verify final state ==="
@@ -654,10 +669,22 @@ jobs:
           echo "=== Final NRI configuration ==="
           sudo grep -A 7 'plugins."io.containerd.nri.v1.nri"' /etc/containerd/config.toml || echo "NRI config not found"
 
-          # Final assert for NRI socket presence for 1.7.x containerd
+          # Final assert for NRI socket presence (retry briefly if missing)
           if [ -S /var/run/nri/nri.sock ]; then
             echo "✓ Configuration changes are effective after restart (socket present)"
           else
-            echo "✗ NRI socket not found after restart"
-            exit 1
+            echo "NRI socket missing on first check; waiting up to 10s..."
+            for i in {1..10}; do
+              if [ -S /var/run/nri/nri.sock ]; then
+                echo "✓ NRI socket detected on retry"
+                break
+              fi
+              sleep 1
+            done
+            if [ ! -S /var/run/nri/nri.sock ]; then
+              echo "✗ NRI socket not found after restart"
+              sudo ls -la /var/run/nri || true
+              sudo systemctl status containerd || true
+              exit 1
+            fi
           fi
