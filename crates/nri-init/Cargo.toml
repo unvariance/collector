@@ -1,0 +1,25 @@
+[package]
+name = "nri-init"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "nri_init"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nri-init"
+path = "src/bin/nri-init.rs"
+
+[dependencies]
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+toml_edit = { workspace = true }
+semver = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+once_cell = "1"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"

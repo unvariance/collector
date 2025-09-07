@@ -37,6 +37,13 @@ The NRI feature is controlled by Helm values:
 nri:
   configure: true   # Update containerd config when NRI is disabled (default: true)
   restart: false    # Restart containerd to apply changes (default: false)
+  # Optional: use the Rust-based init binary instead of the shell script
+  useRustInit: false
+  rustInit:
+    image:
+      repository: ghcr.io/your-org/nri-init
+      tag: v0.1.0
+    command: ["/bin/nri-init"]
 ```
 
 ### Operating Modes
@@ -62,6 +69,14 @@ helm install collector ./charts/collector \
 - Updates containerd configuration
 - Does NOT restart containerd
 - Prepares nodes for manual restart during maintenance
+
+To use the Rust init binary instead of the shell script:
+```bash
+helm install collector ./charts/collector \
+  --set nri.useRustInit=true \
+  --set nri.rustInit.image.repository=ghcr.io/<org>/nri-init \
+  --set nri.rustInit.image.tag=v0.1.0
+```
 
 #### 3. Full Setup with Restart
 ```bash

@@ -1,0 +1,14 @@
+# Multi-stage build for a tiny nri-init image
+
+FROM rust:1-alpine AS build
+RUN apk add --no-cache musl-dev build-base
+WORKDIR /src
+# Cache deps
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build -p nri-init --release --target-dir /target
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=build /target/release/nri-init /bin/nri-init
+USER nonroot:nonroot
+ENTRYPOINT ["/bin/nri-init"]

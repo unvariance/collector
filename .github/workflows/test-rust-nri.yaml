@@ -1,0 +1,219 @@
+name: Rust NRI Init Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build nri-init
+        run: cargo build -p nri-init --locked --verbose
+      - name: Run unit tests
+        run: cargo test -p nri-init --lib --verbose
+
+  # Safe integration tests (no system services), operate in temp dirs
+  integration-sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build nri-init
+        run: cargo build -p nri-init --locked --verbose
+      - name: Run simulated integration tests
+        run: cargo test -p nri-init --test integration_sim --verbose
+
+  # Real environment tests (require self-hosted runner with systemd privileges)
+  integration-real:
+    if: ${{ startsWith(runner.name, 'self-hosted') }}
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build nri-init
+        run: cargo build -p nri-init --release --verbose
+      - name: K3s tests (ignored)
+        run: cargo test -p nri-init --test k3s -- --ignored --test-threads=1 || true
+      - name: Containerd tests (ignored)
+        run: cargo test -p nri-init --test containerd -- --ignored --test-threads=1 || true
+
+  # GH-hosted integration tests that set up KIND and K3s and run the nri-init binary
+  integration-matrix:
+    name: Rust NRI Integration (${{ matrix.target }} / ${{ matrix.scenario }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: kind
+            scenario: configure-only
+            restart: false
+          - target: kind
+            scenario: configure-and-restart
+            restart: true
+          - target: k3s
+            scenario: configure-only
+            restart: false
+          - target: k3s
+            scenario: configure-and-restart
+            restart: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build nri-init (release)
+        run: cargo build -p nri-init --release --locked --verbose
+
+      - name: Install kubectl
+        if: matrix.target == 'kind' || matrix.target == 'k3s'
+        run: |
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      # KIND target setup
+      - name: Install KIND
+        if: matrix.target == 'kind'
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.24.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+      - name: Create KIND cluster (no NRI)
+        if: matrix.target == 'kind'
+        env:
+          CLUSTER: nri-rust-${{ matrix.scenario }}
+        run: |
+          cat > kind-config.yaml << 'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: ${CLUSTER}
+          nodes:
+          - role: control-plane
+            image: kindest/node:v1.31.0@sha256:53df588e04085fd41ae12de0c3fe4c72f7013bba32a20e7325357a1ac94ba865
+          EOF
+          kind create cluster --config kind-config.yaml --wait 300s
+          kubectl cluster-info --context kind-${CLUSTER}
+          kubectl get nodes
+
+      - name: Run nri-init inside KIND node
+        if: matrix.target == 'kind'
+        env:
+          CLUSTER: nri-rust-${{ matrix.scenario }}
+          NODE: nri-rust-${{ matrix.scenario }}-control-plane
+        run: |
+          # Copy binary into the node
+          docker cp target/release/nri-init ${NODE}:/usr/local/bin/nri-init
+          docker exec ${NODE} chmod +x /usr/local/bin/nri-init
+
+          echo "=== Pre-checks ==="
+          docker exec ${NODE} sh -lc 'test -f /etc/containerd/config.toml && cat /etc/containerd/config.toml | head -n 30 || echo "(no config.toml present)"'
+
+          echo "=== Run nri-init (configure=true, restart=${{ matrix.restart }}) ==="
+          # Always configure=true in these tests; fail if unavailable when restart=true
+          if ! docker exec ${NODE} env \
+            NRI_CONFIGURE=true \
+            NRI_RESTART=${{ matrix.restart }} \
+            NRI_FAIL_IF_UNAVAILABLE=${{ matrix.restart }} \
+            /usr/local/bin/nri-init --log-level info; then
+            echo "nri-init failed"
+            exit 1
+          fi
+
+          echo "=== Verify config patched ==="
+          docker exec ${NODE} cat /etc/containerd/config.toml > final-config.toml
+          if grep -q 'plugins."io.containerd.nri.v1.nri"' final-config.toml && grep -q 'disable = false' final-config.toml; then
+            echo "✓ NRI section present and enabled"
+          else
+            echo "✗ NRI configuration missing in containerd config"
+            cat final-config.toml
+            exit 1
+          fi
+
+          if [ "${{ matrix.restart }}" = "false" ]; then
+            echo "=== Verify socket absent when restart=false ==="
+            if docker exec ${NODE} test -S /var/run/nri/nri.sock; then
+              echo "✗ Socket present but restart was false"
+              exit 1
+            else
+              echo "✓ Socket absent as expected (no restart)"
+            fi
+          fi
+
+      - name: Cleanup KIND
+        if: always() && matrix.target == 'kind'
+        env:
+          CLUSTER: nri-rust-${{ matrix.scenario }}
+        run: |
+          kind delete cluster --name ${CLUSTER} || true
+
+      # K3s target setup
+      - name: Install K3s
+        if: matrix.target == 'k3s'
+        run: |
+          curl -sfL https://get.k3s.io | sh -
+          mkdir -p ~/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+          sudo chown $(id -u):$(id -g) ~/.kube/config
+
+      - name: Wait for K3s
+        if: matrix.target == 'k3s'
+        run: |
+          until kubectl get nodes &>/dev/null; do sleep 1; done
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Run nri-init on host (K3s)
+        if: matrix.target == 'k3s'
+        run: |
+          echo "=== Run nri-init for K3s (configure=true restart=${{ matrix.restart }}) ==="
+          set -x
+          sudo ./target/release/nri-init --log-level info \
+            --mode k3s \
+            $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart" || echo "--no-restart" ) \
+            --configure \
+            $( [ "${{ matrix.restart }}" = "true" ] && echo "--fail-if-unavailable" )
+
+          echo "=== Verify K3s template patched ==="
+          if [ -f "/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl" ]; then
+            if sudo grep -q 'plugins."io.containerd.nri.v1.nri"' /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl; then
+              echo "✓ NRI section present in template"
+            else
+              echo "✗ NRI section missing from K3s template"
+              sudo head -n 80 /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl || true
+              exit 1
+            fi
+          fi
+
+          if [ "${{ matrix.restart }}" = "false" ]; then
+            echo "=== Verify socket absent when restart=false ==="
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✗ Socket present but restart=false"
+              exit 1
+            else
+              echo "✓ Socket absent as expected (no restart)"
+            fi
+          else
+            echo "=== Verify socket after restart ==="
+            for i in {1..30}; do
+              if sudo test -S /var/run/nri/nri.sock; then
+                sudo ls -la /var/run/nri/nri.sock
+                echo "✓ NRI socket exists after restart"
+                break
+              fi
+              sleep 1
+            done
+            if ! sudo test -S /var/run/nri/nri.sock; then
+              echo "✗ NRI socket not found after restart on K3s"
+              exit 1
+            fi
+          fi
