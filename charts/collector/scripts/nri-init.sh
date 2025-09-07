@@ -219,6 +219,13 @@ restart_containerd() {
         log "INFO" "Using nsenter to execute commands on host"
     fi
     
+    # Capture timestamp before restart attempt
+    restart_timestamp=$(date +%s)
+    log "INFO" "Timestamp before restart attempt: $restart_timestamp"
+    
+    restart_issued=false
+    service_name=""
+    
     if is_k3s; then
         log "INFO" "Restarting K3s service to apply NRI configuration"
         # Try to restart K3s
@@ -228,8 +235,12 @@ restart_containerd() {
                 log "INFO" "Attempting K3s restart via systemctl"
                 if $NSENTER systemctl restart k3s 2>/dev/null; then
                     log "INFO" "K3s service restart command issued via systemctl"
+                    restart_issued=true
+                    service_name="k3s"
                 elif $NSENTER systemctl restart k3s-agent 2>/dev/null; then
                     log "INFO" "K3s-agent service restart command issued via systemctl"
+                    restart_issued=true
+                    service_name="k3s-agent"
                 else
                     log "WARN" "Failed to restart K3s via systemctl"
                     log "WARN" "This may be due to container security restrictions"
@@ -240,8 +251,12 @@ restart_containerd() {
                 log "INFO" "Attempting K3s restart via service command"
                 if $NSENTER service k3s restart 2>/dev/null; then
                     log "INFO" "K3s service restart command issued via service"
+                    restart_issued=true
+                    service_name="k3s"
                 elif $NSENTER service k3s-agent restart 2>/dev/null; then
                     log "INFO" "K3s-agent service restart command issued via service"
+                    restart_issued=true
+                    service_name="k3s-agent"
                 else
                     log "WARN" "Failed to restart K3s via service command"
                     log "WARN" "This may be due to container security restrictions"
@@ -266,6 +281,8 @@ restart_containerd() {
                 log "INFO" "Attempting containerd restart via systemctl"
                 if $NSENTER systemctl restart containerd 2>/dev/null; then
                     log "INFO" "Containerd service restart command issued via systemctl"
+                    restart_issued=true
+                    service_name="containerd"
                 else
                     log "WARN" "Failed to restart containerd via systemctl"
                     log "WARN" "This may be due to container security restrictions"
@@ -276,6 +293,8 @@ restart_containerd() {
                 log "INFO" "Attempting containerd restart via service command"
                 if $NSENTER service containerd restart 2>/dev/null; then
                     log "INFO" "Containerd service restart command issued via service"
+                    restart_issued=true
+                    service_name="containerd"
                 else
                     log "WARN" "Failed to restart containerd via service command"
                     log "WARN" "This may be due to container security restrictions"
@@ -291,6 +310,47 @@ restart_containerd() {
             log "WARN" "Cannot restart containerd from container without nsenter"
             log "INFO" "Containerd configuration has been updated but requires manual restart"
             return 2
+        fi
+    fi
+    
+    # If restart was issued, verify it actually happened
+    if [ "$restart_issued" = "true" ]; then
+        log "INFO" "Restart command was issued, verifying service actually restarted..."
+        
+        # Give service time to restart
+        sleep 3
+        
+        # Try to verify restart by checking service start time
+        restart_verified=false
+        if [ -n "$NSENTER" ] && [ -n "$service_name" ]; then
+            if $NSENTER which systemctl >/dev/null 2>&1; then
+                # Try to get the service's active since timestamp
+                active_since=$($NSENTER systemctl show "$service_name" --property=ActiveEnterTimestamp 2>/dev/null | cut -d= -f2-)
+                if [ -n "$active_since" ]; then
+                    # Convert to epoch timestamp if possible
+                    if $NSENTER which date >/dev/null 2>&1; then
+                        service_start_epoch=$($NSENTER date -d "$active_since" +%s 2>/dev/null || echo "0")
+                        if [ "$service_start_epoch" -gt "$restart_timestamp" ]; then
+                            log "INFO" "Service restart verified: $service_name restarted at $active_since"
+                            restart_verified=true
+                        else
+                            log "WARN" "Service $service_name appears not to have restarted (started at: $active_since)"
+                        fi
+                    else
+                        log "INFO" "Service active since: $active_since (unable to verify timestamp)"
+                    fi
+                fi
+            fi
+            
+            # Alternative verification: check if process PID changed (if we can access it)
+            if [ "$restart_verified" = "false" ]; then
+                log "INFO" "Alternative verification: checking for service/process availability"
+                if is_k3s && $NSENTER pgrep k3s >/dev/null 2>&1; then
+                    log "INFO" "K3s process is running"
+                elif ! is_k3s && $NSENTER pgrep containerd >/dev/null 2>&1; then
+                    log "INFO" "Containerd process is running"
+                fi
+            fi
         fi
     fi
     
