@@ -307,7 +307,7 @@ jobs:
           echo "✓ Containerd is running"
           
           # Verify NRI socket doesn't exist initially
-          if [ -S /var/run/nri/nri.sock ]; then
+          if sudo test -S /var/run/nri/nri.sock; then
             echo "✗ NRI socket already exists (unexpected)"
             exit 1
           fi
@@ -359,7 +359,7 @@ jobs:
           sudo systemctl restart containerd
           # Wait a bit for NRI socket to be created (containerd >= 1.7)
           for i in {1..30}; do
-            if [ -S /var/run/nri/nri.sock ]; then
+            if sudo test -S /var/run/nri/nri.sock; then
               echo "✓ NRI socket present after restart"
               break
             fi
@@ -495,7 +495,7 @@ jobs:
           fi
 
           # Best-effort check for NRI socket (may depend on K3s/containerd build)
-          if [ -S /var/run/nri/nri.sock ]; then
+          if sudo test -S /var/run/nri/nri.sock; then
             echo "✓ NRI socket present after K3s restart"
           else
             echo "ℹ NRI socket not found after K3s restart (non-fatal)"
@@ -591,7 +591,7 @@ jobs:
           fi
           
           # Check that NRI is not yet effective (no socket)
-          if [ -S /var/run/nri/nri.sock ]; then
+          if sudo test -S /var/run/nri/nri.sock; then
             echo "✗ NRI socket exists without restart (unexpected)"
           else
             echo "✓ NRI socket not present (config not yet applied)"
@@ -602,7 +602,7 @@ jobs:
           sudo systemctl restart containerd
           # Wait for NRI socket to appear (containerd >= 1.7)
           for i in {1..30}; do
-            if [ -S /var/run/nri/nri.sock ]; then
+            if sudo test -S /var/run/nri/nri.sock; then
               echo "✓ NRI socket present after manual restart"
               break
             fi
@@ -633,7 +633,7 @@ jobs:
           
           # Ensure NRI socket is present after script with restart
           for i in {1..30}; do
-            if [ -S /var/run/nri/nri.sock ]; then
+            if sudo test -S /var/run/nri/nri.sock; then
               echo "✓ NRI socket present after script with restart"
               break
             fi
@@ -670,12 +670,12 @@ jobs:
           sudo grep -A 7 'plugins."io.containerd.nri.v1.nri"' /etc/containerd/config.toml || echo "NRI config not found"
 
           # Final assert for NRI socket presence (retry briefly if missing)
-          if [ -S /var/run/nri/nri.sock ]; then
+          if sudo test -S /var/run/nri/nri.sock; then
             echo "✓ Configuration changes are effective after restart (socket present)"
           else
             echo "NRI socket missing on first check; waiting up to 10s..."
             for i in {1..10}; do
-              if [ -S /var/run/nri/nri.sock ]; then
+              if sudo test -S /var/run/nri/nri.sock; then
                 echo "✓ NRI socket detected on retry"
                 break
               fi
