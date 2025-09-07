@@ -412,21 +412,26 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create KIND cluster config
+        run: |
+          cat > /tmp/kind-config.yaml <<EOF
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+          - role: control-plane
+          - role: worker
+          - role: worker
+          - role: worker
+          - role: worker
+          - role: worker
+          - role: worker
+          - role: worker
+          EOF
+
       - name: Create KIND cluster with 8 nodes
         uses: helm/kind-action@v1
         with:
-          config: |
-            kind: Cluster
-            apiVersion: kind.x-k8s.io/v1alpha4
-            nodes:
-            - role: control-plane
-            - role: worker
-            - role: worker
-            - role: worker
-            - role: worker
-            - role: worker
-            - role: worker
-            - role: worker
+          config: /tmp/kind-config.yaml
 
       - name: Verify cluster has 8 nodes
         run: |
