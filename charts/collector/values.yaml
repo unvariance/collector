@@ -111,9 +111,9 @@ nri:
   # Init container configuration
   initContainer:
     image:
-      # Default to busybox, can be overridden with custom image
-      repository: busybox
-      tag: "1.36"
+      # Using alpine for better tool compatibility (includes nsenter)
+      repository: alpine
+      tag: "3.19"
     securityContext:
       privileged: true
     resources:

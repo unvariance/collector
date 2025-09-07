@@ -406,30 +406,31 @@ jobs:
 
   test-deployment-modes:
     name: Test DaemonSet vs Deployment Modes
-    needs: [setup-runner, k3s-deployment, install-prerequisites]
-    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
-      HOME: /root
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Add worker nodes to K3s cluster
+      - name: Create KIND cluster with 8 nodes
+        uses: helm/kind-action@v1
+        with:
+          config: |
+            kind: Cluster
+            apiVersion: kind.x-k8s.io/v1alpha4
+            nodes:
+            - role: control-plane
+            - role: worker
+            - role: worker
+            - role: worker
+            - role: worker
+            - role: worker
+            - role: worker
+            - role: worker
+
+      - name: Verify cluster has 8 nodes
         run: |
-          # Add 7 more worker nodes (total 8 nodes including master)
-          for i in {1..7}; do
-            echo "Adding worker node $i..."
-            k3s agent --server https://localhost:6443 --token $(cat /var/lib/rancher/k3s/server/node-token) &
-            sleep 5
-          done
-          
-          # Wait for all nodes to be ready
-          echo "Waiting for all nodes to be ready..."
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          
-          # Verify we have 8 nodes
+          kubectl get nodes
           NODE_COUNT=$(kubectl get nodes --no-headers | wc -l)
           echo "Total nodes in cluster: $NODE_COUNT"
           
@@ -448,14 +449,17 @@ jobs:
           # Verify DaemonSet created
           kubectl get daemonset
           
-          # Count pods - should be on all nodes (8)
+          # Count pods - should be on all worker nodes (7, excluding control-plane)
           POD_COUNT=$(kubectl get pods -l app.kubernetes.io/name=collector --no-headers | wc -l)
           echo "Pod count in DaemonSet mode: $POD_COUNT"
           
-          if [ "$POD_COUNT" -eq 8 ]; then
-            echo "✓ DaemonSet deployed on all nodes"
+          # DaemonSet typically doesn't run on control-plane nodes by default due to taints
+          if [ "$POD_COUNT" -eq 7 ]; then
+            echo "✓ DaemonSet deployed on all worker nodes"
+          elif [ "$POD_COUNT" -eq 8 ]; then
+            echo "✓ DaemonSet deployed on all nodes including control-plane"
           else
-            echo "✗ DaemonSet not deployed correctly (expected 8, got $POD_COUNT)"
+            echo "✗ DaemonSet not deployed correctly (expected 7-8, got $POD_COUNT)"
             exit 1
           fi
           
@@ -483,14 +487,15 @@ jobs:
             exit 1
           fi
           
-          # Verify pods are on different nodes (with 6 pods on 8 nodes, should have good distribution)
+          # Verify pods are on different nodes (with 6 pods on 7-8 nodes, should have good distribution)
           NODES=$(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[*].spec.nodeName}' | tr ' ' '\n' | sort -u | wc -l)
           echo "Pods distributed across $NODES nodes"
           
-          # With 6 pods and anti-affinity, they should be on at least 5 different nodes
-          # (allowing for one duplicate in case of scheduling constraints)
-          if [ "$NODES" -ge 5 ]; then
-            echo "✓ Pods correctly distributed across nodes"
+          # With 6 pods and anti-affinity, they should be on 6 different nodes ideally
+          if [ "$NODES" -eq 6 ]; then
+            echo "✓ Perfect distribution: each pod on a different node"
+          elif [ "$NODES" -ge 5 ]; then
+            echo "✓ Good distribution: pods mostly on different nodes"
           else
             echo "✗ Pod anti-affinity not working well (only on $NODES nodes)"
             exit 1
@@ -498,7 +503,7 @@ jobs:
 
   stop-runner:
     name: Stop EC2 runner
-    needs: [setup-runner, k3s-deployment, install-prerequisites, helm-chart-deployment, test-deployment-modes]
+    needs: [setup-runner, k3s-deployment, install-prerequisites, helm-chart-deployment]
     runs-on: ubuntu-latest
     if: always()  # Run even if previous jobs fail
     steps:

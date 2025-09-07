@@ -64,7 +64,7 @@ jobs:
             -e NRI_CONFIGURE=false \
             -e NRI_RESTART=false \
             --entrypoint /bin/sh \
-            busybox:1.36 \
+            alpine:3.19 \
             -c "ls -la /scripts && /scripts/nri-init.sh || true"
 
   test-nri-detection:

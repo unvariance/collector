@@ -165,7 +165,7 @@ restart_containerd() {
     # Try to use nsenter to execute commands in host namespace if available
     # This allows the init container to restart services on the host
     NSENTER=""
-    if [ -e /host/proc/1/ns/mnt ] || ([ -e /proc/1/ns/mnt ] && [ "$(readlink /proc/1/ns/mnt)" != "$(readlink /proc/self/ns/mnt)" ]); then
+    if [ -e /host/proc/1/ns/mnt ]; then
         NSENTER="nsenter --target 1 --mount --uts --ipc --net --pid --"
         log "INFO" "Using nsenter to execute commands on host"
     fi
