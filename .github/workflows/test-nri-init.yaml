@@ -409,13 +409,18 @@ jobs:
           fi
           echo "✓ K3s is running"
           
-          # Check initial K3s template state
+          # Check initial K3s template state (v2 and v3)
           echo "=== Initial K3s template state ==="
-          if [ -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl ]; then
+          TEMPLATE_DIR="/var/lib/rancher/k3s/agent/etc/containerd"
+          if [ -f "$TEMPLATE_DIR/config-v3.toml.tmpl" ]; then
+            echo "config-v3.toml.tmpl exists:"
+            sudo head -n 50 "$TEMPLATE_DIR/config-v3.toml.tmpl" || true
+          elif [ -f "$TEMPLATE_DIR/config.toml.tmpl" ]; then
             echo "config.toml.tmpl exists:"
-            sudo cat /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
+            sudo head -n 50 "$TEMPLATE_DIR/config.toml.tmpl" || true
           else
-            echo "config.toml.tmpl does not exist yet"
+            echo "No K3s containerd template exists yet in $TEMPLATE_DIR"
+            sudo ls -la "$TEMPLATE_DIR" || true
           fi
           
           # Configure host mount for nsenter
@@ -443,8 +448,17 @@ jobs:
             exit 1
           fi
           
-          # Verify NRI configuration was added to K3s template
-          template_file="/var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl"
+          # Verify NRI configuration was added to K3s template (prefer v3, fallback v2)
+          template_dir="/var/lib/rancher/k3s/agent/etc/containerd"
+          if [ -f "$template_dir/config-v3.toml.tmpl" ]; then
+            template_file="$template_dir/config-v3.toml.tmpl"
+          elif [ -f "$template_dir/config.toml.tmpl" ]; then
+            template_file="$template_dir/config.toml.tmpl"
+          else
+            echo "✗ K3s template file not found at either $template_dir/config-v3.toml.tmpl or $template_dir/config.toml.tmpl"
+            sudo ls -la "$template_dir" || true
+            exit 1
+          fi
           if [ -f "$template_file" ]; then
             if sudo grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_file"; then
               echo "✓ NRI configuration found in K3s template"
@@ -463,9 +477,6 @@ jobs:
               echo "✗ NRI is not enabled in K3s template"
               exit 1
             fi
-          else
-            echo "✗ K3s template file not found at $template_file"
-            exit 1
           fi
           
           # Verify that running the script again with restart still works (idempotency)
