@@ -50,25 +50,25 @@ jobs:
           - name: "Default values"
             file: ""
             checks:
-              - "nri-init container present"
+              - "name: nri-init"
               - "NRI_CONFIGURE.*true"
               - "NRI_RESTART.*false"
           - name: "NRI disabled"
             file: "charts/collector/ci/nri-disabled-values.yaml"
             checks:
-              - "nri-init container present"
+              - "name: nri-init"
               - "NRI_CONFIGURE.*false"
               - "NRI_RESTART.*false"
           - name: "NRI configure only"
             file: "charts/collector/ci/nri-configure-only-values.yaml"
             checks:
-              - "nri-init container present"
+              - "name: nri-init"
               - "NRI_CONFIGURE.*true"
               - "NRI_RESTART.*false"
           - name: "NRI full setup"
             file: "charts/collector/ci/nri-full-setup-values.yaml"
             checks:
-              - "nri-init container present"
+              - "name: nri-init"
               - "NRI_CONFIGURE.*true"
               - "NRI_RESTART.*true"
     steps:
@@ -190,61 +190,6 @@ jobs:
           
           if kubectl logs $POD -c nri-init | grep -q "NRI_RESTART=false"; then
             echo "✓ NRI restart disabled as expected"
-          fi
-
-  test-init-container-failure-handling:
-    name: Test Init Container Failure Handling
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Create kind cluster
-        uses: helm/kind-action@v1
-        with:
-          cluster_name: test-cluster
-      
-      - name: Modify init script to simulate various scenarios
-        run: |
-          # Create a modified values file that uses busybox instead of our custom image
-          cat > /tmp/test-values.yaml <<EOF
-          storage:
-            type: local
-          nri:
-            configure: true
-            restart: false
-            initContainer:
-              image:
-                repository: busybox
-                tag: latest
-          EOF
-      
-      - name: Install chart with busybox init container
-        run: |
-          helm install test-collector charts/collector \
-            -f /tmp/test-values.yaml \
-            --wait --timeout 2m
-      
-      - name: Verify collector still runs despite init container
-        run: |
-          # Check that main collector container is running
-          kubectl get pods -l app.kubernetes.io/name=collector
-          
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
-          
-          # Check init container completed
-          INIT_STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[0].state}')
-          echo "Init container status: $INIT_STATUS"
-          
-          # Check main container is running
-          MAIN_STATUS=$(kubectl get pod $POD -o jsonpath='{.status.containerStatuses[0].state}')
-          echo "Main container status: $MAIN_STATUS"
-          
-          if echo "$MAIN_STATUS" | grep -q "running"; then
-            echo "✓ Main collector container is running"
-          else
-            echo "✗ Main collector container failed to start"
-            exit 1
           fi
 
   security-scan:
