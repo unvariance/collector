@@ -17,6 +17,15 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $*" >&2
 }
 
+# Determine nsenter for host execution if available
+setup_nsenter() {
+    if [ -e /host/proc/1/ns/mnt ]; then
+        NSENTER="nsenter --target 1 --mount --uts --ipc --net --pid --"
+    else
+        NSENTER=""
+    fi
+}
+
 # Detect if running on K3s
 is_k3s() {
     if [ -d "/var/lib/rancher/k3s" ]; then
@@ -25,6 +34,44 @@ is_k3s() {
     else
         return 1
     fi
+}
+
+# Get containerd version from the host, best-effort
+get_containerd_version() {
+    setup_nsenter
+    # Try `containerd --version`
+    ver=$($NSENTER sh -c 'containerd --version 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+"' || true)
+    if [ -n "$ver" ]; then
+        echo "$ver"
+        return 0
+    fi
+    # Try `containerd -v`
+    ver=$($NSENTER sh -c 'containerd -v 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+"' || true)
+    if [ -n "$ver" ]; then
+        echo "$ver"
+        return 0
+    fi
+    # Try `ctr version` (parse Server: containerd Version: X.Y.Z)
+    ver=$($NSENTER sh -c "ctr version 2>/dev/null | awk 'BEGIN{ins=0} /Server: containerd/{ins=1; next} ins && /Version:/ {print \$2; exit}'" || true)
+    if [ -n "$ver" ]; then
+        echo "$ver"
+        return 0
+    fi
+    # Unable to detect
+    echo ""
+    return 1
+}
+
+# Compare semver: returns 0 if $1 >= $2
+semver_ge() {
+    a=$(echo "$1" | sed 's/[^0-9.].*$//')
+    b=$(echo "$2" | sed 's/[^0-9.].*$//')
+    IFS=. set -- $a; a1=${1:-0}; a2=${2:-0}; a3=${3:-0}
+    IFS=. set -- $b; b1=${1:-0}; b2=${2:-0}; b3=${3:-0}
+    # Zero-pad and compare lexically as integers
+    ai=$(printf "%03d%03d%03d" "$a1" "$a2" "$a3")
+    bi=$(printf "%03d%03d%03d" "$b1" "$b2" "$b3")
+    [ "$ai" -ge "$bi" ]
 }
 
 # Check if NRI socket exists and is functional
@@ -387,6 +434,24 @@ main() {
     # NRI socket doesn't exist
     log "WARN" "NRI is not currently enabled on this node"
     log "WARN" "Without NRI, the Memory Collector cannot access pod and container metadata"
+
+    # Detect containerd version and skip configuration on unsupported versions
+    detected_ver=$(get_containerd_version || true)
+    if [ -n "$detected_ver" ]; then
+        log "INFO" "Detected containerd version: $detected_ver"
+        if ! semver_ge "$detected_ver" "1.7.0"; then
+            log "WARN" "containerd $detected_ver does not support NRI (requires >= 1.7.0); skipping NRI configuration"
+            if [ "$NRI_FAIL_IF_UNAVAILABLE" = "true" ]; then
+                log "ERROR" "NRI unavailable on this containerd version and NRI_FAIL_IF_UNAVAILABLE=true"
+                exit 1
+            else
+                log "INFO" "Allowing collector to start without NRI"
+                exit 0
+            fi
+        fi
+    else
+        log "WARN" "Unable to determine containerd version; proceeding with best-effort NRI configuration"
+    fi
     
     # Check if we should configure NRI
     if [ "$NRI_CONFIGURE" = "true" ]; then

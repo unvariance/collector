@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        containerd_version: ["1.7.20", "1.6.33"]
+        containerd_version: ["1.7.20"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -252,7 +252,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        containerd_version: ["1.7.20", "1.6.33"]
+        containerd_version: ["1.7.20"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

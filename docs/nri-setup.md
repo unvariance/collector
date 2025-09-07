@@ -6,13 +6,19 @@ The Memory Collector uses Node Resource Interface (NRI) to access pod and contai
 
 ## Background
 
-NRI is disabled by default in containerd versions before 2.0, which affects most current Kubernetes distributions:
+NRI support in containerd begins with containerd 1.7 (initially experimental) and is enabled-by-default starting with containerd 2.0. This has important implications for environments on older runtimes:
+
+- NOTE: containerd 1.6.x and earlier do not include the NRI plugin at all. No configuration can enable NRI on 1.6.x — you must upgrade to containerd >= 1.7 to use NRI.
+
+NRI is disabled by default in containerd 1.7.x, which affects most current Kubernetes distributions:
 
 - **K3s**: Ships with containerd 1.7.x (NRI disabled)
 - **Ubuntu LTS**: 24.04, 22.04, 20.04 ship containerd 1.7.x or older (NRI disabled)
 - **Cloud Providers**: Most managed Kubernetes services use containerd 1.7.x (NRI disabled)
 
 Without NRI enabled, the collector cannot access pod and container metadata, limiting its ability to correlate performance metrics with specific workloads.
+
+If the init container detects containerd < 1.7, it skips NRI configuration with a clear warning. Set `nri.failIfUnavailable=true` if you prefer the pod to fail fast in that case.
 
 ## How the NRI Init Container Works
 
