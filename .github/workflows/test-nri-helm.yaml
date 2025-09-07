@@ -209,10 +209,16 @@ jobs:
           # Verify configuration was attempted
           if kubectl logs $POD -c nri-init | grep -q "NRI_CONFIGURE=true"; then
             echo "✓ NRI configure enabled as expected"
+          else
+            echo "✗ Expected NRI_CONFIGURE=true in init logs"
+            exit 1
           fi
           
           if kubectl logs $POD -c nri-init | grep -q "NRI_RESTART=false"; then
             echo "✓ NRI restart disabled as expected"
+          else
+            echo "✗ Expected NRI_RESTART=false in init logs"
+            exit 1
           fi
 
   verify-nri-preconfigured:
@@ -251,12 +257,13 @@ jobs:
           echo "=== Alternative check using docker exec ==="
           CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
           
-          # Check if NRI socket exists
+          # Check if NRI socket exists (must exist for pre-configured expectation)
           if docker exec $CONTAINER_NAME ls -la /var/run/nri/nri.sock 2>/dev/null; then
             echo "✓ NRI socket found at /var/run/nri/nri.sock"
           else
-            echo "⚠️ NRI socket not found (checking for directory)"
+            echo "✗ NRI socket not found; expected pre-configured NRI in Kubernetes ${{ matrix.k8s_version }}"
             docker exec $CONTAINER_NAME ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
+            exit 1
           fi
           
           # Check containerd config
@@ -265,8 +272,8 @@ jobs:
             echo "✓ NRI configuration found in containerd"
             docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -A 10 'plugins."io.containerd.nri.v1.nri"'
           else
-            echo "✗ NRI configuration NOT found in containerd config"
-            echo "This suggests NRI is not pre-configured in Kubernetes ${{ matrix.k8s_version }}"
+            echo "✗ NRI configuration NOT found in containerd config for Kubernetes ${{ matrix.k8s_version }}"
+            exit 1
           fi
       
       - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
@@ -290,7 +297,9 @@ jobs:
           if kubectl logs $POD -c nri-init | grep -q "NRI socket already exists\|NRI is already configured"; then
             echo "✓ Init container detected pre-configured NRI"
           else
-            echo "⚠️ Init container did not detect pre-configured NRI"
+            echo "✗ Init container did not detect pre-configured NRI"
+            kubectl logs $POD -c nri-init || true
+            exit 1
           fi
           
           helm uninstall test-collector
