@@ -7,6 +7,7 @@ set -e
 # Default values
 NRI_CONFIGURE="${NRI_CONFIGURE:-false}"
 NRI_RESTART="${NRI_RESTART:-false}"
+NRI_FAIL_IF_UNAVAILABLE="${NRI_FAIL_IF_UNAVAILABLE:-false}"
 NRI_SOCKET_PATH="/var/run/nri/nri.sock"
 
 # Function to log messages
@@ -329,8 +330,22 @@ main() {
     fi
     
     log "INFO" "NRI initialization check completed"
-    # Always exit successfully to allow collector to run
-    exit 0
+    
+    # Check if we should fail when NRI is unavailable
+    if [ "$NRI_FAIL_IF_UNAVAILABLE" = "true" ]; then
+        # Check one more time if NRI socket exists after all operations
+        if check_nri_socket; then
+            log "INFO" "NRI socket verified, exiting successfully"
+            exit 0
+        else
+            log "ERROR" "NRI is not available and NRI_FAIL_IF_UNAVAILABLE=true"
+            exit 1
+        fi
+    else
+        # Always exit successfully to allow collector to run
+        log "INFO" "Allowing collector to start despite NRI unavailability"
+        exit 0
+    fi
 }
 
 # Run main function

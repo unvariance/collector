@@ -108,6 +108,8 @@ nri:
   configure: true
   # Whether to restart containerd after configuration (requires maintenance window)
   restart: false
+  # Whether to fail if NRI is unavailable (useful for testing)
+  failIfUnavailable: false
   # Init container configuration
   initContainer:
     image:

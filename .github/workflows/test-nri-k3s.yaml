@@ -81,10 +81,13 @@ jobs:
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
           
           # Deploy collector with NRI configuration but no restart
+          # Since we're not restarting K3s, NRI won't be available yet
+          # Don't fail on unavailable NRI since we're testing configuration only
           helm install test-collector ./charts/collector \
             --set storage.type=local \
             --set nri.configure=true \
             --set nri.restart=false \
+            --set nri.failIfUnavailable=false \
             --wait --timeout=2m
       
       - name: Check NRI init container logs
@@ -353,3 +356,58 @@ jobs:
           fi
           
           helm uninstall test3
+  test-nri-restart-k3s:
+    name: Test NRI with K3s Restart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install K3s
+        run: |
+          # Install latest K3s
+          curl -sfL https://get.k3s.io | sh -
+          
+          # Wait for K3s to be ready
+          sudo k3s kubectl wait --for=condition=Ready nodes --all --timeout=60s
+          
+          # Make kubectl accessible
+          mkdir -p ~/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config || true
+          sudo chown $USER:$USER ~/.kube/config || true
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      
+      - name: Deploy collector with NRI restart enabled
+        run: |
+          # Install Helm
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          
+          # Deploy collector with NRI configuration AND restart
+          # This should configure NRI and restart K3s, making NRI available
+          sudo KUBECONFIG=/etc/rancher/k3s/k3s.yaml helm install test-collector ./charts/collector \
+            --set storage.type=local \
+            --set nri.configure=true \
+            --set nri.restart=true \
+            --set nri.failIfUnavailable=true \
+            --wait --timeout=3m
+      
+      - name: Verify NRI is working
+        run: |
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          POD=$(sudo kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          
+          echo "=== NRI Init Container Logs ==="
+          sudo kubectl logs $POD -c nri-init
+          
+          # Check that NRI was successfully enabled
+          if sudo kubectl logs $POD -c nri-init | grep -q "NRI socket verified, exiting successfully\|NRI is already enabled and available"; then
+            echo "✓ NRI is working after restart"
+          else
+            echo "✗ NRI should be available after restart"
+            sudo kubectl logs $POD -c nri-init
+            exit 1
+          fi
+          
+          # Verify the collector pod is running
+          sudo kubectl wait --for=condition=Ready pod/$POD --timeout=60s
+          echo "✓ Collector is running with NRI enabled"

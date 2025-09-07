@@ -70,6 +70,8 @@ spec:
               value: "{{ .Values.nri.configure }}"
             - name: NRI_RESTART
               value: "{{ .Values.nri.restart }}"
+            - name: NRI_FAIL_IF_UNAVAILABLE
+              value: "{{ .Values.nri.failIfUnavailable | default false }}"
           resources:
             {{- toYaml .Values.nri.initContainer.resources | nindent 12 }}
           volumeMounts:
