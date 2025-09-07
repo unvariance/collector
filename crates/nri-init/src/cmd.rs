@@ -1,3 +1,4 @@
+use std::io::ErrorKind;
 use std::process::{Command, Stdio};
 use crate::opts::Nsenter;
 use crate::error::{Result, NriError};
@@ -19,11 +20,23 @@ impl Runner {
             }
         };
 
-        let output = Command::new(prog)
-            .args(argv)
+        let output = match Command::new(&prog)
+            .args(&argv)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .output()?;
+            .output()
+        {
+            Ok(o) => o,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                // Treat missing binary as non-zero exit so higher layers can
+                // gracefully fall back (e.g., NotSupported restart)
+                let code = 127;
+                let out = String::new();
+                let err = e.to_string();
+                return Ok((code, out, err));
+            }
+            Err(e) => return Err(NriError::Io(e)),
+        };
         let code = output.status.code().unwrap_or(-1);
         let out = String::from_utf8_lossy(&output.stdout).to_string();
         let err = String::from_utf8_lossy(&output.stderr).to_string();
@@ -46,4 +59,3 @@ pub fn default_runner(nsenter: &Option<Nsenter>) -> Runner {
         None => Runner::Local,
     }
 }
-
