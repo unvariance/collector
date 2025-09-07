@@ -7,6 +7,26 @@ on:
     branches: [ main ]
 
 jobs:
+  build-test-image:
+    name: Build and push nri-init test image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Build and push image
+        id: meta
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init-test:test-${{ github.run_id }}
+        run: |
+          docker build -f Dockerfile.nri-init-test -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -36,19 +56,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Build nri-init
         run: cargo build -p nri-init --release --verbose
-      - name: K3s tests (ignored)
-        run: cargo test -p nri-init --test k3s -- --ignored --test-threads=1 || true
-      - name: Containerd tests (ignored)
-        run: cargo test -p nri-init --test containerd -- --ignored --test-threads=1 || true
+      - name: K3s tests
+        run: cargo test -p nri-init --test k3s -- --ignored --test-threads=1
+      - name: Containerd tests
+        run: cargo test -p nri-init --test containerd -- --ignored --test-threads=1
 
   # GH-hosted integration tests that set up KIND and K3s and run the nri-init binary
   integration-matrix:
     name: Rust NRI Integration (${{ matrix.target }} / ${{ matrix.scenario }})
     runs-on: ubuntu-latest
+    needs: build-test-image
     strategy:
       fail-fast: false
       matrix:
         include:
+          - target: kind
+            scenario: configure-only
+            restart: false
+          - target: kind
+            scenario: configure-and-restart
+            restart: true
+          - target: k3s
+            scenario: configure-only
+            restart: false
           - target: k3s
             scenario: configure-and-restart
             restart: true
@@ -104,58 +134,68 @@ jobs:
           kubectl cluster-info --context kind-${CLUSTER}
           kubectl get nodes
 
-      - name: Run nri-init inside KIND node
+      - name: Create GHCR image pull secret in cluster
+        if: ${{ matrix.target == 'kind' }}
+        run: |
+          kubectl delete secret ghcr-creds || true
+          kubectl create secret docker-registry ghcr-creds \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${{ secrets.GITHUB_TOKEN }}" \
+            --docker-email="github-actions@users.noreply.github.com"
+
+      - name: Run nri-init as privileged DaemonSet on KIND
         if: ${{ matrix.target == 'kind' }}
         env:
-          CLUSTER: nri-rust-${{ matrix.scenario }}
-          NODE: nri-rust-${{ matrix.scenario }}-control-plane
+          TEST_IMAGE: ${{ needs.build-test-image.outputs.image }}
         run: |
-          # Copy binary into the node
-          sudo docker cp target/release/nri-init ${NODE}:/usr/local/bin/nri-init
-          sudo docker exec ${NODE} chmod +x /usr/local/bin/nri-init
-
-          echo "=== Pre-checks ==="
-          sudo docker exec ${NODE} sh -lc 'test -f /etc/containerd/config.toml && cat /etc/containerd/config.toml | head -n 30 || echo "(no config.toml present)"'
-
-          echo "=== Run nri-init (configure=true, restart=${{ matrix.restart }}) ==="
-          # Always configure=true in these tests; fail if unavailable when restart=true
-          set -x
-          FAILED=0
-          if ! sudo docker exec ${NODE} env \
-            NRI_CONFIGURE=true \
-            NRI_RESTART=${{ matrix.restart }} \
-            NRI_FAIL_IF_UNAVAILABLE=false \
-            /usr/local/bin/nri-init --log-level debug; then
-            echo "nri-init failed"
-            echo "=== containerd and config state ==="
-            sudo docker exec ${NODE} containerd --version || true
-            sudo docker exec ${NODE} sh -lc 'ls -l /etc/containerd || true'
-            sudo docker exec ${NODE} sh -lc 'test -f /etc/containerd/config.toml && sed -n "1,160p" /etc/containerd/config.toml || true'
-            FAILED=1
-          fi
-
-          echo "=== Verify config patched ==="
-          sudo docker exec ${NODE} cat /etc/containerd/config.toml > final-config.toml
-          if grep -q 'plugins."io.containerd.nri.v1.nri"' final-config.toml && grep -q 'disable = false' final-config.toml; then
-            echo "✓ NRI section present and enabled"
-          else
-            echo "✗ NRI configuration missing in containerd config"
-            cat final-config.toml
-            exit 1
-          fi
-
-          if [ "${{ matrix.restart }}" = "false" ]; then
-            echo "=== Verify socket absent when restart=false ==="
-            if sudo docker exec ${NODE} test -S /var/run/nri/nri.sock; then
-              echo "✗ Socket present but restart was false"
-              exit 1
-            else
-              echo "✓ Socket absent as expected (no restart)"
-            fi
-          fi
-          if [ "$FAILED" = "1" ]; then
-            echo "nri-init returned failure earlier, but configuration looks correct; continuing"
-          fi
+          cat > ds.yaml << 'EOF'
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: nri-init-test
+            namespace: kube-system
+            labels: { app: nri-init-test }
+          spec:
+            selector:
+              matchLabels: { app: nri-init-test }
+            template:
+              metadata:
+                labels: { app: nri-init-test }
+              spec:
+                hostPID: true
+                imagePullSecrets:
+                  - name: ghcr-creds
+                tolerations:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: "Exists"
+                    effect: "NoSchedule"
+                containers:
+                  - name: runner
+                    image: ${TEST_IMAGE}
+                    securityContext:
+                      privileged: true
+                    command: ["/usr/local/bin/nri-init"]
+                    args: ["--log-level","debug","--configure","--nsenter-path","nsenter","--no-restart"]
+                    volumeMounts:
+                      - { name: host-root, mountPath: /host }
+                      - { name: etc-containerd, mountPath: /etc/containerd }
+                      - { name: run-nri, mountPath: /var/run/nri }
+                volumes:
+                  - name: host-root
+                    hostPath: { path: /, type: Directory }
+                  - name: etc-containerd
+                    hostPath: { path: /etc/containerd, type: DirectoryOrCreate }
+                  - name: run-nri
+                    hostPath: { path: /var/run/nri, type: DirectoryOrCreate }
+          EOF
+          kubectl apply -f ds.yaml
+          # Wait for pod ready
+          kubectl -n kube-system rollout status ds/nri-init-test --timeout=120s
+          POD=$(kubectl -n kube-system get pod -l app=nri-init-test -o jsonpath='{.items[0].metadata.name}')
+          echo "=== nri-init logs ===" && kubectl -n kube-system logs "$POD" || true
+          echo "=== Verify host containerd config patched ==="
+          kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /etc/containerd/config.toml && grep -q "plugins.\"io.containerd.nri.v1.nri\"" /etc/containerd/config.toml && grep -q "disable = false" /etc/containerd/config.toml'
 
       - name: Cleanup KIND
         if: ${{ always() && matrix.target == 'kind' }}
@@ -168,8 +208,8 @@ jobs:
       - name: Install K3s
         if: ${{ matrix.target == 'k3s' }}
         run: |
-          # Install K3s as root (required by the installer)
-          curl -sfL https://get.k3s.io | sudo sh -
+          # Install specific K3s version (1.31.x)
+          curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="v1.31.12+k3s1" sudo sh -
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config

@@ -1,0 +1,16 @@
+# Build nri-init and package into a test-friendly image with nsenter
+
+FROM rust:1-bookworm AS build
+WORKDIR /src
+COPY Cargo.toml Cargo.lock ./
+COPY crates ./crates
+RUN cargo build -p nri-init --release --locked --verbose && \
+    cp /src/target/release/nri-init /nri-init
+
+FROM ubuntu:24.04
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates util-linux && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=build /nri-init /usr/local/bin/nri-init
+ENTRYPOINT ["/usr/local/bin/nri-init"]
