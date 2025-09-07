@@ -365,7 +365,7 @@ jobs:
             fi
             sleep 1
           done
-          if ! sudo test -S /var/run/nri/nri.sock && [ "${{ matrix.containerd_version }}" != "1.6.33" ]; then
+          if ! sudo test -S /var/run/nri/nri.sock; then
             echo "✗ NRI socket not found after restart"
             exit 1
           fi
