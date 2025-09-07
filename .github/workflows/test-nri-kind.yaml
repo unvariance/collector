@@ -183,8 +183,9 @@ jobs:
                grep -q "NRI_RESTART=false" init-logs.txt; then
               echo "✓ Correctly skipped restart"
             else
-              echo "⚠ Unexpected restart behavior"
+              echo "✗ Unexpected restart behavior (restart should be disabled)"
               cat init-logs.txt
+              exit 1
             fi
             
             # Verify config WAS modified
@@ -195,6 +196,14 @@ jobs:
             else
               echo "✗ NRI configuration not found in containerd config"
               exit 1
+            fi
+
+            # Ensure socket is NOT present since restart is disabled
+            if docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/nri.sock 2>/dev/null; then
+              echo "✗ NRI socket present but restart was disabled"
+              exit 1
+            else
+              echo "✓ NRI socket absent as expected (no restart)"
             fi
             
           elif [ "${{ matrix.test_scenario }}" = "configure-and-restart" ]; then
@@ -233,19 +242,19 @@ jobs:
               exit 1
             fi
             
-            # Check if socket appeared after restart
-            sleep 10
-            if docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/nri.sock 2>/dev/null; then
-              echo "✓ NRI socket exists after restart!"
-            else
+            # Check if socket appeared after restart (allow some time)
+            for i in {1..30}; do
+              if docker exec nri-test-${{ matrix.test_scenario }}-control-plane test -S /var/run/nri/nri.sock; then
+                docker exec nri-test-${{ matrix.test_scenario }}-control-plane ls -la /var/run/nri/nri.sock
+                echo "✓ NRI socket exists after restart!"
+                break
+              fi
+              sleep 1
+            done
+            if ! docker exec nri-test-${{ matrix.test_scenario }}-control-plane test -S /var/run/nri/nri.sock; then
               echo "✗ NRI socket not found after restart"
               echo "Expected NRI socket at /var/run/nri/nri.sock after configuration and restart"
-              # For scenarios where we expect restart to work, this should fail
-              if [ "${{ matrix.test_scenario }}" = "with-restart" ]; then
-                exit 1
-              else
-                echo "Note: Socket may require manual containerd restart for scenario: ${{ matrix.test_scenario }}"
-              fi
+              exit 1
             fi
           fi
       
