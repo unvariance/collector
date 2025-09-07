@@ -91,7 +91,7 @@ jobs:
           
           # Check if NRI socket exists in the mounted directory
           for i in {1..30}; do
-            if [ -S "/tmp/nri/nri.sock" ]; then
+            if sudo test -S "/tmp/nri/nri.sock"; then
               echo "✅ NRI socket found at /tmp/nri/nri.sock"
               ls -la /tmp/nri/nri.sock
               break
@@ -101,7 +101,7 @@ jobs:
             fi
           done
           
-          if [ ! -S "/tmp/nri/nri.sock" ]; then
+          if ! sudo test -S "/tmp/nri/nri.sock"; then
             echo "❌ NRI socket not found after waiting"
             echo "Checking KIND container logs..."
             docker logs nri-test-control-plane 2>&1 | grep -i nri || echo "No NRI logs found"
@@ -175,7 +175,7 @@ jobs:
           kubectl get nodes
           kubectl get pods -A
           
-          if [ -S "$NRI_SOCKET_PATH" ]; then
+          if sudo test -S "$NRI_SOCKET_PATH"; then
             echo "✅ NRI socket exists - proceeding with NRI integration test"
             
             # Check socket permissions
