@@ -62,7 +62,7 @@ jobs:
           name: nri-test-${{ matrix.test_scenario }}
           nodes:
           - role: control-plane
-            image: kindest/node:v1.31.4@sha256:2cb39f7295fe7eafee0842b1052f599d6777e36e8f2e9c6a6d0e55873e0730f0
+            image: kindest/node:v1.31.0@sha256:53df588e04085fd41ae12de0c3fe4c72f7013bba32a20e7325357a1ac94ba865
             # Mount host directories for our init container to access
             extraMounts:
             - hostPath: /etc/containerd
