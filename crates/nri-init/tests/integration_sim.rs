@@ -88,11 +88,13 @@ fn containerd_config_idempotent() {
         socket_path: None,
         k3s_template_dir: None,
     };
-    let out1 = nri_init::run(opts1).expect("first run ok");
+    // Clone to avoid moving opts1 so we can reuse it below
+    let out1 = nri_init::run(opts1.clone()).expect("first run ok");
     assert!(out1.configured);
 
     // Second run should find no changes to apply
-    let opts2 = Options { containerd_config_path: Some(cfg.clone()), ..opts1 };
+    let mut opts2 = opts1.clone();
+    opts2.containerd_config_path = Some(cfg.clone());
     let out2 = nri_init::run(opts2).expect("second run ok");
     assert!(!out2.configured, "second run should be idempotent (no changes)");
 }
