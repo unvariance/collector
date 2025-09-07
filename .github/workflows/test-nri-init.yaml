@@ -365,7 +365,7 @@ jobs:
             fi
             sleep 1
           done
-          if [ ! -S /var/run/nri/nri.sock ] && [ "${{ matrix.containerd_version }}" != "1.6.33" ]; then
+          if ! sudo test -S /var/run/nri/nri.sock && [ "${{ matrix.containerd_version }}" != "1.6.33" ]; then
             echo "✗ NRI socket not found after restart"
             exit 1
           fi
@@ -494,11 +494,19 @@ jobs:
             exit 1
           fi
 
-          # Best-effort check for NRI socket (may depend on K3s/containerd build)
-          if sudo test -S /var/run/nri/nri.sock; then
-            echo "✓ NRI socket present after K3s restart"
-          else
-            echo "ℹ NRI socket not found after K3s restart (non-fatal)"
+          # Verify NRI socket after K3s restart (required)
+          for i in {1..30}; do
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✓ NRI socket present after K3s restart"
+              break
+            fi
+            sleep 1
+          done
+          if ! sudo test -S /var/run/nri/nri.sock; then
+            echo "✗ NRI socket not found after K3s restart"
+            sudo ls -la /var/run/nri || true
+            sudo journalctl -u k3s --no-pager -n 50 || true
+            exit 1
           fi
           
           # Check if actual containerd config was updated (K3s generates this from template)
@@ -639,7 +647,7 @@ jobs:
             fi
             sleep 1
           done
-          if [ ! -S /var/run/nri/nri.sock ]; then
+          if ! sudo test -S /var/run/nri/nri.sock; then
             echo "✗ NRI socket not found after script with restart"
             sudo ls -la /var/run/nri || true
             sudo systemctl status containerd || true
@@ -681,7 +689,7 @@ jobs:
               fi
               sleep 1
             done
-            if [ ! -S /var/run/nri/nri.sock ]; then
+            if ! sudo test -S /var/run/nri/nri.sock; then
               echo "✗ NRI socket not found after restart"
               sudo ls -la /var/run/nri || true
               sudo systemctl status containerd || true

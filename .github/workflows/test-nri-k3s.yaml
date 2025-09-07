@@ -224,7 +224,7 @@ jobs:
           sleep 15
           
           echo "=== Checking for NRI socket ==="
-          if [ -S "/var/run/nri/nri.sock" ]; then
+          if sudo test -S /var/run/nri/nri.sock; then
             echo "✓ NRI socket exists after restart!"
             ls -la /var/run/nri/nri.sock
           else
