@@ -450,16 +450,19 @@ jobs:
           
           # Verify NRI configuration was added to K3s template (prefer v3, fallback v2)
           template_dir="/var/lib/rancher/k3s/agent/etc/containerd"
-          if [ -f "$template_dir/config-v3.toml.tmpl" ]; then
+          echo "Looking for K3s templates under $template_dir ..."
+          sudo ls -la "$template_dir" || true
+          if sudo test -f "$template_dir/config-v3.toml.tmpl"; then
             template_file="$template_dir/config-v3.toml.tmpl"
-          elif [ -f "$template_dir/config.toml.tmpl" ]; then
+          elif sudo test -f "$template_dir/config.toml.tmpl"; then
             template_file="$template_dir/config.toml.tmpl"
           else
             echo "✗ K3s template file not found at either $template_dir/config-v3.toml.tmpl or $template_dir/config.toml.tmpl"
-            sudo ls -la "$template_dir" || true
+            # Extra diagnostics
+            echo "Contents of $template_dir:" && sudo ls -la "$template_dir" || true
             exit 1
           fi
-          if [ -f "$template_file" ]; then
+          if sudo test -f "$template_file"; then
             if sudo grep -q 'plugins."io.containerd.nri.v1.nri"' "$template_file"; then
               echo "✓ NRI configuration found in K3s template"
               sudo grep -A 5 'plugins."io.containerd.nri.v1.nri"' "$template_file"

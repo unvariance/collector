@@ -438,10 +438,9 @@ main() {
     fi
     
     log "INFO" "NRI initialization check completed"
-    
-    # Check if we should fail when NRI is unavailable
+
+    # Final availability handling and exit
     if [ "$NRI_FAIL_IF_UNAVAILABLE" = "true" ]; then
-        # Check one more time if NRI socket exists after all operations
         if check_nri_socket; then
             log "INFO" "NRI socket verified, exiting successfully"
             exit 0
@@ -450,9 +449,14 @@ main() {
             exit 1
         fi
     else
-        # Always exit successfully to allow collector to run
-        log "INFO" "Allowing collector to start despite NRI unavailability"
-        exit 0
+        # Re-check availability to avoid misleading logs
+        if check_nri_socket; then
+            log "INFO" "NRI is available; proceeding to start collector"
+            exit 0
+        else
+            log "INFO" "Allowing collector to start despite NRI unavailability"
+            exit 0
+        fi
     fi
 }
 
