@@ -288,6 +288,11 @@ jobs:
               kubectl -n kube-system describe ds nri-init-test || true
               echo '--- Pod Logs ---'
               kubectl -n kube-system logs "$POD" || true
+              echo '--- containerd service status via nsenter ---'
+              # Try to inspect containerd service on the node
+              kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl status containerd || true'
+              echo '--- containerd process list on node ---'
+              kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- ps aux | grep -E "containerd( |$)" || true'
               exit 1
             fi
           fi
