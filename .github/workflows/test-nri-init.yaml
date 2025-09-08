@@ -1,4 +1,4 @@
-name: Rust NRI Init Tests
+name: test-nri-init
 
 on:
   push:
