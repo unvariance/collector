@@ -1,7 +1,7 @@
+use crate::error::{NriError, Result};
+use crate::opts::Nsenter;
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
-use crate::opts::Nsenter;
-use crate::error::{Result, NriError};
 
 #[derive(Clone, Debug)]
 pub enum Runner {
@@ -12,11 +12,19 @@ pub enum Runner {
 impl Runner {
     pub fn run_capture(&self, program: &str, args: &[&str]) -> Result<(i32, String, String)> {
         let (prog, argv) = match self {
-            Runner::Local => (program.to_string(), args.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            Runner::Local => (
+                program.to_string(),
+                args.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            ),
             Runner::Nsenter(ns) => {
-                let mut argv = vec!["--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "--", program];
+                let mut argv = vec![
+                    "--target", "1", "--mount", "--uts", "--ipc", "--net", "--pid", "--", program,
+                ];
                 argv.extend(args);
-                (ns.path.clone(), argv.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+                (
+                    ns.path.clone(),
+                    argv.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                )
             }
         };
 
@@ -48,7 +56,10 @@ impl Runner {
         if code == 0 {
             Ok(out)
         } else {
-            Err(NriError::CommandFailed(format!("{} {:?} -> {}: {}", program, args, code, err)))
+            Err(NriError::CommandFailed(format!(
+                "{} {:?} -> {}: {}",
+                program, args, code, err
+            )))
         }
     }
 }

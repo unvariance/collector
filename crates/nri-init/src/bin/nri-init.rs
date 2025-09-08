@@ -20,7 +20,12 @@ fn main() {
     init_tracing(opts.log_level);
     match nri_init::run(opts) {
         Ok(out) => {
-            tracing::info!("Completed: configured={}, restarted={}, socket={}", out.configured, out.restarted, out.socket_available);
+            tracing::info!(
+                "Completed: configured={}, restarted={}, socket={}",
+                out.configured,
+                out.restarted,
+                out.socket_available
+            );
             tracing::info!("nri-init done");
             std::process::exit(0);
         }

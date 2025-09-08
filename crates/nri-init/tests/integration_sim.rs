@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use nri_init::{Options, Mode, LogLevel};
+use nri_init::{LogLevel, Mode, Options};
 
 fn temp_path(dir: &TempDir, rel: &str) -> String {
     let mut p = PathBuf::from(dir.path());
@@ -96,5 +96,8 @@ fn containerd_config_idempotent() {
     let mut opts2 = opts1.clone();
     opts2.containerd_config_path = Some(cfg.clone());
     let out2 = nri_init::run(opts2).expect("second run ok");
-    assert!(!out2.configured, "second run should be idempotent (no changes)");
+    assert!(
+        !out2.configured,
+        "second run should be idempotent (no changes)"
+    );
 }

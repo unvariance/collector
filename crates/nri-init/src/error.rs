@@ -27,4 +27,3 @@ pub enum NriError {
 }
 
 pub type Result<T> = std::result::Result<T, NriError>;
-

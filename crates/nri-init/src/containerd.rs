@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
-use tracing::info;
 use toml_edit::DocumentMut;
+use tracing::info;
 
-use crate::error::{Result, NriError};
+use crate::error::{NriError, Result};
 use crate::toml_util::{ensure_nri_section, ensure_version2};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/containerd/config.toml";
@@ -16,12 +16,16 @@ pub fn configure_containerd(path: &str, socket_path: &str, dry_run: bool) -> Res
         if dry_run {
             return Ok(true);
         }
-        if let Some(dir) = p.parent() { fs::create_dir_all(dir)?; }
+        if let Some(dir) = p.parent() {
+            fs::create_dir_all(dir)?;
+        }
         fs::write(p, b"version = 2\n")?;
     }
 
     let content = fs::read_to_string(p)?;
-    let mut doc: DocumentMut = content.parse().map_err(|e| NriError::TomlMutation(format!("parse error: {e}")))?;
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e| NriError::TomlMutation(format!("parse error: {e}")))?;
     let mut changed = ensure_version2(&mut doc);
     changed |= ensure_nri_section(&mut doc, socket_path);
 

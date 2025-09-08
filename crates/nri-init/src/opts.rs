@@ -60,9 +60,15 @@ pub fn from_env_and_args() -> Options {
     let mut opts = Options::default();
 
     // Env vars
-    if let Ok(v) = std::env::var("NRI_CONFIGURE") { opts.configure = parse_bool(&v); }
-    if let Ok(v) = std::env::var("NRI_RESTART") { opts.restart = parse_bool(&v); }
-    if let Ok(v) = std::env::var("NRI_FAIL_IF_UNAVAILABLE") { opts.fail_if_unavailable = parse_bool(&v); }
+    if let Ok(v) = std::env::var("NRI_CONFIGURE") {
+        opts.configure = parse_bool(&v);
+    }
+    if let Ok(v) = std::env::var("NRI_RESTART") {
+        opts.restart = parse_bool(&v);
+    }
+    if let Ok(v) = std::env::var("NRI_FAIL_IF_UNAVAILABLE") {
+        opts.fail_if_unavailable = parse_bool(&v);
+    }
 
     // Args
     let mut args = std::env::args().skip(1);
@@ -76,25 +82,45 @@ pub fn from_env_and_args() -> Options {
             "--no-fail-if-unavailable" => opts.fail_if_unavailable = false,
             "--mode" => {
                 if let Some(v) = args.next() {
-                    opts.mode = match v.as_str() { "auto" => Mode::Auto, "k3s" => Mode::K3s, "containerd" => Mode::Containerd, _ => Mode::Auto };
+                    opts.mode = match v.as_str() {
+                        "auto" => Mode::Auto,
+                        "k3s" => Mode::K3s,
+                        "containerd" => Mode::Containerd,
+                        _ => Mode::Auto,
+                    };
                 }
             }
             "--dry-run" => opts.dry_run = true,
             "--nsenter-path" => {
-                if let Some(p) = args.next() { opts.nsenter = Some(Nsenter { path: p }); }
+                if let Some(p) = args.next() {
+                    opts.nsenter = Some(Nsenter { path: p });
+                }
             }
             "--containerd-config" => {
-                if let Some(p) = args.next() { opts.containerd_config_path = Some(p); }
+                if let Some(p) = args.next() {
+                    opts.containerd_config_path = Some(p);
+                }
             }
             "--socket-path" => {
-                if let Some(p) = args.next() { opts.socket_path = Some(p); }
+                if let Some(p) = args.next() {
+                    opts.socket_path = Some(p);
+                }
             }
             "--k3s-template-dir" => {
-                if let Some(p) = args.next() { opts.k3s_template_dir = Some(p); }
+                if let Some(p) = args.next() {
+                    opts.k3s_template_dir = Some(p);
+                }
             }
             "--log-level" => {
                 if let Some(v) = args.next() {
-                    opts.log_level = match v.as_str() { "error" => LogLevel::Error, "warn" => LogLevel::Warn, "info" => LogLevel::Info, "debug" => LogLevel::Debug, "trace" => LogLevel::Trace, _ => LogLevel::Info };
+                    opts.log_level = match v.as_str() {
+                        "error" => LogLevel::Error,
+                        "warn" => LogLevel::Warn,
+                        "info" => LogLevel::Info,
+                        "debug" => LogLevel::Debug,
+                        "trace" => LogLevel::Trace,
+                        _ => LogLevel::Info,
+                    };
                 }
             }
             _ => {}
@@ -104,7 +130,9 @@ pub fn from_env_and_args() -> Options {
     // Auto-discover nsenter typical path inside k8s host mount
     if opts.nsenter.is_none() {
         if std::path::Path::new("/host/proc/1/ns/mnt").exists() {
-            opts.nsenter = Some(Nsenter { path: "nsenter".to_string() });
+            opts.nsenter = Some(Nsenter {
+                path: "nsenter".to_string(),
+            });
         }
     }
 

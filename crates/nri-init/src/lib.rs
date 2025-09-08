@@ -1,19 +1,19 @@
-pub mod opts;
-mod detect;
-mod containerd;
-mod k3s;
-mod verify;
-mod toml_util;
 mod cmd;
+mod containerd;
+mod detect;
 mod error;
+mod k3s;
+pub mod opts;
+mod toml_util;
+mod verify;
 
-pub use opts::{Options, Mode, LogLevel, Nsenter};
-pub use detect::{EnvKind};
+pub use detect::EnvKind;
 pub use error::{NriError, Result};
+pub use opts::{LogLevel, Mode, Nsenter, Options};
 pub use verify::RestartResult;
 
 use semver::Version;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 #[derive(Debug, Clone)]
 pub struct NriOutcome {
@@ -27,12 +27,18 @@ pub struct NriOutcome {
 
 pub fn run(opts: Options) -> Result<NriOutcome> {
     info!("Starting NRI initialization check");
-    info!("Configuration: configure={}, restart={}", opts.configure, opts.restart);
+    info!(
+        "Configuration: configure={}, restart={}",
+        opts.configure, opts.restart
+    );
 
     let det = detect::detect(&opts)?;
 
     // Early socket check
-    let socket_path = opts.socket_path.as_deref().unwrap_or(containerd::DEFAULT_SOCKET_PATH);
+    let socket_path = opts
+        .socket_path
+        .as_deref()
+        .unwrap_or(containerd::DEFAULT_SOCKET_PATH);
     let socket_available = std::path::Path::new(socket_path).exists();
     if socket_available {
         info!("NRI socket found at {socket_path}");
@@ -46,8 +52,17 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
         let min = Version::parse("1.7.0").unwrap();
         if *v < min {
             warn!("containerd {} does not support NRI (>=1.7 required)", v);
-            if opts.fail_if_unavailable { return Err(NriError::VersionUnsupported(v.to_string())); }
-            return Ok(NriOutcome { env: det.env, containerd_version: det.containerd_version, configured: false, restarted: false, restart_verified: false, socket_available });
+            if opts.fail_if_unavailable {
+                return Err(NriError::VersionUnsupported(v.to_string()));
+            }
+            return Ok(NriOutcome {
+                env: det.env,
+                containerd_version: det.containerd_version,
+                configured: false,
+                restarted: false,
+                restart_verified: false,
+                socket_available,
+            });
         }
     } else {
         warn!("Unable to determine containerd version; proceeding best-effort");
@@ -58,13 +73,17 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
         match det.env {
             EnvKind::K3s { .. } => {
                 configured = if let Some(ref dir) = opts.k3s_template_dir {
-                    k3s::configure_k3s_templates_in(dir, opts.dry_run).map_err(|e| NriError::Io(e))?
+                    k3s::configure_k3s_templates_in(dir, opts.dry_run)
+                        .map_err(|e| NriError::Io(e))?
                 } else {
                     k3s::configure_k3s_templates(opts.dry_run).map_err(|e| NriError::Io(e))?
                 };
             }
             EnvKind::Containerd => {
-                let cfg_path = opts.containerd_config_path.as_deref().unwrap_or(containerd::DEFAULT_CONFIG_PATH);
+                let cfg_path = opts
+                    .containerd_config_path
+                    .as_deref()
+                    .unwrap_or(containerd::DEFAULT_CONFIG_PATH);
                 configured = containerd::configure_containerd(cfg_path, socket_path, opts.dry_run)?;
             }
         }
@@ -77,10 +96,15 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
     let mut restart_verified = false;
     if opts.restart && configured {
         use verify::RestartResult::*;
-        let hint = match det.env { EnvKind::K3s { .. } => "k3s", EnvKind::Containerd => "containerd" };
+        let hint = match det.env {
+            EnvKind::K3s { .. } => "k3s",
+            EnvKind::Containerd => "containerd",
+        };
         match verify::restart_and_verify(hint, &opts)? {
             NotRequested => {}
-            NotSupported => { warn!("Automatic restart not supported; manual restart may be required"); }
+            NotSupported => {
+                warn!("Automatic restart not supported; manual restart may be required");
+            }
             Issued => {
                 restarted = true;
                 // After issuing a restart, wait up to 60s for the socket (older nodes can be slower)
@@ -109,7 +133,9 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
     let socket_available_final = std::path::Path::new(socket_path).exists();
     if opts.fail_if_unavailable && !socket_available_final {
         error!("NRI unavailable and fail_if_unavailable=true");
-        return Err(NriError::VerificationFailed("NRI socket unavailable".into()));
+        return Err(NriError::VerificationFailed(
+            "NRI socket unavailable".into(),
+        ));
     }
 
     Ok(NriOutcome {

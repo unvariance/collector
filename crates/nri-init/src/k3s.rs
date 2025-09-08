@@ -32,8 +32,14 @@ pub fn configure_k3s_templates_in(base_dir: &str, dry_run: bool) -> std::io::Res
         info!("No K3s containerd templates; creating both v2 and v3 templates");
         if !dry_run {
             fs::create_dir_all(base_dir)?;
-            fs::write(&template_v2, "# K3s containerd config template with NRI\n{{ template \"base\" . }}\n")?;
-            fs::write(&template_v3, "# K3s containerd config template with NRI (v3)\n{{ template \"base\" . }}\n")?;
+            fs::write(
+                &template_v2,
+                "# K3s containerd config template with NRI\n{{ template \"base\" . }}\n",
+            )?;
+            fs::write(
+                &template_v3,
+                "# K3s containerd config template with NRI (v3)\n{{ template \"base\" . }}\n",
+            )?;
         }
         changed = true;
     }
@@ -45,13 +51,17 @@ pub fn configure_k3s_templates_in(base_dir: &str, dry_run: bool) -> std::io::Res
             if !content.contains("plugins.\"io.containerd.nri.v1.nri\"") {
                 info!("Adding NRI section to {}", p.display());
                 content.push_str(NRI_SECTION);
-                if !dry_run { fs::write(p, content)?; }
+                if !dry_run {
+                    fs::write(p, content)?;
+                }
                 changed = true;
             } else if content.contains("disable = true") {
                 info!("Flipping disable=true to disable=false in {}", p.display());
                 let newc = content.replace("disable = true", "disable = false");
                 if newc != content {
-                    if !dry_run { fs::write(p, newc)?; }
+                    if !dry_run {
+                        fs::write(p, newc)?;
+                    }
                     changed = true;
                 }
             }

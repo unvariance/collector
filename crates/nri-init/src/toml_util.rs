@@ -1,11 +1,13 @@
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{value, DocumentMut, Item, Table};
 
 pub fn ensure_version2(doc: &mut DocumentMut) -> bool {
     // Ensure top-level version = 2 if absent
     if !doc.contains_key("version") {
         doc["version"] = value(2);
         true
-    } else { false }
+    } else {
+        false
+    }
 }
 
 pub fn ensure_nri_section(doc: &mut DocumentMut, socket_path: &str) -> bool {
@@ -24,20 +26,42 @@ pub fn ensure_nri_section(doc: &mut DocumentMut, socket_path: &str) -> bool {
         changed = true;
     }
 
-    let t = plugins.get_mut("io.containerd.nri.v1.nri").and_then(|i| i.as_table_mut()).unwrap();
+    let t = plugins
+        .get_mut("io.containerd.nri.v1.nri")
+        .and_then(|i| i.as_table_mut())
+        .unwrap();
 
     // Helper to set a default if missing
     // Required and defaults
     // Always enforce disable=false if not already false
-    if t.get("disable").and_then(|v| v.as_value()).map(|v| v.as_bool().unwrap_or(false)) != Some(false) {
+    if t.get("disable")
+        .and_then(|v| v.as_value())
+        .map(|v| v.as_bool().unwrap_or(false))
+        != Some(false)
+    {
         t.insert("disable", value(false));
         changed = true;
     }
-    if !t.contains_key("disable_connections") { t.insert("disable_connections", value(false)); changed = true; }
-    if !t.contains_key("plugin_config_path") { t.insert("plugin_config_path", value("/etc/nri/conf.d")); changed = true; }
-    if !t.contains_key("plugin_path") { t.insert("plugin_path", value("/opt/nri/plugins")); changed = true; }
-    if !t.contains_key("plugin_registration_timeout") { t.insert("plugin_registration_timeout", value("5s")); changed = true; }
-    if !t.contains_key("plugin_request_timeout") { t.insert("plugin_request_timeout", value("2s")); changed = true; }
+    if !t.contains_key("disable_connections") {
+        t.insert("disable_connections", value(false));
+        changed = true;
+    }
+    if !t.contains_key("plugin_config_path") {
+        t.insert("plugin_config_path", value("/etc/nri/conf.d"));
+        changed = true;
+    }
+    if !t.contains_key("plugin_path") {
+        t.insert("plugin_path", value("/opt/nri/plugins"));
+        changed = true;
+    }
+    if !t.contains_key("plugin_registration_timeout") {
+        t.insert("plugin_registration_timeout", value("5s"));
+        changed = true;
+    }
+    if !t.contains_key("plugin_request_timeout") {
+        t.insert("plugin_request_timeout", value("2s"));
+        changed = true;
+    }
 
     // Ensure socket_path matches desired path
     let need_socket_update = t
