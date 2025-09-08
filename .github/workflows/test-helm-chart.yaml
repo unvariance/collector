@@ -172,7 +172,8 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       HOME: /root
-      IMAGE_REPOSITORY: ${{ inputs.image-repository || 'ghcr.io/unvariance/collector/collector' }}
+      # Default to current repo's GHCR path (owner/repo/collector)
+      IMAGE_REPOSITORY: ${{ inputs.image-repository || format('ghcr.io/{0}/collector', github.repository) }}
       IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
       TRACE_MODE: ${{ matrix.trace-mode }}
     steps:
@@ -443,6 +444,14 @@ jobs:
         with:
           config: /tmp/kind-config.yaml
 
+      - name: Wait for KIND nodes to be Ready
+        run: |
+          echo "Sleeping 30s to allow nodes to initialize..."
+          sleep 30
+          echo "Waiting for all nodes to become Ready..."
+          kubectl get nodes
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
       - name: Verify cluster has 8 nodes
         run: |
           kubectl get nodes
@@ -460,6 +469,10 @@ jobs:
             --set deployment.mode=all \
             --set storage.type=local \
             --wait --timeout 2m
+          echo "Sleeping 30s to allow pods to schedule and start..."
+          sleep 30
+          echo "Waiting for collector pods to become Ready..."
+          kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=collector --timeout=180s
           
           # Verify DaemonSet created
           kubectl get daemonset
@@ -487,6 +500,10 @@ jobs:
             --set deployment.sampleSize=6 \
             --set storage.type=local \
             --wait --timeout 2m
+          echo "Sleeping 30s to allow pods to schedule and start..."
+          sleep 30
+          echo "Waiting for collector pods to become Ready..."
+          kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=collector --timeout=180s
           
           # Verify Deployment created
           kubectl get deployment
