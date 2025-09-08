@@ -435,6 +435,10 @@ jobs:
         run: |
           helm install test-ds charts/collector \
             --set deployment.mode=all \
+            --set image.repository=ghcr.io/${{ github.repository }}/collector \
+            --set image.tag=latest \
+            --set nri.init.image.repository=ghcr.io/${{ github.repository }}/nri-init \
+            --set nri.init.image.tag=latest \
             --set storage.type=local \
             --wait --timeout 2m
           echo "Sleeping 30s to allow pods to schedule and start..."
@@ -466,6 +470,10 @@ jobs:
           helm install test-deploy charts/collector \
             --set deployment.mode=sample \
             --set deployment.sampleSize=6 \
+            --set image.repository=ghcr.io/${{ github.repository }}/collector \
+            --set image.tag=latest \
+            --set nri.init.image.repository=ghcr.io/${{ github.repository }}/nri-init \
+            --set nri.init.image.tag=latest \
             --set storage.type=local \
             --wait --timeout 2m
           echo "Sleeping 30s to allow pods to schedule and start..."
