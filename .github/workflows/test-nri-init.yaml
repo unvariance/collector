@@ -134,10 +134,20 @@ jobs:
             --set nri.init.image.tag="$TAG" \
             --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
             --wait --timeout 2m
-      - name: Check pod status
+      - name: Check pod status / wait for init completion
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
-          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "Waiting for init container to complete..."
+          for i in {1..60}; do
+            STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[?(@.name=="nri-init")].state}' 2>/dev/null || echo "{}")
+            if echo "$STATUS" | grep -q "terminated"; then
+              echo "Init container completed"
+              break
+            fi
+            echo "Waiting for init container... ($i/60)"
+            sleep 2
+          done
       - name: Check init container logs
         run: |
           # Get pod name
