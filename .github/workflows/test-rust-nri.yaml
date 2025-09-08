@@ -230,7 +230,7 @@ jobs:
                     args:
                       - >-
                         /usr/local/bin/nri-init --log-level debug --configure --nsenter-path nsenter $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart --fail-if-unavailable" || echo "--no-restart" ) || true;
-                        echo "nri-init done; sleeping to keep pod Ready";
+                        echo "sleeping to keep pod Ready";
                         sleep 3600
                     volumeMounts:
                       - { name: host-root, mountPath: /host }
@@ -266,7 +266,20 @@ jobs:
             fi
             exit 1
           fi
-          echo "=== nri-init logs ==="
+          echo "=== Wait for nri-init completion (KIND DS) ==="
+          for i in {1..120}; do
+            if kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+              echo "✓ nri-init done observed in logs"
+              break
+            fi
+            sleep 1
+          done
+          if ! kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+            echo "✗ Did not observe 'nri-init done' in logs within 120s"
+            kubectl -n kube-system logs "$POD" || true
+            exit 1
+          fi
+          echo "=== nri-init logs (KIND DS) ==="
           kubectl -n kube-system logs "$POD" || true
           # Note: nri-init may report a transient failure immediately after restart.
           # Treat final socket presence as the source of truth.
@@ -464,7 +477,7 @@ jobs:
                     args:
                       - >-
                         /usr/local/bin/nri-init --log-level debug --mode k3s --configure --nsenter-path nsenter $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart --fail-if-unavailable" || echo "--no-restart" ) || true;
-                        echo "nri-init done; sleeping to keep pod Ready";
+                        echo "sleeping to keep pod Ready";
                         sleep 3600
                     volumeMounts:
                       - { name: host-root, mountPath: /host }
@@ -481,6 +494,19 @@ jobs:
           kubectl apply -f ds-k3s.yaml
           kubectl -n kube-system rollout status ds/nri-init-test-k3s --timeout=60s
           POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}')
+          echo "=== Wait for nri-init completion (K3s DS) ==="
+          for i in {1..180}; do
+            if kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+              echo "✓ nri-init done observed in logs"
+              break
+            fi
+            sleep 1
+          done
+          if ! kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+            echo "✗ Did not observe 'nri-init done' in logs within 180s"
+            kubectl -n kube-system logs "$POD" || true
+            exit 1
+          fi
           echo "=== nri-init logs (k3s DS) ==="
           kubectl -n kube-system logs "$POD" || true
           # Note: nri-init may report a transient failure immediately after restart.
