@@ -137,7 +137,7 @@ jobs:
       - name: Check pod status / wait for init completion
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector --sort-by=.metadata.creationTimestamp -o name | tail -n 1 | cut -d/ -f2)
           echo "Waiting for init container to complete..."
           for i in {1..60}; do
             STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[?(@.name=="nri-init")].state}' 2>/dev/null || echo "{}")
@@ -151,7 +151,7 @@ jobs:
       - name: Check init container logs
         run: |
           # Get pod name
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector --sort-by=.metadata.creationTimestamp -o name | tail -n 1 | cut -d/ -f2)
           echo "=== NRI Init Container Logs ==="
           kubectl logs $POD -c nri-init
           # Verify expected log messages (new nri-init format)
@@ -189,7 +189,7 @@ jobs:
             echo "Waiting for pod... ($i/30)"
             sleep 2
           done
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector --sort-by=.metadata.creationTimestamp -o name | tail -n 1 | cut -d/ -f2)
           # Wait for init container to complete
           echo "Waiting for init container to complete..."
           for i in {1..30}; do
