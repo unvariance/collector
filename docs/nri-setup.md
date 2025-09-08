@@ -35,6 +35,23 @@ What this means for K3s clusters:
 - If your cluster runs one of the versions with containerd 2.0 (see above), NRI is already enabled by default and no configuration is required.
 - If your cluster runs any other supported K3s version (including all of `v1.30.x` and older minors, and early `v1.31`/`v1.32` patch releases), you need to enable NRI explicitly (use this guide or upgrade to a containerd 2.0-based K3s patch).
 
+### KIND Versions and NRI
+
+NRI status by KIND release:
+
+- KIND `v0.27.0+`: NRI enabled by default (via containerd 2.x)
+- KIND `v0.26.0` and earlier: NRI not enabled by default
+
+Key details for `v0.27.0`:
+
+- Requires using `kind load` subcommands compatible with containerd 2.0+ images
+- Requires `config_path` mode for containerd registry configuration
+- Default Kubernetes version is `v1.32.2`
+
+Note: Unlike K3s (which adopted containerd 2.0 only in select release lines), each KIND release supports multiple Kubernetes versions. When KIND `v0.27.0` adopted containerd 2.0, it applied across all Kubernetes versions you can deploy with that KIND release.
+
+In summary: To get NRI enabled by default in KIND, use `v0.27.0` or later.
+
 ## How the NRI Init Container Works
 
 The collector Helm chart includes an init container that:
