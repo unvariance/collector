@@ -176,6 +176,8 @@ jobs:
             -f charts/collector/ci/nri-configure-only-values.yaml \
             --set nri.init.image.repository="$REPO" \
             --set nri.init.image.tag="$TAG" \
+            --set nri.restart=true \
+            --set nri.failIfUnavailable=true \
             --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
             --wait --timeout 2m
       - name: Check configuration was attempted
@@ -201,16 +203,42 @@ jobs:
             echo "Waiting for init container... ($i/30)"
             sleep 2
           done
-          echo "=== NRI Init Container Logs (Configure Only) ==="
+          echo "=== NRI Init Container Logs (Configure + Restart) ==="
           kubectl logs $POD -c nri-init
           # Verify configuration flags via structured log line
-          if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=true, restart=false"; then
-            echo "✓ Detected expected configuration flags in logs (configure=true, restart=false)"
+          if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=true, restart=true"; then
+            echo "✓ Detected expected configuration flags in logs (configure=true, restart=true)"
           else
-            echo "✗ Expected 'Configuration: configure=true, restart=false' in init logs"
+            echo "✗ Expected 'Configuration: configure=true, restart=true' in init logs"
             kubectl logs $POD -c nri-init || true
             exit 1
           fi
+
+      - name: Verify NRI socket present on KIND node after restart
+        run: |
+          set -x
+          NODE_NAME="test-cluster-${{ matrix.k8s_version }}-control-plane"
+          echo "Waiting for containerd active in node $NODE_NAME..."
+          # Best-effort wait; KIND nodes use systemd within container image
+          for i in {1..90}; do
+            if docker exec "$NODE_NAME" /bin/sh -lc 'systemctl is-active containerd' | grep -q '^active$'; then
+              echo "containerd active"
+              break
+            fi
+            sleep 1
+          done
+          echo "Waiting for NRI socket to appear..."
+          for i in {1..120}; do
+            if docker exec "$NODE_NAME" /bin/sh -lc 'test -S /var/run/nri/nri.sock'; then
+              docker exec "$NODE_NAME" ls -la /var/run/nri/nri.sock
+              echo "✓ NRI socket exists after restart"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "✗ NRI socket not found on KIND node after restart"
+          docker exec "$NODE_NAME" /bin/sh -lc 'ls -la /var/run/nri || true; head -n 200 /etc/containerd/config.toml || true'
+          exit 1
 
   verify-nri-preconfigured:
     name: Verify NRI Pre-configured on KIND v0.30
