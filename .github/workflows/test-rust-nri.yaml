@@ -35,13 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build nri-init (release)
-        run: cargo build -p nri-init --release --locked --verbose
+      - name: Build nri-init (musl, static)
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          CC_x86_64_unknown_linux_musl=musl-gcc \
+            cargo build -p nri-init --release --target x86_64-unknown-linux-musl --locked --verbose
       - name: Upload nri-init artifact
         uses: actions/upload-artifact@v4
         with:
           name: nri-init-bin
-          path: target/release/nri-init
+          path: target/x86_64-unknown_linux_musl/release/nri-init
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -263,8 +268,27 @@ jobs:
           fi
           echo "=== nri-init logs ==="
           kubectl -n kube-system logs "$POD" || true
+          # Fail if nri-init reported failure
+          if kubectl -n kube-system logs "$POD" | grep -q "nri-init failed"; then
+            echo "✗ nri-init reported failure in logs"
+            exit 1
+          fi
           echo "=== Verify host containerd config patched ==="
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /etc/containerd/config.toml && grep -q "plugins.\"io.containerd.nri.v1.nri\"" /etc/containerd/config.toml && grep -q "disable = false" /etc/containerd/config.toml'
+          # If restart requested, verify socket appears
+          if [ "${{ matrix.restart }}" = "true" ]; then
+            for i in {1..30}; do
+              if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
+                echo "✓ NRI socket exists after restart"
+                break
+              fi
+              sleep 1
+            done
+            if ! kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
+              echo "✗ NRI socket not found after restart"
+              exit 1
+            fi
+          fi
 
       - name: Run nri-init directly inside KIND node (binary mode)
         if: ${{ matrix.target == 'kind' && matrix.runner == 'binary' }}
@@ -447,6 +471,11 @@ jobs:
           POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}')
           echo "=== nri-init logs (k3s DS) ==="
           kubectl -n kube-system logs "$POD" || true
+          # Fail if nri-init reported failure
+          if kubectl -n kube-system logs "$POD" | grep -q "nri-init failed"; then
+            echo "✗ nri-init reported failure in logs"
+            exit 1
+          fi
           echo "=== Verify K3s template patched ==="
           kubectl -n kube-system exec "$POD" -- sh -lc 'ls -la /var/lib/rancher/k3s/agent/etc/containerd || true'
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl || test -f /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl'
@@ -457,11 +486,15 @@ jobs:
               exit 1
             fi
           else
-            for i in {1..30}; do
+            for i in {1..45}; do
               if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
                 echo "✓ NRI socket exists after restart"
                 break
               fi
               sleep 1
             done
+            if ! kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
+              echo "✗ NRI socket not found after restart"
+              exit 1
+            fi
           fi
