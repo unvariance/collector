@@ -39,28 +39,20 @@ jobs:
         values:
           - name: "Default values"
             file: ""
-            checks:
-              - "name: nri-init"
-              - "NRI_CONFIGURE.*true"
-              - "NRI_RESTART.*false"
+            configure_expected: "true"
+            restart_expected: "false"
           - name: "NRI disabled"
             file: "charts/collector/ci/nri-disabled-values.yaml"
-            checks:
-              - "name: nri-init"
-              - "NRI_CONFIGURE.*false"
-              - "NRI_RESTART.*false"
+            configure_expected: "false"
+            restart_expected: "false"
           - name: "NRI configure only"
             file: "charts/collector/ci/nri-configure-only-values.yaml"
-            checks:
-              - "name: nri-init"
-              - "NRI_CONFIGURE.*true"
-              - "NRI_RESTART.*false"
+            configure_expected: "true"
+            restart_expected: "false"
           - name: "NRI full setup"
             file: "charts/collector/ci/nri-full-setup-values.yaml"
-            checks:
-              - "name: nri-init"
-              - "NRI_CONFIGURE.*true"
-              - "NRI_RESTART.*true"
+            configure_expected: "true"
+            restart_expected: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -83,15 +75,23 @@ jobs:
           cat /tmp/rendered.yaml
       - name: Verify expected content
         run: |
-          checks='${{ toJson(matrix.values.checks) }}'
-          echo "$checks" | jq -r '.[]' | while IFS= read -r check; do
-            if grep -q "$check" /tmp/rendered.yaml; then
-              echo "✓ Found: $check"
-            else
-              echo "✗ Missing: $check"
-              exit 1
-            fi
-          done
+          # Basic presence of the init container
+          if grep -q "name: nri-init" /tmp/rendered.yaml; then
+            echo "✓ Found init container name"
+          else
+            echo "✗ Missing init container name"
+            exit 1
+          fi
+          # Verify env values adjacent to their names
+          CE='${{ matrix.values.configure_expected }}'
+          RE='${{ matrix.values.restart_expected }}'
+          awk -v ce="$CE" -v re="$RE" '
+            /name: NRI_CONFIGURE/ { in_cfg=1; next }
+            in_cfg && /value: \"/ { if ($0 ~ "value: \"" ce "\"") cfg_ok=1; in_cfg=0 }
+            /name: NRI_RESTART/ { in_rst=1; next }
+            in_rst && /value: \"/ { if ($0 ~ "value: \"" re "\"") rst_ok=1; in_rst=0 }
+            END { if (!(cfg_ok && rst_ok)) exit 1 }
+          ' /tmp/rendered.yaml && echo "✓ Env values match (configure=$CE, restart=$RE)" || { echo "✗ Env values mismatch"; exit 1; }
       - name: Verify volume mounts
         run: |
           required_volumes="etc-containerd var-lib-rancher var-run"
@@ -118,7 +118,7 @@ jobs:
         uses: helm/kind-action@v1
         with:
           node_image: kindest/node:v${{ matrix.k8s_version }}.0
-          cluster_name: test-cluster
+          cluster_name: test-cluster-${{ matrix.k8s_version }}
       - name: Install Helm chart with NRI disabled
         env:
           IMAGE: ${{ needs.build-test-image.outputs.image }}
@@ -127,7 +127,7 @@ jobs:
           REPO="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
           docker pull "$IMAGE"
-          kind load docker-image "$IMAGE" --name test-cluster
+          kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-disabled-values.yaml \
             --set nri.init.image.repository="$REPO" \
@@ -161,7 +161,7 @@ jobs:
           REPO="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
           docker pull "$IMAGE"
-          kind load docker-image "$IMAGE" --name test-cluster
+          kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-configure-only-values.yaml \
             --set nri.init.image.repository="$REPO" \
