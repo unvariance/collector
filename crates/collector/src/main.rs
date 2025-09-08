@@ -3,7 +3,7 @@ use arrow_array::RecordBatch;
 use bpf::BpfLoader;
 use clap::Parser;
 use env_logger;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use object_store::ObjectStore;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +12,9 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use uuid::Uuid;
+use nri::metadata::{MetadataMessage, MetadataPlugin};
+use nri::NRI;
+use std::path::Path;
 
 // Import local modules
 mod bpf_error_handler;
@@ -79,6 +82,7 @@ struct Command {
     /// Enable trace mode (outputs individual events instead of aggregated timeslots)
     #[arg(long, default_value = "false")]
     trace: bool,
+
 }
 
 /// Duration timeout handler - exits when duration completes or cancellation token is triggered
@@ -219,6 +223,63 @@ async fn main() -> Result<()> {
     let shutdown_token = CancellationToken::new();
     let task_tracker = TaskTracker::new();
 
+    // Optional NRI setup (best-effort, no CLI flag)
+    let mut nri_metadata_rx: Option<mpsc::Receiver<MetadataMessage>> = None;
+    let nri_socket_path = "/var/run/nri/nri.sock";
+    if Path::new(nri_socket_path).exists() {
+        debug!("NRI socket detected at {}, attempting to initialize", nri_socket_path);
+        // Create metadata channel
+        let (tx, rx) = mpsc::channel::<MetadataMessage>(1000);
+
+        // Try connecting and registering; on any failure, warn and continue without NRI
+        match tokio::net::UnixStream::connect(nri_socket_path).await {
+            Ok(socket) => {
+                let plugin = MetadataPlugin::new(tx);
+                match NRI::new(socket, plugin, "collector-metadata", "10").await {
+                    Ok((nri, join_handle)) => {
+                        match nri.register().await {
+                            Ok(()) => {
+                                // Success: set receiver and spawn non-fatal monitors
+                                nri_metadata_rx = Some(rx);
+
+                                // Monitor server task without cancelling the collector on error
+                                task_tracker.spawn(async move {
+                                    match join_handle.await {
+                                        Ok(Ok(())) => info!("NRI plugin server stopped cleanly"),
+                                        Ok(Err(e)) => warn!("NRI plugin server error: {}", e),
+                                        Err(e) => warn!("NRI plugin server join error: {}", e),
+                                    }
+                                });
+
+                                // Close the NRI connection on shutdown
+                                let shutdown_clone = shutdown_token.clone();
+                                task_tracker.spawn(async move {
+                                    shutdown_clone.cancelled().await;
+                                    if let Err(e) = nri.close().await {
+                                        warn!("Error closing NRI connection: {}", e);
+                                    }
+                                });
+                            }
+                            Err(e) => {
+                                warn!("NRI registration failed: {}. Continuing without NRI.", e);
+                                // Attempt to close politely
+                                let _ = nri.close().await;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize NRI: {}. Continuing without NRI.", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to connect to NRI socket {}: {}. Continuing without NRI.", nri_socket_path, e);
+            }
+        }
+    } else {
+        debug!("NRI socket not found at {}. Running without NRI.", nri_socket_path);
+    }
+
     // Configure processor mode and schema based on trace flag
     let (processor_mode, schema) = if opts.trace {
         // Trace mode: direct RecordBatch output
@@ -229,7 +290,7 @@ async fn main() -> Result<()> {
         let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
 
         // Create the conversion task and get schema
-        let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
+        let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender, nri_metadata_rx);
         let schema = conversion_task.schema();
 
         // Spawn the conversion task

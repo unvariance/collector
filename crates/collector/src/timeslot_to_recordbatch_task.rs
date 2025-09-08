@@ -1,12 +1,18 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use arrow_array::builder::{Int32Builder, Int64Builder, StringBuilder};
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use futures::future::pending;
 use tokio::sync::mpsc;
 
 use crate::timeslot_data::TimeslotData;
+use nri::metadata::{ContainerMetadata, MetadataMessage};
+use std::fs;
+use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 
 /// Create the schema for timeslot record batches
 pub fn create_timeslot_schema() -> SchemaRef {
@@ -15,6 +21,12 @@ pub fn create_timeslot_schema() -> SchemaRef {
         Field::new("pid", DataType::Int32, false),
         Field::new("process_name", DataType::Utf8, true),
         Field::new("cgroup_id", DataType::Int64, false),
+        // NRI-enriched container metadata (nullable)
+        Field::new("pod_name", DataType::Utf8, true),
+        Field::new("pod_namespace", DataType::Utf8, true),
+        Field::new("pod_uid", DataType::Utf8, true),
+        Field::new("container_name", DataType::Utf8, true),
+        Field::new("container_id", DataType::Utf8, true),
         Field::new("cycles", DataType::Int64, false),
         Field::new("instructions", DataType::Int64, false),
         Field::new("llc_misses", DataType::Int64, false),
@@ -24,7 +36,11 @@ pub fn create_timeslot_schema() -> SchemaRef {
 }
 
 /// Convert a TimeslotData to an Arrow RecordBatch
-pub fn timeslot_to_batch(timeslot: TimeslotData, schema: SchemaRef) -> Result<RecordBatch> {
+pub fn timeslot_to_batch(
+    timeslot: TimeslotData,
+    schema: SchemaRef,
+    cgroup_map: Option<&HashMap<u64, ContainerMetadata>>,
+) -> Result<RecordBatch> {
     // Get the task count to preallocate builders
     let task_count = timeslot.task_count();
 
@@ -35,6 +51,12 @@ pub fn timeslot_to_batch(timeslot: TimeslotData, schema: SchemaRef) -> Result<Re
     // Estimate 16 bytes per string for process names
     let mut process_name_builder = StringBuilder::with_capacity(task_count, task_count * 16);
     let mut cgroup_id_builder = Int64Builder::with_capacity(task_count);
+    // NRI-enriched fields
+    let mut pod_name_builder = StringBuilder::with_capacity(task_count, task_count * 16);
+    let mut pod_ns_builder = StringBuilder::with_capacity(task_count, task_count * 16);
+    let mut pod_uid_builder = StringBuilder::with_capacity(task_count, task_count * 16);
+    let mut container_name_builder = StringBuilder::with_capacity(task_count, task_count * 16);
+    let mut container_id_builder = StringBuilder::with_capacity(task_count, task_count * 16);
     let mut cycles_builder = Int64Builder::with_capacity(task_count);
     let mut instructions_builder = Int64Builder::with_capacity(task_count);
     let mut llc_misses_builder = Int64Builder::with_capacity(task_count);
@@ -58,9 +80,57 @@ pub fn timeslot_to_batch(timeslot: TimeslotData, schema: SchemaRef) -> Result<Re
                 .to_string();
             process_name_builder.append_value(comm);
             cgroup_id_builder.append_value(metadata.cgroup_id as i64);
+
+            // If we have a cgroup->container metadata map, enrich container fields
+            if let Some(map) = cgroup_map {
+                if let Some(cm) = map.get(&metadata.cgroup_id) {
+                    if cm.pod_name.is_empty() {
+                        pod_name_builder.append_null();
+                    } else {
+                        pod_name_builder.append_value(cm.pod_name.clone());
+                    }
+                    if cm.pod_namespace.is_empty() {
+                        pod_ns_builder.append_null();
+                    } else {
+                        pod_ns_builder.append_value(cm.pod_namespace.clone());
+                    }
+                    if cm.pod_uid.is_empty() {
+                        pod_uid_builder.append_null();
+                    } else {
+                        pod_uid_builder.append_value(cm.pod_uid.clone());
+                    }
+                    if cm.container_name.is_empty() {
+                        container_name_builder.append_null();
+                    } else {
+                        container_name_builder.append_value(cm.container_name.clone());
+                    }
+                    if cm.container_id.is_empty() {
+                        container_id_builder.append_null();
+                    } else {
+                        container_id_builder.append_value(cm.container_id.clone());
+                    }
+                } else {
+                    pod_name_builder.append_null();
+                    pod_ns_builder.append_null();
+                    pod_uid_builder.append_null();
+                    container_name_builder.append_null();
+                    container_id_builder.append_null();
+                }
+            } else {
+                pod_name_builder.append_null();
+                pod_ns_builder.append_null();
+                pod_uid_builder.append_null();
+                container_name_builder.append_null();
+                container_id_builder.append_null();
+            }
         } else {
             process_name_builder.append_null();
             cgroup_id_builder.append_value(0); // Default value when no metadata available
+            pod_name_builder.append_null();
+            pod_ns_builder.append_null();
+            pod_uid_builder.append_null();
+            container_name_builder.append_null();
+            container_id_builder.append_null();
         }
 
         // Add metrics
@@ -77,6 +147,11 @@ pub fn timeslot_to_batch(timeslot: TimeslotData, schema: SchemaRef) -> Result<Re
         Arc::new(pid_builder.finish()),
         Arc::new(process_name_builder.finish()),
         Arc::new(cgroup_id_builder.finish()),
+        Arc::new(pod_name_builder.finish()),
+        Arc::new(pod_ns_builder.finish()),
+        Arc::new(pod_uid_builder.finish()),
+        Arc::new(container_name_builder.finish()),
+        Arc::new(container_id_builder.finish()),
         Arc::new(cycles_builder.finish()),
         Arc::new(instructions_builder.finish()),
         Arc::new(llc_misses_builder.finish()),
@@ -93,6 +168,12 @@ pub struct TimeslotToRecordBatchTask {
     timeslot_receiver: mpsc::Receiver<TimeslotData>,
     batch_sender: mpsc::Sender<RecordBatch>,
     schema: SchemaRef,
+    // Optional NRI metadata channel
+    metadata_receiver: Option<mpsc::Receiver<MetadataMessage>>,
+    // In-memory mapping from cgroup inode -> container metadata
+    cgroup_to_metadata: HashMap<u64, ContainerMetadata>,
+    // Helper map for removal (container id -> cgroup inode)
+    container_to_cgroup: HashMap<String, u64>,
 }
 
 impl TimeslotToRecordBatchTask {
@@ -100,12 +181,16 @@ impl TimeslotToRecordBatchTask {
     pub fn new(
         timeslot_receiver: mpsc::Receiver<TimeslotData>,
         batch_sender: mpsc::Sender<RecordBatch>,
+        metadata_receiver: Option<mpsc::Receiver<MetadataMessage>>,
     ) -> Self {
         let schema = create_timeslot_schema();
         Self {
             timeslot_receiver,
             batch_sender,
             schema,
+            metadata_receiver,
+            cgroup_to_metadata: HashMap::new(),
+            container_to_cgroup: HashMap::new(),
         }
     }
 
@@ -117,28 +202,77 @@ impl TimeslotToRecordBatchTask {
     /// Run the task, processing timeslots until the input channel is closed
     pub async fn run(mut self) -> Result<()> {
         loop {
-            match self.timeslot_receiver.recv().await {
-                Some(timeslot) => {
-                    // Convert timeslot to a batch
-                    let batch = timeslot_to_batch(timeslot, self.schema.clone())?;
-
-                    // Send the batch to the output channel
-                    if let Err(_) = self.batch_sender.send(batch).await {
-                        // Receiver dropped, pipeline shutting down
-                        log::debug!("Batch receiver dropped, shutting down conversion task");
-                        break;
+            tokio::select! {
+                // Process metadata messages when available
+                maybe_msg = async {
+                    if let Some(rx) = &mut self.metadata_receiver { rx.recv().await } else { pending().await }
+                } => {
+                    match maybe_msg {
+                        Some(msg) => self.process_metadata_message(msg),
+                        None => { self.metadata_receiver = None; }
                     }
                 }
-                None => {
-                    // Input channel closed - pipeline shutting down
-                    log::debug!("Timeslot channel closed, shutting down conversion task");
-                    break;
+                // Process timeslots
+                maybe_timeslot = self.timeslot_receiver.recv() => {
+                    match maybe_timeslot {
+                        Some(timeslot) => {
+                            let batch = timeslot_to_batch(timeslot, self.schema.clone(), Some(&self.cgroup_to_metadata))?;
+                            if let Err(_) = self.batch_sender.send(batch).await {
+                                log::debug!("Batch receiver dropped, shutting down conversion task");
+                                break;
+                            }
+                        }
+                        None => {
+                            log::debug!("Timeslot channel closed, shutting down conversion task");
+                            break;
+                        }
+                    }
                 }
             }
         }
 
         Ok(())
     }
+
+    fn process_metadata_message(&mut self, msg: MetadataMessage) {
+        match msg {
+            MetadataMessage::Add(container_id, metadata) => {
+                if let Some(inode) = resolve_cgroup_inode(&metadata.cgroup_path) {
+                    self.container_to_cgroup.insert(container_id, inode);
+                    self.cgroup_to_metadata.insert(inode, metadata);
+                } else {
+                    log::warn!("Failed to resolve cgroup inode for path: {}", metadata.cgroup_path);
+                }
+            }
+            MetadataMessage::Remove(container_id) => {
+                if let Some(inode) = self.container_to_cgroup.remove(&container_id) {
+                    self.cgroup_to_metadata.remove(&inode);
+                }
+            }
+        }
+    }
+}
+
+// Resolve cgroup v2 inode from a cgroup path
+fn resolve_cgroup_inode(cgroup_path: &str) -> Option<u64> {
+    // Find the cgroup2 mount point from /proc/self/mountinfo
+    let mount_info = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let mut cgroup_mount_point: Option<String> = None;
+    for line in mount_info.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 9 && parts[8].contains("cgroup2") {
+            cgroup_mount_point = Some(parts[4].to_string());
+            break;
+        }
+    }
+    let cgroup_mount = cgroup_mount_point?;
+
+    // Construct the full path
+    let rel = if cgroup_path.starts_with('/') { &cgroup_path[1..] } else { cgroup_path };
+    let full_path = PathBuf::from(cgroup_mount).join(rel);
+
+    let metadata = fs::metadata(&full_path).ok()?;
+    Some(metadata.ino())
 }
 
 #[cfg(test)]
@@ -171,11 +305,11 @@ mod tests {
 
         // Convert to batch
         let schema = create_timeslot_schema();
-        let batch = timeslot_to_batch(timeslot, schema).unwrap();
+        let batch = timeslot_to_batch(timeslot, schema, None).unwrap();
 
         // Verify batch structure
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.num_columns(), 9);
+        assert_eq!(batch.num_columns(), 14);
 
         // Verify content - extract arrays and check values (accounting for unordered timeslot iteration)
         use arrow_array::{Int32Array, Int64Array, StringArray};
@@ -200,28 +334,53 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
-        let cycles_array = batch
+        let pod_name_array = batch
             .column(4)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let pod_ns_array = batch
+            .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let pod_uid_array = batch
+            .column(6)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let container_name_array = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let container_id_array = batch
+            .column(8)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let cycles_array = batch
+            .column(9)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let instructions_array = batch
-            .column(5)
+            .column(10)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let llc_misses_array = batch
-            .column(6)
+            .column(11)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let cache_references_array = batch
-            .column(7)
+            .column(12)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let duration_array = batch
-            .column(8)
+            .column(13)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -246,6 +405,11 @@ mod tests {
         assert_eq!(start_time_array.value(proc_one_idx), 1500000);
         assert_eq!(pid_array.value(proc_one_idx), 101);
         assert_eq!(cgroup_id_array.value(proc_one_idx), 11111);
+        assert!(pod_name_array.is_null(proc_one_idx));
+        assert!(pod_ns_array.is_null(proc_one_idx));
+        assert!(pod_uid_array.is_null(proc_one_idx));
+        assert!(container_name_array.is_null(proc_one_idx));
+        assert!(container_id_array.is_null(proc_one_idx));
         assert_eq!(cycles_array.value(proc_one_idx), 1000);
         assert_eq!(instructions_array.value(proc_one_idx), 2000);
         assert_eq!(llc_misses_array.value(proc_one_idx), 30);
@@ -256,6 +420,11 @@ mod tests {
         assert_eq!(start_time_array.value(proc_two_idx), 1500000);
         assert_eq!(pid_array.value(proc_two_idx), 202);
         assert_eq!(cgroup_id_array.value(proc_two_idx), 22222);
+        assert!(pod_name_array.is_null(proc_two_idx));
+        assert!(pod_ns_array.is_null(proc_two_idx));
+        assert!(pod_uid_array.is_null(proc_two_idx));
+        assert!(container_name_array.is_null(proc_two_idx));
+        assert!(container_id_array.is_null(proc_two_idx));
         assert_eq!(cycles_array.value(proc_two_idx), 3000);
         assert_eq!(instructions_array.value(proc_two_idx), 4000);
         assert_eq!(llc_misses_array.value(proc_two_idx), 60);
@@ -270,7 +439,7 @@ mod tests {
         let (batch_sender, mut batch_receiver) = mpsc::channel::<RecordBatch>(10);
 
         // Create task
-        let task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
+        let task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender, None);
         let schema = task.schema();
 
         // Start the task
@@ -326,17 +495,17 @@ mod tests {
             .downcast_ref::<Int64Array>()
             .unwrap();
         let cycles_array = batch
-            .column(4)
+            .column(9)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let instructions_array = batch
-            .column(5)
+            .column(10)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
         let duration_array = batch
-            .column(8)
+            .column(13)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();

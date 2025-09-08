@@ -494,6 +494,7 @@ dependencies = [
  "libc",
  "log",
  "nix 0.27.1",
+ "nri",
  "object_store",
  "parquet",
  "perf_events",
