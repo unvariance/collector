@@ -83,14 +83,25 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
             NotSupported => { warn!("Automatic restart not supported; manual restart may be required"); }
             Issued => {
                 restarted = true;
-                if verify::wait_for_socket(socket_path, std::time::Duration::from_secs(30)) {
+                // After issuing a restart, wait up to 10s for the socket
+                if verify::wait_for_socket(socket_path, std::time::Duration::from_secs(10)) {
                     restart_verified = true;
                     info!("NRI socket became available");
                 } else {
                     warn!("NRI socket did not appear within 30s after restart");
                 }
             }
-            Verified => { restarted = true; restart_verified = true; }
+            Verified => {
+                // Service restart was verified (active and timestamp increased)
+                restarted = true;
+                restart_verified = true;
+                // Also give the NRI socket up to 10s to appear
+                if verify::wait_for_socket(socket_path, std::time::Duration::from_secs(10)) {
+                    info!("NRI socket available after verified restart");
+                } else {
+                    warn!("NRI socket not yet available within 10s after verified restart");
+                }
+            }
         }
     }
 

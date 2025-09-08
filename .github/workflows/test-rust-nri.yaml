@@ -306,9 +306,14 @@ jobs:
           docker exec ${NODE} /bin/sh -lc "ls -la /etc/containerd || true && head -n 60 /etc/containerd/config.toml || true"
           # Run configure (and optional restart) inside the node (explicit config path)
           docker exec ${NODE} /bin/sh -lc "\
-            /usr/local/bin/nri-init --log-level debug --mode containerd --containerd-config /etc/containerd/config.toml --configure $( [ '${{ matrix.restart }}' = 'true' ] && echo '--restart --fail-if-unavailable' || echo '--no-restart' );\
-            echo '=== Show containerd config ===';\
-            head -n 200 /etc/containerd/config.toml || true"
+            /usr/local/bin/nri-init --log-level debug --mode containerd --containerd-config /etc/containerd/config.toml --configure $( [ '${{ matrix.restart }}' = 'true' ] && echo '--restart --fail-if-unavailable' || echo '--no-restart' )"
+          BIN_RC=$?
+          if [ "${{ matrix.restart }}" = "true" ] && [ "$BIN_RC" -ne 0 ]; then
+            echo "✗ nri-init binary failed in restart mode (rc=$BIN_RC)"
+            exit 1
+          fi
+          echo '=== Show containerd config ==='
+          docker exec ${NODE} /bin/sh -lc "head -n 200 /etc/containerd/config.toml || true"
           # Verify config edited (print context on failure)
           if ! docker exec ${NODE} /bin/sh -lc "grep -q 'plugins.\"io.containerd.nri.v1.nri\"' /etc/containerd/config.toml && grep -q 'disable = false' /etc/containerd/config.toml"; then
             echo 'Final /etc/containerd/config.toml:'
