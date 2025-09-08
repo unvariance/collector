@@ -105,6 +105,7 @@ jobs:
         if: ${{ matrix.target == 'kind' }}
         run: |
           set -x
+          set +e
           (sudo systemctl start docker || sudo service docker start || true)
           docker info
 
