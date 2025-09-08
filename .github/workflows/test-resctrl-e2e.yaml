@@ -51,14 +51,29 @@ jobs:
       - name: Build test binaries (no-run)
         run: |
           source $HOME/.cargo/env
-          cargo test -p resctrl --release --no-run
+          # Build only the hardware smoke integration test binary
+          cargo test -p resctrl --test smoke_test --release --no-run
 
-      - name: Upload resctrl test binaries
+      - name: Collect smoke test binary
+        id: collect-bin
+        run: |
+          set -euxo pipefail
+          BIN=$(find target/release/deps -maxdepth 1 -type f -executable -name 'smoke_test-*' | head -n 1)
+          if [ -z "$BIN" ]; then
+            echo "Smoke test binary not found" >&2
+            exit 1
+          fi
+          file "$BIN" || true
+          ldd "$BIN" || true
+          cp "$BIN" resctrl-smoke
+          chmod +x resctrl-smoke
+          echo "bin=resctrl-smoke" >> $GITHUB_OUTPUT
+
+      - name: Upload resctrl smoke binary
         uses: actions/upload-artifact@v4
         with:
-          name: resctrl-tests
-          path: |
-            target/release/deps/*
+          name: resctrl-smoke-bin
+          path: resctrl-smoke
           if-no-files-found: error
 
   setup-runner:
@@ -106,28 +121,18 @@ jobs:
             mount -t resctrl resctrl /sys/fs/resctrl
           fi
 
-      - name: Download test binaries
+      - name: Download smoke binary
         uses: actions/download-artifact@v4
         with:
-          name: resctrl-tests
-          path: resctrl-tests
+          name: resctrl-smoke-bin
+          path: ./
 
-      - name: Run resctrl tests (hardware)
+      - name: Run resctrl smoke test (hardware)
         shell: bash
         run: |
           set -euxo pipefail
-          chmod -R +x resctrl-tests || true
-          # Execute all resctrl test binaries found in artifact
-          found=0
-          for bin in $(find resctrl-tests -maxdepth 1 -type f -executable \( -name "smoke_test-*" -o -name "resctrl-*" \)); do
-            echo "Running test binary: $bin"
-            RESCTRL_E2E=1 "$bin" --nocapture
-            found=1
-          done
-          if [ "$found" -eq 0 ]; then
-            echo "No test binaries found in artifact" >&2
-            exit 1
-          fi
+          test -x ./resctrl-smoke
+          RESCTRL_E2E=1 ./resctrl-smoke --nocapture
 
   stop-runner:
     name: Stop EC2 runner
