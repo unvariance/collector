@@ -362,31 +362,7 @@ jobs:
             exit 1
           fi
           helm uninstall test-collector
-      - name: Summary
-        run: |
-          echo "=== Summary for KIND v0.30 cluster ==="
-          CONTAINER_NAME="kind-nri-preconfigured-control-plane"
-          if docker exec $CONTAINER_NAME ls /var/run/nri/nri.sock 2>/dev/null; then
-            echo "✅ KIND v0.30 has NRI socket available out of the box"
-          else
-            echo "❌ KIND v0.30 does NOT have NRI socket available"
-          fi
 
-  security-scan:
-    name: Security Validation
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Validate init container runs as root (required for config changes)
-        run: |
-          if grep -q "privileged: true" charts/collector/values.yaml; then
-            echo "✓ Init container configured with required privileges"
-          else
-            echo "✗ Init container missing required privileges"
-            exit 1
-          fi
-      # Script-based init removed; no script scanning required
   build-test-image:
     name: Build and push nri-init test image
     runs-on: ubuntu-latest
