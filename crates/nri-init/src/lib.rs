@@ -88,7 +88,7 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
                     restart_verified = true;
                     info!("NRI socket became available");
                 } else {
-                    warn!("NRI socket did not appear within 30s after restart");
+                    warn!("NRI socket did not appear within 10s after restart");
                 }
             }
             Verified => {
