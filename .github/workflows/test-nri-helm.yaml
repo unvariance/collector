@@ -103,18 +103,9 @@ jobs:
             fi
           done
       
-      - name: Verify ConfigMap exists
-        run: |
-          if grep -q "kind: ConfigMap" /tmp/rendered.yaml && grep -q "nri-init.sh" /tmp/rendered.yaml; then
-            echo "✓ NRI init ConfigMap found"
-          else
-            echo "✗ NRI init ConfigMap missing"
-            exit 1
-          fi
-      
       - name: Verify volume mounts
         run: |
-          required_volumes="nri-init-script etc-containerd var-lib-rancher var-run"
+          required_volumes="etc-containerd var-lib-rancher var-run"
           for vol in $required_volumes; do
             if grep -q "name: $vol" /tmp/rendered.yaml; then
               echo "✓ Volume $vol found"
@@ -334,12 +325,4 @@ jobs:
             exit 1
           fi
       
-      - name: Check for sensitive data exposure
-        run: |
-          # Ensure no credentials or sensitive data in scripts
-          if grep -E "(password|secret|token|key)" charts/collector/scripts/nri-init.sh | grep -v "^#"; then
-            echo "✗ Potential sensitive data found in script"
-            exit 1
-          else
-            echo "✓ No sensitive data found in script"
-          fi
+      # Script-based init removed; no script scanning required

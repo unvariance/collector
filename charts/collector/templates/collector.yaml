@@ -59,13 +59,12 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-        {{- if .Values.nri.useRustInit }}
         - name: nri-init
-          image: "{{ .Values.nri.rustInit.image.repository }}:{{ .Values.nri.rustInit.image.tag }}"
+          image: "{{ .Values.nri.init.image.repository }}:{{ .Values.nri.init.image.tag }}"
           imagePullPolicy: IfNotPresent
           securityContext:
-            {{- toYaml .Values.nri.rustInit.securityContext | nindent 12 }}
-          command: {{ toYaml .Values.nri.rustInit.command | nindent 12 }}
+            {{- toYaml .Values.nri.init.securityContext | nindent 12 }}
+          command: {{ toYaml .Values.nri.init.command | nindent 12 }}
           env:
             - name: NRI_CONFIGURE
               value: "{{ .Values.nri.configure }}"
@@ -74,7 +73,7 @@ spec:
             - name: NRI_FAIL_IF_UNAVAILABLE
               value: "{{ .Values.nri.failIfUnavailable | default false }}"
           resources:
-            {{- toYaml .Values.nri.rustInit.resources | nindent 12 }}
+            {{- toYaml .Values.nri.init.resources | nindent 12 }}
           volumeMounts:
             - name: etc-containerd
               mountPath: /etc/containerd
@@ -85,35 +84,6 @@ spec:
             - name: host-proc
               mountPath: /host/proc
               readOnly: true
-        {{- else }}
-        - name: nri-init
-          image: "{{ .Values.nri.initContainer.image.repository }}:{{ .Values.nri.initContainer.image.tag }}"
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            {{- toYaml .Values.nri.initContainer.securityContext | nindent 12 }}
-          command: ["/scripts/nri-init.sh"]
-          env:
-            - name: NRI_CONFIGURE
-              value: "{{ .Values.nri.configure }}"
-            - name: NRI_RESTART
-              value: "{{ .Values.nri.restart }}"
-            - name: NRI_FAIL_IF_UNAVAILABLE
-              value: "{{ .Values.nri.failIfUnavailable | default false }}"
-          resources:
-            {{- toYaml .Values.nri.initContainer.resources | nindent 12 }}
-          volumeMounts:
-            - name: nri-init-script
-              mountPath: /scripts
-            - name: etc-containerd
-              mountPath: /etc/containerd
-            - name: var-lib-rancher
-              mountPath: /var/lib/rancher
-            - name: var-run
-              mountPath: /var/run
-            - name: host-proc
-              mountPath: /host/proc
-              readOnly: true
-        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -170,12 +140,6 @@ spec:
         {{- if eq .Values.storage.type "local" }}
         - name: data-volume
           emptyDir: {}
-        {{- end }}
-        {{- if not .Values.nri.useRustInit }}
-        - name: nri-init-script
-          configMap:
-            name: {{ include "collector.fullname" . }}-nri-init
-            defaultMode: 0755
         {{- end }}
         - name: etc-containerd
           hostPath:
