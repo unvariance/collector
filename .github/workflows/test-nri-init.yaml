@@ -154,7 +154,11 @@ jobs:
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector --sort-by=.metadata.creationTimestamp -o name | tail -n 1 | cut -d/ -f2)
           echo "=== NRI Init Container Logs ==="
           kubectl logs $POD -c nri-init
-          # Verify expected log messages (new nri-init format)
+          # Verify expected log messages (new nri-init format) and fail on explicit failure
+          if kubectl logs $POD -c nri-init | grep -q "nri-init failed"; then
+            echo "✗ nri-init failed (found failure marker in logs)"
+            exit 1
+          fi
           if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=false, restart=false"; then
             echo "✓ Detected expected configuration flags in logs (configure=false, restart=false)"
           else
@@ -164,7 +168,7 @@ jobs:
       - name: Uninstall chart
         run: |
           helm uninstall test-collector
-      - name: Install Helm chart with NRI configure-only
+      - name: Install Helm chart with NRI configure-and-restart
         env:
           IMAGE: ${{ needs.build-test-image.outputs.image }}
         run: |
@@ -180,7 +184,7 @@ jobs:
             --set nri.failIfUnavailable=true \
             --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
             --wait --timeout 2m
-      - name: Check configuration was attempted
+      - name: Check configuration and restart
         run: |
           # Wait for pod to exist
           echo "Waiting for collector pod to be created..."
@@ -192,17 +196,25 @@ jobs:
             sleep 2
           done
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector --sort-by=.metadata.creationTimestamp -o name | tail -n 1 | cut -d/ -f2)
-          # Wait for init container to complete
-          echo "Waiting for init container to complete..."
-          for i in {1..30}; do
-            STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[?(@.name=="nri-init")].state}' 2>/dev/null || echo "{}")
-            if echo "$STATUS" | grep -q "terminated"; then
-              echo "Init container completed"
+          echo "Waiting for nri-init completion markers..."
+          for i in {1..240}; do
+            LOGS=$(kubectl logs "$POD" -c nri-init 2>/dev/null || true)
+            if echo "$LOGS" | grep -q "nri-init failed"; then
+              echo "✗ nri-init failed (found failure marker)"
+              echo "$LOGS"
+              exit 1
+            fi
+            if echo "$LOGS" | grep -q "nri-init done"; then
+              echo "✓ nri-init done observed"
               break
             fi
-            echo "Waiting for init container... ($i/30)"
-            sleep 2
+            sleep 1
           done
+          if ! kubectl logs "$POD" -c nri-init | grep -q "nri-init done"; then
+            echo "✗ nri-init completion marker not observed"
+            kubectl logs "$POD" -c nri-init || true
+            exit 1
+          fi
           echo "=== NRI Init Container Logs (Configure + Restart) ==="
           kubectl logs $POD -c nri-init
           # Verify configuration flags via structured log line
