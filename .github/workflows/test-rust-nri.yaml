@@ -214,8 +214,8 @@ jobs:
       - name: Install K3s
         if: ${{ matrix.target == 'k3s' }}
         run: |
-          # Install specific K3s version (1.31.x). Ensure env reaches sh via sudo.
-          curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION="v1.31.12+k3s1" sh -s -
+          # Install K3s pinned to a pre-containerd-2.0 build (1.31.5 -> containerd 1.7)
+          curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION="v1.31.5+k3s1" sh -s -
           echo "Installed K3s version:" && k3s --version || true
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
