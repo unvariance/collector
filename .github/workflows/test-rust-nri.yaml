@@ -268,7 +268,13 @@ jobs:
           fi
           echo "=== Wait for nri-init completion (KIND DS) ==="
           for i in {1..120}; do
-            if kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+            LOGS=$(kubectl -n kube-system logs "$POD" || true)
+            if echo "$LOGS" | grep -q "nri-init failed"; then
+              echo "✗ Detected 'nri-init failed' in logs"
+              echo "$LOGS"
+              exit 1
+            fi
+            if echo "$LOGS" | grep -q "nri-init done"; then
               echo "✓ nri-init done observed in logs"
               break
             fi
@@ -285,8 +291,17 @@ jobs:
           # Treat final socket presence as the source of truth.
           echo "=== Verify host containerd config patched ==="
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /etc/containerd/config.toml && grep -q "plugins.\"io.containerd.nri.v1.nri\"" /etc/containerd/config.toml && grep -q "disable = false" /etc/containerd/config.toml'
-          # If restart requested, verify socket appears
+          # If restart requested, wait for containerd active on node, then verify socket appears
           if [ "${{ matrix.restart }}" = "true" ]; then
+            echo "=== Waiting for containerd to be active (KIND) ==="
+            for i in {1..90}; do
+              if kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl is-active containerd' | grep -q '^active$'; then
+                echo "✓ containerd is active on node"
+                break
+              fi
+              sleep 1
+            done
+            kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl status containerd || true'
             for i in {1..120}; do
               if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
                 echo "✓ NRI socket exists after restart"
@@ -496,7 +511,13 @@ jobs:
           POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}')
           echo "=== Wait for nri-init completion (K3s DS) ==="
           for i in {1..180}; do
-            if kubectl -n kube-system logs "$POD" | grep -q "nri-init done"; then
+            LOGS=$(kubectl -n kube-system logs "$POD" || true)
+            if echo "$LOGS" | grep -q "nri-init failed"; then
+              echo "✗ Detected 'nri-init failed' in logs"
+              echo "$LOGS"
+              exit 1
+            fi
+            if echo "$LOGS" | grep -q "nri-init done"; then
               echo "✓ nri-init done observed in logs"
               break
             fi
@@ -514,13 +535,22 @@ jobs:
           echo "=== Verify K3s template patched ==="
           kubectl -n kube-system exec "$POD" -- sh -lc 'ls -la /var/lib/rancher/k3s/agent/etc/containerd || true'
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl || test -f /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl'
-          # Socket expectations based on restart flag
+          # Socket expectations based on restart flag (after ensuring containerd is active)
           if [ "${{ matrix.restart }}" = "false" ]; then
             if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
               echo "✗ Socket present but restart=false"
               exit 1
             fi
           else
+            echo "=== Waiting for containerd to be active (K3s) ==="
+            for i in {1..90}; do
+              if kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl is-active containerd' | grep -q '^active$'; then
+                echo "✓ containerd is active on node"
+                break
+              fi
+              sleep 1
+            done
+            kubectl -n kube-system exec "$POD" -- sh -lc 'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl status containerd || true'
             for i in {1..90}; do
               if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
                 echo "✓ NRI socket exists after restart"
