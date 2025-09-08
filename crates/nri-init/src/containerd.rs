@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 use toml_edit::DocumentMut;
 
 use crate::error::{Result, NriError};
@@ -35,4 +35,3 @@ pub fn configure_containerd(path: &str, socket_path: &str, dry_run: bool) -> Res
     }
     Ok(changed)
 }
-

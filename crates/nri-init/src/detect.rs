@@ -1,7 +1,7 @@
 use semver::Version;
 use tracing::{info, warn};
 
-use crate::cmd::{default_runner, Runner};
+use crate::cmd::default_runner;
 use crate::error::{Result};
 use crate::opts::{Mode, Options};
 
@@ -73,4 +73,3 @@ pub fn detect_containerd_version(opts: &Options) -> Result<Option<Version>> {
     warn!("Unable to determine containerd version");
     Ok(None)
 }
-

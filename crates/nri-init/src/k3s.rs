@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tracing::info;
 
 pub const DEFAULT_TEMPLATE_DIR: &str = "/var/lib/rancher/k3s/agent/etc/containerd";

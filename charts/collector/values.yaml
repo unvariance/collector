@@ -104,12 +104,26 @@ extraEnv: []
 # NRI (Node Resource Interface) configuration
 # NRI enables the collector to access pod and container metadata
 nri:
+  # Use the Rust `nri-init` binary instead of the shell script
+  useRustInit: false
   # Whether to configure NRI when socket is missing
   configure: true
   # Whether to restart containerd after configuration (requires maintenance window)
   restart: false
   # Whether to fail if NRI is unavailable (useful for testing)
   failIfUnavailable: false
+  # Rust init container image (used when useRustInit=true)
+  rustInit:
+    image:
+      repository: ghcr.io/your-org/nri-init
+      tag: v0.1.0
+    command: ["/bin/nri-init"]
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
   # Init container configuration
   initContainer:
     image:

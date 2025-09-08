@@ -1,8 +1,5 @@
 use toml_edit::{DocumentMut, Item, Table, value};
 
-// String used only for tests/greps; not used for path-indexing.
-pub const NRI_TABLE: &str = "plugins.\"io.containerd.nri.v1.nri\"";
-
 pub fn ensure_version2(doc: &mut DocumentMut) -> bool {
     // Ensure top-level version = 2 if absent
     if !doc.contains_key("version") {

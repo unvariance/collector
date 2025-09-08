@@ -1,4 +1,4 @@
-use nri_init::{Options, LogLevel};
+use nri_init::LogLevel;
 use tracing_subscriber::EnvFilter;
 
 fn init_tracing(level: LogLevel) {
