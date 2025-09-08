@@ -175,6 +175,7 @@ jobs:
       # Default to current repo's GHCR path (owner/repo/collector)
       IMAGE_REPOSITORY: ${{ inputs.image-repository || format('ghcr.io/{0}/collector', github.repository) }}
       IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+      NRI_INIT_REPOSITORY: ${{ format('ghcr.io/{0}/nri-init', github.repository) }}
       TRACE_MODE: ${{ matrix.trace-mode }}
     steps:
       - name: Checkout repository
@@ -209,6 +210,12 @@ jobs:
               region: "${AWS_REGION}"
               auth:
                 method: "iam"  # Using IAM role
+          
+          nri:
+            init:
+              image:
+                repository: "${NRI_INIT_REPOSITORY}"
+                tag: "latest"
           EOF
           
           # Print the values being used
