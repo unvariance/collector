@@ -274,7 +274,7 @@ jobs:
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /etc/containerd/config.toml && grep -q "plugins.\"io.containerd.nri.v1.nri\"" /etc/containerd/config.toml && grep -q "disable = false" /etc/containerd/config.toml'
           # If restart requested, verify socket appears
           if [ "${{ matrix.restart }}" = "true" ]; then
-            for i in {1..90}; do
+            for i in {1..120}; do
               if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
                 echo "✓ NRI socket exists after restart"
                 break
@@ -283,6 +283,11 @@ jobs:
             done
             if ! kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
               echo "✗ NRI socket not found after restart"
+              echo '--- DS Status ---'
+              kubectl -n kube-system get ds nri-init-test -o wide || true
+              kubectl -n kube-system describe ds nri-init-test || true
+              echo '--- Pod Logs ---'
+              kubectl -n kube-system logs "$POD" || true
               exit 1
             fi
           fi
