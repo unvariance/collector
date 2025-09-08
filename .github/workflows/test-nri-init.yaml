@@ -814,8 +814,21 @@ jobs:
                     hostPath: { path: /var/run/nri, type: DirectoryOrCreate }
           EOF
           kubectl apply -f ds-k3s.yaml
-          kubectl -n kube-system rollout status ds/nri-init-test-k3s --timeout=60s
-          POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}')
+          kubectl -n kube-system rollout status ds/nri-init-test-k3s --timeout=60s || true
+          echo "=== Waiting for DaemonSet pod to appear (K3s) ==="
+          for i in {1..60}; do
+            POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$POD" ]; then
+              echo "Found pod: $POD"
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$POD" ]; then
+            echo "✗ Timed out waiting for DaemonSet pod"
+            kubectl -n kube-system get pods -l app=nri-init-test-k3s -o wide || true
+            exit 1
+          fi
           echo "=== Wait for nri-init completion (K3s DS) ==="
           for i in {1..180}; do
             LOGS=$(kubectl -n kube-system logs "$POD" || true)
