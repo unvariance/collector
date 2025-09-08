@@ -131,8 +131,16 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          test -x ./resctrl-smoke
-          RESCTRL_E2E=1 ./resctrl-smoke --nocapture
+          # Locate the downloaded binary (actions/download-artifact@v4 places under a subdir)
+          BIN=$(find . -type f -name 'resctrl-smoke' | head -n 1)
+          if [ -z "$BIN" ]; then
+            echo "resctrl-smoke binary not found in workspace" >&2
+            find . -maxdepth 3 -type f | sed 's/^/  /'
+            exit 1
+          fi
+          chmod +x "$BIN" || true
+          echo "Executing $BIN"
+          RESCTRL_E2E=1 "$BIN" --nocapture
 
   stop-runner:
     name: Stop EC2 runner
