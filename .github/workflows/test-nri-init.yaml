@@ -326,7 +326,23 @@ jobs:
             --wait --timeout 2m
           # Wait for pod to be created and ready
           echo "Waiting for collector pod to be ready..."
-          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=180s
+          if ! kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=180s; then
+            echo "✗ Collector pod did not reach Ready within timeout; dumping diagnostics"
+            kubectl get pods -A || true
+            kubectl get pods -l app.kubernetes.io/name=collector -o wide || true
+            POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$POD" ]; then
+              echo "--- Describe pod $POD ---"
+              kubectl describe pod "$POD" || true
+              echo "--- Init (nri-init) logs ---"
+              kubectl logs "$POD" -c nri-init --tail=500 || true
+              echo "--- Main container logs ---"
+              kubectl logs "$POD" --tail=200 || true
+            fi
+            echo "--- Recent events ---"
+            kubectl get events --sort-by=.lastTimestamp | tail -n 100 || true
+            exit 1
+          fi
           # Get pod name
           POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
           echo "=== NRI Init Container Logs ==="
