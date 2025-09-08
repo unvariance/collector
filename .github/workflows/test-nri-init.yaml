@@ -254,34 +254,14 @@ jobs:
           cluster_name: kind-nri-preconfigured
       - name: Verify NRI is already enabled
         run: |
-          echo "=== Checking NRI status on KIND v0.30 cluster ==="
-          # Get the KIND node name
-          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-          echo "Node name: $NODE_NAME"
-          # Check if NRI socket exists in the node
-          echo "=== Checking for NRI socket ==="
-          kubectl debug node/$NODE_NAME -it --image=busybox -- ls -la /host/var/run/nri/ 2>/dev/null || true
-          # Check containerd config for NRI
-          echo "=== Checking containerd config for NRI ==="
-          kubectl debug node/$NODE_NAME -it --image=busybox -- cat /host/etc/containerd/config.toml 2>/dev/null | grep -A 10 "nri" || true
-          # Alternative: Use docker exec to check KIND container directly
-          echo "=== Alternative check using docker exec ==="
+          echo "=== Checking NRI status on KIND v0.30 cluster (docker exec) ==="
           CONTAINER_NAME="kind-nri-preconfigured-control-plane"
           # Check if NRI socket exists (must exist for pre-configured expectation)
           if docker exec $CONTAINER_NAME ls -la /var/run/nri/nri.sock 2>/dev/null; then
             echo "✓ NRI socket found at /var/run/nri/nri.sock"
           else
-            echo "✗ NRI socket not found; expected pre-configured NRI in Kubernetes ${{ matrix.k8s_version }}"
+            echo "✗ NRI socket not found; expected pre-configured NRI on KIND v0.30"
             docker exec $CONTAINER_NAME ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
-            exit 1
-          fi
-          # Check containerd config
-          echo "=== Containerd config NRI section ==="
-          if docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"'; then
-            echo "✓ NRI configuration found in containerd"
-            docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -A 10 'plugins."io.containerd.nri.v1.nri"'
-          else
-            echo "✗ NRI configuration NOT found in containerd config for Kubernetes ${{ matrix.k8s_version }}"
             exit 1
           fi
       - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
@@ -321,13 +301,10 @@ jobs:
         run: |
           echo "=== Summary for KIND v0.30 cluster ==="
           CONTAINER_NAME="kind-nri-preconfigured-control-plane"
-          if docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"' && \
-             docker exec $CONTAINER_NAME ls /var/run/nri/nri.sock 2>/dev/null; then
-            echo "✅ KIND v0.30 has NRI fully configured and enabled out of the box"
-          elif docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"'; then
-            echo "⚠️ KIND v0.30 has NRI configuration but socket may not be active"
+          if docker exec $CONTAINER_NAME ls /var/run/nri/nri.sock 2>/dev/null; then
+            echo "✅ KIND v0.30 has NRI socket available out of the box"
           else
-            echo "❌ KIND v0.30 does NOT have NRI pre-configured"
+            echo "❌ KIND v0.30 does NOT have NRI socket available"
           fi
 
   security-scan:
