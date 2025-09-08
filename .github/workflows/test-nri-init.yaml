@@ -140,6 +140,8 @@ jobs:
           kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-disabled-values.yaml \
+            --set image.repository=ghcr.io/${{ github.repository }}/collector \
+            --set image.tag=latest \
             --set nri.init.image.repository="$REPO" \
             --set nri.init.image.tag="$TAG" \
             --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
@@ -195,6 +197,8 @@ jobs:
           kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-configure-only-values.yaml \
+            --set image.repository=ghcr.io/${{ github.repository }}/collector \
+            --set image.tag=latest \
             --set nri.init.image.repository="$REPO" \
             --set nri.init.image.tag="$TAG" \
             --set nri.restart=true \
@@ -320,6 +324,8 @@ jobs:
           kind load docker-image "$IMAGE" --name "kind-nri-preconfigured"
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-disabled-values.yaml \
+            --set image.repository=ghcr.io/${{ github.repository }}/collector \
+            --set image.tag=latest \
             --set nri.init.image.repository="$REPO" \
             --set nri.init.image.tag="$TAG" \
             --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
