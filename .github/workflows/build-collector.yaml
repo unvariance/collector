@@ -10,6 +10,7 @@ on:
       - 'crates/**'
       - 'Cargo.toml'
       - 'Dockerfile.collector'
+      - 'Dockerfile.nri-init'
       - '.github/workflows/build-collector.yaml'
 
 permissions:
@@ -20,6 +21,8 @@ jobs:
   build:
     strategy:
       matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        component: [collector, nri-init]
         include:
           - runner: ubuntu-latest
             platform: linux/amd64
@@ -56,25 +59,45 @@ jobs:
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Select component variables
+        id: comp
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.component }}" in
+            collector)
+              echo "IMAGE_NAME=collector" >> "$GITHUB_OUTPUT"
+              echo "DOCKERFILE=Dockerfile.collector" >> "$GITHUB_OUTPUT"
+              ;;
+            nri-init)
+              echo "IMAGE_NAME=nri-init" >> "$GITHUB_OUTPUT"
+              echo "DOCKERFILE=Dockerfile.nri-init" >> "$GITHUB_OUTPUT"
+              ;;
+            *) echo "unknown component"; exit 1;;
+          esac
       
       - name: Build and push architecture-specific image
         uses: docker/build-push-action@v6
         with:
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
-            ghcr.io/${{ github.repository }}/collector:${{ matrix.arch }}-${{ steps.get-sha.outputs.SHORT_SHA }}
+            ghcr.io/${{ github.repository }}/${{ steps.comp.outputs.IMAGE_NAME }}:${{ matrix.arch }}-${{ steps.get-sha.outputs.SHORT_SHA }}
           context: .
-          file: Dockerfile.collector
+          file: ${{ steps.comp.outputs.DOCKERFILE }}
           platforms: ${{ matrix.platform }}
           provenance: true
           sbom: true
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/collector:cache-${{ matrix.arch }}
-          cache-to: type=registry,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/${{ github.repository }}/collector:cache-${{ matrix.arch }},mode=max
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/${{ steps.comp.outputs.IMAGE_NAME }}:cache-${{ matrix.arch }}
+          cache-to: type=registry,image-manifest=true,oci-mediatypes=true,ref=ghcr.io/${{ github.repository }}/${{ steps.comp.outputs.IMAGE_NAME }}:cache-${{ matrix.arch }},mode=max
 
   manifest:
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
+    strategy:
+      matrix:
+        component: [collector, nri-init]
     permissions:
       contents: read
       packages: write
@@ -91,27 +114,25 @@ jobs:
         uses: docker/setup-buildx-action@v3
       
       - name: Create and push multi-arch manifest using buildx imagetools
+        shell: bash
         run: |
+          set -euo pipefail
           SHORT_SHA="${{ needs.build.outputs.short-sha }}"
+          IMAGE_NAME="${{ matrix.component }}"
           
-          # Create the main SHA-based tag that tag-collector-latest expects
-          MAIN_TAG="ghcr.io/${{ github.repository }}/collector:main-${SHORT_SHA}"
-          AMD64_TAG="ghcr.io/${{ github.repository }}/collector:amd64-${SHORT_SHA}"
-          ARM64_TAG="ghcr.io/${{ github.repository }}/collector:arm64-${SHORT_SHA}"
+          MAIN_TAG="ghcr.io/${{ github.repository }}/${IMAGE_NAME}:main-${SHORT_SHA}"
+          AMD64_TAG="ghcr.io/${{ github.repository }}/${IMAGE_NAME}:amd64-${SHORT_SHA}"
+          ARM64_TAG="ghcr.io/${{ github.repository }}/${IMAGE_NAME}:arm64-${SHORT_SHA}"
           
           echo "Creating multi-arch manifest for $MAIN_TAG"
           echo "Combining:"
           echo "  - ${AMD64_TAG}"
           echo "  - ${ARM64_TAG}"
           
-          # Use buildx imagetools to create multi-arch manifest
-          # This properly handles SBOM/provenance attestations and is more robust
           docker buildx imagetools create --tag "${MAIN_TAG}" \
             "${AMD64_TAG}" \
             "${ARM64_TAG}"
           
           echo "Successfully created multi-arch manifest: ${MAIN_TAG}"
-          
-          # Verify the result
           echo "Verifying multi-arch manifest:"
-          docker buildx imagetools inspect "${MAIN_TAG}" 
+          docker buildx imagetools inspect "${MAIN_TAG}"
