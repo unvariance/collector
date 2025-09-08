@@ -14,7 +14,11 @@ on:
 
 jobs:
   tag-latest:
+    name: Tag ${{ matrix.component }} as ${{ inputs.tag }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [collector, nri-init]
     permissions:
       contents: read
       packages: write
@@ -73,7 +77,7 @@ jobs:
       - name: Verify source multi-arch manifest exists
         run: |
           SOURCE_TAG="main-${{ steps.get-sha.outputs.SHORT_SHA }}"
-          SOURCE_IMAGE="ghcr.io/${{ github.repository }}/collector:${SOURCE_TAG}"
+          SOURCE_IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.component }}:${SOURCE_TAG}"
           
           echo "Verifying multi-arch manifest exists: ${SOURCE_IMAGE}"
           
@@ -81,7 +85,7 @@ jobs:
           if ! docker manifest inspect "${SOURCE_IMAGE}" > /dev/null 2>&1; then
             echo "Error: Source manifest ${SOURCE_IMAGE} does not exist"
             echo "Available tags:"
-            docker run --rm quay.io/skopeo/skopeo list-tags docker://ghcr.io/${{ github.repository }}/collector | head -20
+            docker run --rm quay.io/skopeo/skopeo list-tags docker://ghcr.io/${{ github.repository }}/${{ matrix.component }} | head -20
             exit 1
           fi
           
@@ -102,8 +106,8 @@ jobs:
         run: |
           SOURCE_TAG="main-${{ steps.get-sha.outputs.SHORT_SHA }}"
           TARGET_TAG="${{ inputs.tag }}"
-          SOURCE_IMAGE="ghcr.io/${{ github.repository }}/collector:${SOURCE_TAG}"
-          TARGET_IMAGE="ghcr.io/${{ github.repository }}/collector:${TARGET_TAG}"
+          SOURCE_IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.component }}:${SOURCE_TAG}"
+          TARGET_IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.component }}:${TARGET_TAG}"
           
           echo "Creating multi-arch tag: ${SOURCE_IMAGE} -> ${TARGET_IMAGE}"
           
@@ -116,7 +120,7 @@ jobs:
       - name: Verify new tag is multi-arch
         run: |
           TARGET_TAG="${{ inputs.tag }}"
-          TARGET_IMAGE="ghcr.io/${{ github.repository }}/collector:${TARGET_TAG}"
+          TARGET_IMAGE="ghcr.io/${{ github.repository }}/${{ matrix.component }}:${TARGET_TAG}"
           
           echo "Verifying new tag is multi-arch: ${TARGET_IMAGE}"
           
