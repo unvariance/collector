@@ -22,7 +22,7 @@ COPY crates/timeslot/Cargo.toml ./crates/timeslot/
 COPY crates/bpf/Cargo.toml ./crates/bpf/
 COPY crates/nri/Cargo.toml ./crates/nri/
 COPY crates/trace-analysis/Cargo.toml ./crates/trace-analysis/
-COPY crates/nri-init/Cargo.toml ./crates/nri/
+COPY crates/nri-init/Cargo.toml ./crates/nri-init/
 # Create dummy source files to build dependencies
 RUN mkdir -p crates/collector/src \
     crates/perf_events/src \
