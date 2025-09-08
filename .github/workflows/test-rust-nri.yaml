@@ -28,25 +28,22 @@ jobs:
           docker build -f Dockerfile.nri-init-test -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-
-  build-binary:
-    name: Build nri-init binary (for matrix)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build nri-init (musl, static)
+      - name: Extract nri-init binary from image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
         run: |
-          rustup target add x86_64-unknown-linux-musl
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
-          CC_x86_64_unknown_linux_musl=musl-gcc \
-            cargo build -p nri-init --release --target x86_64-unknown-linux-musl --locked --verbose
+          set -x
+          cid=$(docker create "$IMAGE")
+          docker cp "$cid":/usr/local/bin/nri-init ./nri-init
+          docker rm -v "$cid"
+          file ./nri-init || true
+          ldd ./nri-init || true
       - name: Upload nri-init artifact
         uses: actions/upload-artifact@v4
         with:
           name: nri-init-bin
-          path: target/x86_64-unknown-linux-musl/release/nri-init
+          path: ./nri-init
+
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -85,7 +82,7 @@ jobs:
   integration-matrix:
     name: Rust NRI Integration (${{ matrix.target }} / ${{ matrix.scenario }})
     runs-on: ubuntu-latest
-    needs: [build-test-image, build-binary]
+    needs: [build-test-image]
     strategy:
       fail-fast: false
       matrix:
