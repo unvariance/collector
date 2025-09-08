@@ -39,7 +39,7 @@ jobs:
         values:
           - name: "Default values"
             file: ""
-            configure_expected: "true"
+            configure_expected: "false"
             restart_expected: "false"
           - name: "NRI disabled"
             file: "charts/collector/ci/nri-disabled-values.yaml"
