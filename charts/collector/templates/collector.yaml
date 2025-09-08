@@ -64,7 +64,7 @@ spec:
       initContainers:
         - name: nri-init
           image: "{{ .Values.nri.init.image.repository }}:{{ .Values.nri.init.image.tag }}"
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .Values.nri.init.image.pullPolicy | default "IfNotPresent" }}
           securityContext:
             {{- toYaml .Values.nri.init.securityContext | nindent 12 }}
           command: {{ toYaml .Values.nri.init.command | nindent 12 }}

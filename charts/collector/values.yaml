@@ -115,6 +115,7 @@ nri:
     image:
       repository: ghcr.io/unvariance/nri-init
       tag: latest
+      pullPolicy: IfNotPresent
     command: ["/bin/nri-init"]
     securityContext:
       privileged: true
