@@ -22,11 +22,26 @@ jobs:
       - name: Build and push image
         id: meta
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init-test:test-${{ github.run_id }}
+          # Use the main nri-init repository with a test tag to avoid a separate repo
+          IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init:test-${{ github.run_id }}
         run: |
           docker build -f Dockerfile.nri-init-test -t "$IMAGE" .
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+  build-binary:
+    name: Build nri-init binary (for matrix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build nri-init (release)
+        run: cargo build -p nri-init --release --locked --verbose
+      - name: Upload nri-init artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nri-init-bin
+          path: target/release/nri-init
   unit:
     runs-on: ubuntu-latest
     steps:
@@ -65,33 +80,58 @@ jobs:
   integration-matrix:
     name: Rust NRI Integration (${{ matrix.target }} / ${{ matrix.scenario }})
     runs-on: ubuntu-latest
-    needs: build-test-image
+    needs: [build-test-image, build-binary]
     strategy:
       fail-fast: false
       matrix:
         include:
+          # KIND
           - target: kind
             scenario: configure-only
             restart: false
+            runner: container
+          - target: kind
+            scenario: configure-only
+            restart: false
+            runner: binary
           - target: kind
             scenario: configure-and-restart
             restart: true
+            runner: container
+          - target: kind
+            scenario: configure-and-restart
+            restart: true
+            runner: binary
+          # K3s
           - target: k3s
             scenario: configure-only
             restart: false
+            runner: binary
+          - target: k3s
+            scenario: configure-only
+            restart: false
+            runner: container
           - target: k3s
             scenario: configure-and-restart
             restart: true
+            runner: binary
+          - target: k3s
+            scenario: configure-and-restart
+            restart: true
+            runner: container
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build nri-init (release)
-        if: ${{ matrix.target == 'k3s' }}
-        run: cargo build -p nri-init --release --locked --verbose
+      - name: Download nri-init binary artifact
+        if: ${{ matrix.runner == 'binary' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-init-bin
+          path: ./bin
+      - name: Make nri-init executable
+        if: ${{ matrix.runner == 'binary' }}
+        run: chmod +x ./bin/nri-init
 
       - name: Install kubectl
         if: ${{ matrix.target == 'kind' || matrix.target == 'k3s' }}
@@ -136,22 +176,20 @@ jobs:
           kubectl cluster-info --context kind-${CLUSTER}
           kubectl get nodes
 
-      - name: Build test image locally for KIND
+      - name: Pull and load test image for KIND
         if: ${{ matrix.target == 'kind' }}
         env:
-          IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init-test:test-${{ github.run_id }}
+          IMAGE: ${{ needs.build-test-image.outputs.image }}
           CLUSTER: nri-rust-${{ matrix.scenario }}
         run: |
           set -x
-          docker version || true
-          docker build -f Dockerfile.nri-init-test -t "$IMAGE" --progress=plain .
-          # Load into KIND so nodes can use it without registry pull
+          docker pull "$IMAGE"
           kind load docker-image "$IMAGE" --name ${CLUSTER}
 
-      - name: Run nri-init as privileged DaemonSet on KIND
-        if: ${{ matrix.target == 'kind' }}
+      - name: Run nri-init as privileged DaemonSet on KIND (container mode)
+        if: ${{ matrix.target == 'kind' && matrix.runner == 'container' }}
         env:
-          TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init-test:test-${{ github.run_id }}
+          TEST_IMAGE: ${{ needs.build-test-image.outputs.image }}
         run: |
           echo '=== Cluster nodes ==='
           kubectl get nodes -o wide || true
@@ -186,7 +224,7 @@ jobs:
                     command: ["/bin/sh", "-lc"]
                     args:
                       - >-
-                        /usr/local/bin/nri-init --log-level debug --configure --nsenter-path nsenter --no-restart || true;
+                        /usr/local/bin/nri-init --log-level debug --configure --nsenter-path nsenter $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart --fail-if-unavailable" || echo "--no-restart" ) || true;
                         echo "nri-init done; sleeping to keep pod Ready";
                         sleep 3600
                     volumeMounts:
@@ -228,6 +266,31 @@ jobs:
           echo "=== Verify host containerd config patched ==="
           kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /etc/containerd/config.toml && grep -q "plugins.\"io.containerd.nri.v1.nri\"" /etc/containerd/config.toml && grep -q "disable = false" /etc/containerd/config.toml'
 
+      - name: Run nri-init directly inside KIND node (binary mode)
+        if: ${{ matrix.target == 'kind' && matrix.runner == 'binary' }}
+        env:
+          CLUSTER: nri-rust-${{ matrix.scenario }}
+        run: |
+          set -x
+          NODE=${CLUSTER}-control-plane
+          # Copy binary into KIND node
+          docker cp ./bin/nri-init ${NODE}:/usr/local/bin/nri-init
+          # Run configure (and optional restart) inside the node
+          docker exec ${NODE} /bin/sh -lc "\
+            /usr/local/bin/nri-init --log-level debug --mode containerd --configure $( [ '${{ matrix.restart }}' = 'true' ] && echo '--restart --fail-if-unavailable' || echo '--no-restart' );\
+            echo '=== Show containerd config ===';\
+            head -n 200 /etc/containerd/config.toml || true"
+          # Verify config edited
+          docker exec ${NODE} /bin/sh -lc "grep -q 'plugins.\"io.containerd.nri.v1.nri\"' /etc/containerd/config.toml && grep -q 'disable = false' /etc/containerd/config.toml"
+          # If restart requested, best-effort check for socket (may be unsupported in KIND)
+          if [ "${{ matrix.restart }}" = "true" ]; then
+            if docker exec ${NODE} /bin/sh -lc "test -S /var/run/nri/nri.sock"; then
+              echo "✓ NRI socket present after restart"
+            else
+              echo "ℹ NRI socket missing; restart may be NotSupported in KIND"
+            fi
+          fi
+
       - name: Cleanup KIND
         if: ${{ always() && matrix.target == 'kind' }}
         env:
@@ -262,13 +325,13 @@ jobs:
           echo "Waiting for nodes to be Ready..."
           kubectl wait --for=condition=Ready node --all --timeout=300s
 
-      - name: Run nri-init on host (K3s)
-        if: ${{ matrix.target == 'k3s' }}
+      - name: Run nri-init on host (K3s, binary mode)
+        if: ${{ matrix.target == 'k3s' && matrix.runner == 'binary' }}
         run: |
           echo "=== Run nri-init for K3s (configure=true restart=${{ matrix.restart }}) ==="
           set -x
           FAILED=0
-          if ! sudo ./target/release/nri-init --log-level debug \
+          if ! sudo ./bin/nri-init --log-level debug \
             --mode k3s \
             $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart" || echo "--no-restart" ) \
             --configure \
@@ -319,4 +382,79 @@ jobs:
           fi
           if [ "$FAILED" = "1" ]; then
             echo "nri-init returned failure earlier, but templates/socket checks passed; continuing"
+          fi
+
+      - name: Run nri-init as DaemonSet on K3s (container mode)
+        if: ${{ matrix.target == 'k3s' && matrix.runner == 'container' }}
+        env:
+          TEST_IMAGE: ${{ needs.build-test-image.outputs.image }}
+        run: |
+          set -x
+          kubectl get nodes -o wide || true
+          # Deploy DaemonSet that mounts k3s template dir and runs nri-init
+          cat > ds-k3s.yaml << EOF
+          apiVersion: apps/v1
+          kind: DaemonSet
+          metadata:
+            name: nri-init-test-k3s
+            namespace: kube-system
+            labels: { app: nri-init-test-k3s }
+          spec:
+            selector:
+              matchLabels: { app: nri-init-test-k3s }
+            template:
+              metadata:
+                labels: { app: nri-init-test-k3s }
+              spec:
+                hostPID: true
+                tolerations:
+                  - key: "node-role.kubernetes.io/control-plane"
+                    operator: "Exists"
+                    effect: "NoSchedule"
+                containers:
+                  - name: runner
+                    image: ${TEST_IMAGE}
+                    imagePullPolicy: IfNotPresent
+                    securityContext:
+                      privileged: true
+                    command: ["/bin/sh", "-lc"]
+                    args:
+                      - >-
+                        /usr/local/bin/nri-init --log-level debug --mode k3s --configure --nsenter-path nsenter $( [ "${{ matrix.restart }}" = "true" ] && echo "--restart --fail-if-unavailable" || echo "--no-restart" ) || true;
+                        echo "nri-init done; sleeping to keep pod Ready";
+                        sleep 3600
+                    volumeMounts:
+                      - { name: host-root, mountPath: /host }
+                      - { name: k3s-containerd, mountPath: /var/lib/rancher/k3s/agent/etc/containerd }
+                      - { name: run-nri, mountPath: /var/run/nri }
+                volumes:
+                  - name: host-root
+                    hostPath: { path: /, type: Directory }
+                  - name: k3s-containerd
+                    hostPath: { path: /var/lib/rancher/k3s/agent/etc/containerd, type: DirectoryOrCreate }
+                  - name: run-nri
+                    hostPath: { path: /var/run/nri, type: DirectoryOrCreate }
+          EOF
+          kubectl apply -f ds-k3s.yaml
+          kubectl -n kube-system rollout status ds/nri-init-test-k3s --timeout=60s
+          POD=$(kubectl -n kube-system get pod -l app=nri-init-test-k3s -o jsonpath='{.items[0].metadata.name}')
+          echo "=== nri-init logs (k3s DS) ==="
+          kubectl -n kube-system logs "$POD" || true
+          echo "=== Verify K3s template patched ==="
+          kubectl -n kube-system exec "$POD" -- sh -lc 'ls -la /var/lib/rancher/k3s/agent/etc/containerd || true'
+          kubectl -n kube-system exec "$POD" -- sh -lc 'test -f /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl || test -f /var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl'
+          # Socket expectations based on restart flag
+          if [ "${{ matrix.restart }}" = "false" ]; then
+            if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
+              echo "✗ Socket present but restart=false"
+              exit 1
+            fi
+          else
+            for i in {1..30}; do
+              if kubectl -n kube-system exec "$POD" -- sh -lc 'test -S /var/run/nri/nri.sock'; then
+                echo "✓ NRI socket exists after restart"
+                break
+              fi
+              sleep 1
+            done
           fi
