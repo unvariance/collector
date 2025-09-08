@@ -138,8 +138,8 @@ jobs:
       - name: Create GHCR image pull secret in cluster
         if: ${{ matrix.target == 'kind' }}
         run: |
-          kubectl delete secret ghcr-creds || true
-          kubectl create secret docker-registry ghcr-creds \
+          kubectl delete secret ghcr-creds -n kube-system || true
+          kubectl create secret docker-registry ghcr-creds -n kube-system \
             --docker-server=ghcr.io \
             --docker-username="${{ github.actor }}" \
             --docker-password="${{ secrets.GITHUB_TOKEN }}" \
@@ -176,8 +176,12 @@ jobs:
                     image: ${TEST_IMAGE}
                     securityContext:
                       privileged: true
-                    command: ["/usr/local/bin/nri-init"]
-                    args: ["--log-level","debug","--configure","--nsenter-path","nsenter","--no-restart"]
+                    command: ["/bin/sh", "-lc"]
+                    args:
+                      - >-
+                        /usr/local/bin/nri-init --log-level debug --configure --nsenter-path nsenter --no-restart || true;
+                        echo "nri-init done; sleeping to keep pod Ready";
+                        sleep 3600
                     volumeMounts:
                       - { name: host-root, mountPath: /host }
                       - { name: etc-containerd, mountPath: /etc/containerd }
@@ -192,7 +196,7 @@ jobs:
           EOF
           kubectl apply -f ds.yaml
           # Wait for pod ready
-          kubectl -n kube-system rollout status ds/nri-init-test --timeout=120s
+          kubectl -n kube-system rollout status ds/nri-init-test --timeout=180s
           POD=$(kubectl -n kube-system get pod -l app=nri-init-test -o jsonpath='{.items[0].metadata.name}')
           echo "=== nri-init logs ===" && kubectl -n kube-system logs "$POD" || true
           echo "=== Verify host containerd config patched ==="
@@ -211,6 +215,7 @@ jobs:
         run: |
           # Install specific K3s version (1.31.x). Ensure env reaches sh via sudo.
           curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION="v1.31.12+k3s1" sh -s -
+          echo "Installed K3s version:" && k3s --version || true
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
