@@ -1,6 +1,6 @@
-# Memory Collector Helm Chart
+# Unvariance Collector Helm Chart
 
-This Helm chart deploys the Unvariance Memory Collector, an eBPF-based tool for collecting high-resolution memory subsystem metrics in Kubernetes clusters.
+This Helm chart deploys the Unvariance Collector, an eBPF-based tool for collecting high-resolution memory subsystem metrics in Kubernetes clusters.
 
 ## Installation
 
@@ -162,23 +162,10 @@ The collector uses NRI to access pod and container metadata. NRI is disabled by 
 ```yaml
 nri:
   configure: true  # Update containerd config when NRI socket missing
-  restart: false   # Restart containerd to apply changes (requires maintenance window)
+  restart: false   # Restart containerd to apply changes (careful: could impact cluster availability)
 ```
 
 For detailed NRI setup instructions, see the [NRI Setup Guide](../../docs/nri-setup.md).
-
-#### Safe Production Deployment
-
-1. **Deploy with configuration only** (default):
-   ```bash
-   helm install collector ./charts/collector
-   ```
-   This prepares nodes without disruption.
-
-2. **During maintenance**, enable restart:
-   ```bash
-   helm upgrade collector ./charts/collector --set nri.restart=true
-   ```
 
 ## Pod Security Standards Compatibility
 
