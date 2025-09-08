@@ -62,7 +62,7 @@ pub fn restart_and_verify(service_hint: &str, opts: &Options) -> Result<RestartR
     if let Some(svc) = chosen {
         let start = Instant::now();
         let mut verified = false;
-        while start.elapsed() < Duration::from_secs(30) {
+        while start.elapsed() < Duration::from_secs(60) {
             if is_active(&runner, svc) {
                 if let (Some(b), Some(a)) = (before, service_monotonic_start(&runner, svc)) {
                     if a > b { verified = true; break; }
