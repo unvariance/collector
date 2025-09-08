@@ -27,6 +27,40 @@ permissions:
   actions: write
 
 jobs:
+  build-and-unit-test:
+    name: Build + unit tests (GH hosted)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustc -V || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "source $HOME/.cargo/env" >> $HOME/.profile
+          source $HOME/.cargo/env
+          rustc -V
+          cargo -V
+
+      - name: Run unit tests (no hardware)
+        run: |
+          source $HOME/.cargo/env
+          # RESCTRL_E2E not set, so smoke test is skipped
+          cargo test -p resctrl --release -- --nocapture
+
+      - name: Build test binaries (no-run)
+        run: |
+          source $HOME/.cargo/env
+          cargo test -p resctrl --release --no-run
+
+      - name: Upload resctrl test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: resctrl-tests
+          path: |
+            target/release/deps/*
+          if-no-files-found: error
+
   setup-runner:
     name: Start EC2 runner (resctrl-capable)
     runs-on: ubuntu-latest
@@ -52,7 +86,7 @@ jobs:
 
   resctrl-e2e:
     name: Run resctrl smoke test
-    needs: [setup-runner]
+    needs: [build-and-unit-test, setup-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
     env:
@@ -64,17 +98,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        shell: bash
-        run: |
-          if ! command -v rustc >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          fi
-          echo "source $HOME/.cargo/env" >> $HOME/.profile
-          source $HOME/.cargo/env
-          rustc -V
-          cargo -V
-
       - name: Ensure resctrl is mounted
         shell: bash
         run: |
@@ -83,12 +106,28 @@ jobs:
             mount -t resctrl resctrl /sys/fs/resctrl
           fi
 
-      - name: Run resctrl tests (unit + integration)
+      - name: Download test binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: resctrl-tests
+          path: resctrl-tests
+
+      - name: Run resctrl tests (hardware)
         shell: bash
         run: |
-          source $HOME/.cargo/env
-          export RESCTRL_E2E=1
-          cargo test -p resctrl --release -- --nocapture
+          set -euxo pipefail
+          chmod -R +x resctrl-tests || true
+          # Execute all resctrl test binaries found in artifact
+          found=0
+          for bin in $(find resctrl-tests -maxdepth 1 -type f -executable \( -name "smoke_test-*" -o -name "resctrl-*" \)); do
+            echo "Running test binary: $bin"
+            RESCTRL_E2E=1 "$bin" --nocapture
+            found=1
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No test binaries found in artifact" >&2
+            exit 1
+          fi
 
   stop-runner:
     name: Stop EC2 runner
