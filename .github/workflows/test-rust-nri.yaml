@@ -275,13 +275,20 @@ jobs:
           NODE=${CLUSTER}-control-plane
           # Copy binary into KIND node
           docker cp ./bin/nri-init ${NODE}:/usr/local/bin/nri-init
-          # Run configure (and optional restart) inside the node
+          # Sanity on node environment
+          docker exec ${NODE} /bin/sh -lc "id && uname -a && containerd --version || true"
+          docker exec ${NODE} /bin/sh -lc "ls -la /etc/containerd || true && head -n 60 /etc/containerd/config.toml || true"
+          # Run configure (and optional restart) inside the node (explicit config path)
           docker exec ${NODE} /bin/sh -lc "\
-            /usr/local/bin/nri-init --log-level debug --mode containerd --configure $( [ '${{ matrix.restart }}' = 'true' ] && echo '--restart --fail-if-unavailable' || echo '--no-restart' );\
+            /usr/local/bin/nri-init --log-level debug --mode containerd --containerd-config /etc/containerd/config.toml --configure $( [ '${{ matrix.restart }}' = 'true' ] && echo '--restart --fail-if-unavailable' || echo '--no-restart' );\
             echo '=== Show containerd config ===';\
             head -n 200 /etc/containerd/config.toml || true"
-          # Verify config edited
-          docker exec ${NODE} /bin/sh -lc "grep -q 'plugins.\"io.containerd.nri.v1.nri\"' /etc/containerd/config.toml && grep -q 'disable = false' /etc/containerd/config.toml"
+          # Verify config edited (print context on failure)
+          if ! docker exec ${NODE} /bin/sh -lc "grep -q 'plugins.\"io.containerd.nri.v1.nri\"' /etc/containerd/config.toml && grep -q 'disable = false' /etc/containerd/config.toml"; then
+            echo 'Final /etc/containerd/config.toml:'
+            docker exec ${NODE} /bin/sh -lc 'sed -n "1,200p" /etc/containerd/config.toml || true'
+            exit 1
+          fi
           # If restart requested, best-effort check for socket (may be unsupported in KIND)
           if [ "${{ matrix.restart }}" = "true" ]; then
             if docker exec ${NODE} /bin/sh -lc "test -S /var/run/nri/nri.sock"; then
