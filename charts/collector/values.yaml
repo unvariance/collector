@@ -105,7 +105,7 @@ extraEnv: []
 # NRI enables the collector to access pod and container metadata
 nri:
   # Whether to configure NRI when socket is missing
-  configure: true
+  configure: false
   # Whether to restart containerd after configuration (requires maintenance window)
   restart: false
   # Whether to fail if NRI is unavailable (useful for testing)

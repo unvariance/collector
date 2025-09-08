@@ -10,7 +10,7 @@ NRI support in containerd begins with containerd 1.7 (initially experimental) an
 
 - NOTE: containerd 1.6.x and earlier do not include the NRI plugin at all. No configuration can enable NRI on 1.6.x — you must upgrade to containerd >= 1.7 to use NRI.
 
-NRI is disabled by default in containerd 1.7.x, which affects many Kubernetes distributions (details for K3s below):
+NRI is disabled by default in containerd 1.7.x, which affects many Kubernetes distributions:
 
 - **K3s**: See the K3s version matrix below (some releases use containerd 2.0 with NRI enabled by default; older lines use 1.7.x with NRI disabled)
 - **Ubuntu LTS**: 24.04, 22.04, 20.04 ship containerd 1.7.x or older (NRI disabled)
@@ -42,12 +42,6 @@ NRI status by KIND release:
 - KIND `v0.27.0+`: NRI enabled by default (via containerd 2.x)
 - KIND `v0.26.0` and earlier: NRI not enabled by default
 
-Key details for `v0.27.0`:
-
-- Requires using `kind load` subcommands compatible with containerd 2.0+ images
-- Requires `config_path` mode for containerd registry configuration
-- Default Kubernetes version is `v1.32.2`
-
 Note: Unlike K3s (which adopted containerd 2.0 only in select release lines), each KIND release supports multiple Kubernetes versions. When KIND `v0.27.0` adopted containerd 2.0, it applied across all Kubernetes versions you can deploy with that KIND release.
 
 In summary: To get NRI enabled by default in KIND, use `v0.27.0` or later.
@@ -67,31 +61,40 @@ The NRI feature is controlled by Helm values:
 
 ```yaml
 nri:
-  configure: true   # Update containerd config when NRI is disabled (default: true)
-  restart: false    # Restart containerd to apply changes (default: false)
+  configure: false         # Default: detection-only (safest)
+  restart: false           # Restart containerd to apply changes
+  failIfUnavailable: false # Fail pod if NRI cannot be enabled/detected
   init:
     image:
       repository: ghcr.io/unvariance/nri-init
-      tag: v0.1.0
+      tag: latest
+      pullPolicy: IfNotPresent
     command: ["/bin/nri-init"]
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
 ```
 
 ### Operating Modes
 
-#### 1. Detection Only (Safest)
-```bash
-helm install collector ./charts/collector \
-  --set nri.configure=false \
-  --set nri.restart=false
-```
-- Only checks and reports NRI status
-- No changes to the system
-- Collector runs without metadata features
-
-#### 2. Configure Without Restart (Default)
+#### 1. Detection Only (Default, Safest)
 ```bash
 helm install collector ./charts/collector
-# Or explicitly:
+```
+- Checks and reports NRI status only
+- No system changes; collector runs without metadata if NRI is disabled
+
+Optional: fail fast when NRI is unavailable
+```bash
+helm install collector ./charts/collector \
+  --set nri.failIfUnavailable=true
+```
+
+#### 2. Configure Without Restart
+```bash
 helm install collector ./charts/collector \
   --set nri.configure=true \
   --set nri.restart=false
@@ -104,7 +107,8 @@ The chart uses an init container binary. You can override the image/tag if neede
 ```bash
 helm install collector ./charts/collector \
   --set nri.init.image.repository=ghcr.io/unvariance/nri-init \
-  --set nri.init.image.tag=v0.1.0
+  --set nri.init.image.tag=latest \
+  --set nri.init.image.pullPolicy=IfNotPresent
 ```
 
 #### 3. Full Setup with Restart
@@ -119,83 +123,50 @@ helm install collector ./charts/collector \
 
 ## Production Deployment Strategy
 
-### Recommended Approach
+### Recommended: Rolling Update (Safest)
 
-1. **Initial Deployment**: Deploy with configuration only (default)
+1. **Initial Deploy (Default)**: Detection-only to assess environment
    ```bash
    helm install collector ./charts/collector
    ```
-   This prepares all nodes without disruption.
-
-2. **Check Status**: Review init container logs to verify configuration
+   Review init logs to confirm status:
    ```bash
    kubectl logs -n <namespace> <collector-pod> -c nri-init
    ```
 
-3. **Schedule Maintenance**: During a maintenance window, enable restart
-   ```bash
-   helm upgrade collector ./charts/collector \
-     --set nri.restart=true
-   ```
-
-4. **Verify NRI**: Check that NRI is enabled
-   ```bash
-   kubectl exec -n <namespace> <collector-pod> -- ls -la /var/run/nri/nri.sock
-   ```
-
-### Rolling Update Strategy
-
-For large clusters, consider updating nodes gradually:
-
-1. **Label nodes** for staged rollout:
+2. **Label a first batch of nodes**
    ```bash
    kubectl label node node1 nri-update=batch1
-   kubectl label node node2 nri-update=batch2
+   kubectl label node node2 nri-update=batch1
    ```
 
-2. **Update by batch** using node selectors:
+3. **Enable NRI for batch1** (configure and restart only on labeled nodes)
    ```bash
    helm upgrade collector ./charts/collector \
+     --set nri.configure=true \
      --set nri.restart=true \
      --set nodeSelector.nri-update=batch1
    ```
 
-3. **Verify** each batch before proceeding:
+4. **Verify NRI** on batch1 before proceeding
    ```bash
    kubectl get pods -o wide | grep collector
+   kubectl exec -n <namespace> <collector-pod-on-batch1> -- ls -la /var/run/nri/nri.sock
    ```
 
-## Troubleshooting
+5. **Roll forward**: relabel next set (e.g., batch2) and repeat step 3
+   ```bash
+   kubectl label node node3 nri-update=batch2
+   helm upgrade collector ./charts/collector \
+     --set nri.configure=true \
+     --set nri.restart=true \
+     --set nodeSelector.nri-update=batch2
+   ```
 
-### Common Issues
-
-#### NRI Socket Not Found After Restart
-```bash
-# Check containerd status
-systemctl status containerd
-
-# Check configuration was applied
-grep -A5 "nri" /etc/containerd/config.toml
-
-# For K3s, check template
-grep -A5 "nri" /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-```
-
-#### Init Container Fails
-```bash
-# View init container logs
-kubectl logs <pod> -c nri-init
-
-# Check permissions
-kubectl describe pod <pod>
-```
-
-#### Containerd Restart Impact
-If containerd restart causes issues:
-1. Kubelet may temporarily lose connection to containers
-2. Existing containers continue running
-3. New pod scheduling may be delayed
-4. Recovery typically takes 30-60 seconds
+6. **Finish**: when all nodes are updated, optionally remove the selector to return to normal scheduling
+   ```bash
+   helm upgrade collector ./charts/collector --reuse-values --set nodeSelector={}
+   ```
 
 ### Manual NRI Setup
 
@@ -230,32 +201,53 @@ kubectl logs -l app.kubernetes.io/name=collector -c nri-init
 
 ### Expected Log Messages
 
+These examples reflect the init binary's actual log strings.
+
 **NRI Enabled**:
 ```
-[INFO] NRI socket found at /var/run/nri/nri.sock
-[INFO] NRI is already enabled and available
-[INFO] Memory Collector can access pod and container metadata
+INFO Starting NRI initialization check
+INFO Configuration: configure=false, restart=false
+INFO NRI socket found at /var/run/nri/nri.sock
+INFO NRI configuration is disabled (configure=false)
+INFO Completed: configured=false, restarted=false, socket=true
+INFO nri-init done
 ```
 
 **NRI Disabled (configure=false)**:
 ```
-[WARN] NRI socket not found at /var/run/nri/nri.sock
-[INFO] NRI configuration is disabled (nri.configure=false)
-[WARN] Memory Collector will continue without metadata features
+INFO Starting NRI initialization check
+INFO Configuration: configure=false, restart=false
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO NRI configuration is disabled (configure=false)
+INFO Completed: configured=false, restarted=false, socket=false
+INFO nri-init done
 ```
 
 **NRI Configured (restart=false)**:
 ```
-[INFO] NRI configuration updated but containerd not restarted
-[INFO] To enable NRI, containerd must be restarted manually
-[WARN] Memory Collector will continue without metadata features until restart
+INFO Starting NRI initialization check
+INFO Configuration: configure=true, restart=false
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO Updating containerd NRI configuration at /etc/containerd/config.toml
+INFO Completed: configured=true, restarted=false, socket=false
+INFO nri-init done
+```
+
+Note: If the configuration is already present, you may see:
+```
+INFO Containerd NRI configuration already up to date
 ```
 
 **NRI Enabled After Restart**:
 ```
-[INFO] Restarting containerd service to apply NRI configuration
-[INFO] NRI socket is now available at /var/run/nri/nri.sock
-[INFO] Memory Collector can now access pod and container metadata
+INFO Starting NRI initialization check
+INFO Configuration: configure=true, restart=true
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO Updating containerd NRI configuration at /etc/containerd/config.toml
+INFO Issued restart via systemctl for containerd
+INFO NRI socket became available
+INFO Completed: configured=true, restarted=true, socket=true
+INFO nri-init done
 ```
 
 ## Security Considerations

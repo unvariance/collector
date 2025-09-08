@@ -161,11 +161,13 @@ The collector uses NRI to access pod and container metadata. NRI is disabled by 
 
 ```yaml
 nri:
-  configure: true  # Update containerd config when NRI socket missing
-  restart: false   # Restart containerd to apply changes (careful: could impact cluster availability)
+  configure: false # Default: detection-only (safest)
+  restart: false   # Restart containerd to apply changes (may impact availability)
 ```
 
 For detailed NRI setup instructions, see the [NRI Setup Guide](../../docs/nri-setup.md).
+
+Recommended production rollout: use a rolling, label-based update to enable NRI safely in batches. See the NRI guide for step-by-step commands.
 
 ## Pod Security Standards Compatibility
 
@@ -214,11 +216,11 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `podAnnotations` | Additional pod annotations | `{}` |
 | `podLabels` | Additional pod labels | `{}` |
 | `extraEnv` | Additional environment variables | `[]` |
-| `nri.configure` | Configure NRI when socket is missing | `true` |
+| `nri.configure` | Configure NRI when socket is missing | `false` |
 | `nri.restart` | Restart containerd to enable NRI | `false` |
 | `nri.failIfUnavailable` | Fail init if NRI unavailable | `false` |
 | `nri.init.image.repository` | Init image repository | `ghcr.io/unvariance/nri-init` |
-| `nri.init.image.tag` | Init image tag | `v0.1.0` |
+| `nri.init.image.tag` | Init image tag | `latest` |
 | `nri.init.image.pullPolicy` | Init image pull policy | `IfNotPresent` |
 | `nri.init.command` | Init command | `["/bin/nri-init"]` |
 | `nri.init.securityContext.privileged` | Run init as privileged | `true` |
