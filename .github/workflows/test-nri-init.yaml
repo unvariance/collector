@@ -104,6 +104,16 @@ jobs:
             fi
           done
 
+      - name: Verify hostPID when restart enabled
+        if: ${{ matrix.values.restart_expected == 'true' }}
+        run: |
+          if grep -qE '\bhostPID: true\b' /tmp/rendered.yaml; then
+            echo "✓ hostPID: true present for restart=true"
+          else
+            echo "✗ hostPID not set while restart=true"
+            exit 1
+          fi
+
   test-helm-install:
     name: Test Helm Installation
     runs-on: ubuntu-latest
