@@ -157,7 +157,8 @@ jobs:
           kubectl get nodes -o wide || true
           echo '=== System pods ==='
           kubectl get pods -A || true
-          cat > ds.yaml << 'EOF'
+          # Expand ${TEST_IMAGE} into the manifest
+          cat > ds.yaml << EOF
           apiVersion: apps/v1
           kind: DaemonSet
           metadata:
