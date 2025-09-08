@@ -153,6 +153,10 @@ jobs:
         env:
           TEST_IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init-test:test-${{ github.run_id }}
         run: |
+          echo '=== Cluster nodes ==='
+          kubectl get nodes -o wide || true
+          echo '=== System pods ==='
+          kubectl get pods -A || true
           cat > ds.yaml << 'EOF'
           apiVersion: apps/v1
           kind: DaemonSet
@@ -208,6 +212,8 @@ jobs:
             kubectl -n kube-system describe ds nri-init-test || true
             echo '--- Pods ---'
             kubectl -n kube-system get pods -l app=nri-init-test -o wide || true
+            echo '--- Recent Events ---'
+            kubectl -n kube-system get events --sort-by=.lastTimestamp | tail -n 50 || true
             if [ -n "$POD" ]; then
               echo '--- Pod Describe ---'
               kubectl -n kube-system describe pod "$POD" || true
