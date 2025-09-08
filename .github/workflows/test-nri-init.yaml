@@ -167,6 +167,13 @@ jobs:
           # Verify expected log messages (new nri-init format) and fail on explicit failure
           if kubectl logs $POD -c nri-init | grep -q "nri-init failed"; then
             echo "✗ nri-init failed (found failure marker in logs)"
+            NODE=$(kubectl get pod "$POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)
+            if [ -n "$NODE" ]; then
+              echo "=== containerd status on node: $NODE ==="
+              docker exec "$NODE" /bin/sh -lc 'systemctl status containerd || true'
+              echo "=== recent containerd logs (journalctl) ==="
+              docker exec "$NODE" /bin/sh -lc 'journalctl -u containerd --no-pager -n 200 || true'
+            fi
             exit 1
           fi
           if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=false, restart=false"; then
@@ -212,6 +219,13 @@ jobs:
             if echo "$LOGS" | grep -q "nri-init failed"; then
               echo "✗ nri-init failed (found failure marker)"
               echo "$LOGS"
+              NODE=$(kubectl get pod "$POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)
+              if [ -n "$NODE" ]; then
+                echo "=== containerd status on node: $NODE ==="
+                docker exec "$NODE" /bin/sh -lc 'systemctl status containerd || true'
+                echo "=== recent containerd logs (journalctl) ==="
+                docker exec "$NODE" /bin/sh -lc 'journalctl -u containerd --no-pager -n 200 || true'
+              fi
               exit 1
             fi
             if echo "$LOGS" | grep -q "nri-init done"; then
@@ -223,6 +237,13 @@ jobs:
           if ! kubectl logs "$POD" -c nri-init | grep -q "nri-init done"; then
             echo "✗ nri-init completion marker not observed"
             kubectl logs "$POD" -c nri-init || true
+            NODE=$(kubectl get pod "$POD" -o jsonpath='{.spec.nodeName}' 2>/dev/null || true)
+            if [ -n "$NODE" ]; then
+              echo "=== containerd status on node: $NODE ==="
+              docker exec "$NODE" /bin/sh -lc 'systemctl status containerd || true'
+              echo "=== recent containerd logs (journalctl) ==="
+              docker exec "$NODE" /bin/sh -lc 'journalctl -u containerd --no-pager -n 200 || true'
+            fi
             exit 1
           fi
           echo "=== NRI Init Container Logs (Configure + Restart) ==="
