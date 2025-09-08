@@ -10,15 +10,30 @@ NRI support in containerd begins with containerd 1.7 (initially experimental) an
 
 - NOTE: containerd 1.6.x and earlier do not include the NRI plugin at all. No configuration can enable NRI on 1.6.x — you must upgrade to containerd >= 1.7 to use NRI.
 
-NRI is disabled by default in containerd 1.7.x, which affects most current Kubernetes distributions:
+NRI is disabled by default in containerd 1.7.x, which affects many Kubernetes distributions (details for K3s below):
 
-- **K3s**: Ships with containerd 1.7.x (NRI disabled)
+- **K3s**: See the K3s version matrix below (some releases use containerd 2.0 with NRI enabled by default; older lines use 1.7.x with NRI disabled)
 - **Ubuntu LTS**: 24.04, 22.04, 20.04 ship containerd 1.7.x or older (NRI disabled)
 - **Cloud Providers**: Most managed Kubernetes services use containerd 1.7.x (NRI disabled)
 
 Without NRI enabled, the collector cannot access pod and container metadata, limiting its ability to correlate performance metrics with specific workloads.
 
 If the init container detects containerd < 1.7, it skips NRI configuration with a clear warning. Set `nri.failIfUnavailable=true` if you prefer the pod to fail fast in that case.
+
+### K3s Versions and NRI
+
+K3s adopted containerd 2.0 (which enables NRI by default) beginning in February 2025 for specific release lines. Earlier versions continue to use containerd 1.7.x (where NRI is disabled by default).
+
+- NRI enabled by default (via containerd 2.0):
+  - K3s `v1.31.6+` (starting with `v1.31.6+k3s1`)
+  - K3s `v1.32.2+` (starting with `v1.32.2+k3s1`)
+- No backports to older minors: the `v1.30.x`, `v1.29.x`, and `v1.28.x` release lines remain on containerd 1.7.x (NRI disabled by default).
+- Prior to the above cutovers (e.g., K3s `v1.31.0–v1.31.5`, `v1.32.0–v1.32.1`), containerd 1.7.x is used and NRI must be explicitly enabled.
+
+What this means for K3s clusters:
+
+- If your cluster runs one of the versions with containerd 2.0 (see above), NRI is already enabled by default and no configuration is required.
+- If your cluster runs any other supported K3s version (including all of `v1.30.x` and older minors, and early `v1.31`/`v1.32` patch releases), you need to enable NRI explicitly (use this guide or upgrade to a containerd 2.0-based K3s patch).
 
 ## How the NRI Init Container Works
 
