@@ -209,11 +209,6 @@ jobs:
               region: "${AWS_REGION}"
               auth:
                 method: "iam"  # Using IAM role
-          
-          # NRI configuration - configure but don't restart in CI
-          nri:
-            configure: true
-            restart: false
           EOF
           
           # Print the values being used
@@ -221,33 +216,6 @@ jobs:
           
           # Install the helm chart
           helm upgrade --install ${RELEASE_NAME} ./charts/collector -f values-override.yaml
-
-      - name: Check NRI Init Container Status
-        run: |
-          echo "=== Checking NRI init container logs ==="
-          echo "Waiting for collector pod to be Ready before checking logs..."
-          if ! kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=collector --timeout=180s; then
-            echo "✗ Collector pod did not reach Ready within timeout; dumping diagnostics"
-            kubectl get pods -o wide || true
-            kubectl describe pods -l app.kubernetes.io/name=collector || true
-            exit 1
-          fi
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
-          
-          if [ -n "$POD" ]; then
-            echo "Checking init container logs for pod: $POD"
-            kubectl logs $POD -c nri-init || echo "No init container logs available"
-            
-            # Verify NRI was detected/configured
-            if kubectl logs $POD -c nri-init 2>/dev/null | grep -q "NRI initialization check completed"; then
-              echo "✓ NRI init container completed successfully"
-            else
-              echo "✗ NRI init container did not complete properly"
-              echo "Expected 'NRI initialization check completed' in logs"
-              kubectl logs $POD -c nri-init
-              exit 1
-            fi
-          fi
 
       - name: Wait for Collector Pods to be Ready
         run: |
