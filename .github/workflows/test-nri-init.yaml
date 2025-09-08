@@ -5,8 +5,304 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
 
 jobs:
+  helm-lint:
+    name: Helm Chart Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+      - name: Lint Helm chart
+        run: |
+          helm lint charts/collector
+      - name: Lint with NRI disabled values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-disabled-values.yaml
+      - name: Lint with NRI configure-only values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-configure-only-values.yaml
+      - name: Lint with NRI full setup values
+        run: |
+          helm lint charts/collector -f charts/collector/ci/nri-full-setup-values.yaml
+
+  helm-template:
+    name: Test Helm Template Rendering
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        values:
+          - name: "Default values"
+            file: ""
+            checks:
+              - "name: nri-init"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*false"
+          - name: "NRI disabled"
+            file: "charts/collector/ci/nri-disabled-values.yaml"
+            checks:
+              - "name: nri-init"
+              - "NRI_CONFIGURE.*false"
+              - "NRI_RESTART.*false"
+          - name: "NRI configure only"
+            file: "charts/collector/ci/nri-configure-only-values.yaml"
+            checks:
+              - "name: nri-init"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*false"
+          - name: "NRI full setup"
+            file: "charts/collector/ci/nri-full-setup-values.yaml"
+            checks:
+              - "name: nri-init"
+              - "NRI_CONFIGURE.*true"
+              - "NRI_RESTART.*true"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'latest'
+      - name: Template chart - ${{ matrix.values.name }}
+        run: |
+          if [ -z "${{ matrix.values.file }}" ]; then
+            helm template test-release charts/collector > /tmp/rendered.yaml
+          else
+            helm template test-release charts/collector -f ${{ matrix.values.file }} > /tmp/rendered.yaml
+          fi
+          echo "=== Rendered template ==="
+          cat /tmp/rendered.yaml
+      - name: Verify expected content
+        run: |
+          checks='${{ toJson(matrix.values.checks) }}'
+          echo "$checks" | jq -r '.[]' | while IFS= read -r check; do
+            if grep -q "$check" /tmp/rendered.yaml; then
+              echo "✓ Found: $check"
+            else
+              echo "✗ Missing: $check"
+              exit 1
+            fi
+          done
+      - name: Verify volume mounts
+        run: |
+          required_volumes="etc-containerd var-lib-rancher var-run"
+          for vol in $required_volumes; do
+            if grep -q "name: $vol" /tmp/rendered.yaml; then
+              echo "✓ Volume $vol found"
+            else
+              echo "✗ Volume $vol missing"
+              exit 1
+            fi
+          done
+
+  test-helm-install:
+    name: Test Helm Installation
+    runs-on: ubuntu-latest
+    needs: [build-test-image]
+    strategy:
+      matrix:
+        k8s_version: ["1.27", "1.28", "1.29", "1.30", "1.31"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          node_image: kindest/node:v${{ matrix.k8s_version }}.0
+          cluster_name: test-cluster
+      - name: Install Helm chart with NRI disabled
+        env:
+          IMAGE: ${{ needs.build-test-image.outputs.image }}
+        run: |
+          # Prepare test image for KIND cluster and set chart image overrides
+          REPO="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          docker pull "$IMAGE"
+          kind load docker-image "$IMAGE" --name test-cluster
+          helm install test-collector charts/collector \
+            -f charts/collector/ci/nri-disabled-values.yaml \
+            --set nri.init.image.repository="$REPO" \
+            --set nri.init.image.tag="$TAG" \
+            --wait --timeout 2m
+      - name: Check pod status
+        run: |
+          kubectl get pods -l app.kubernetes.io/name=collector
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
+      - name: Check init container logs
+        run: |
+          # Get pod name
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "=== NRI Init Container Logs ==="
+          kubectl logs $POD -c nri-init
+          # Verify expected log messages (new nri-init format)
+          if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=false, restart=false"; then
+            echo "✓ Detected expected configuration flags in logs (configure=false, restart=false)"
+          else
+            echo "✗ Expected 'Configuration: configure=false, restart=false' in init logs"
+            exit 1
+          fi
+      - name: Uninstall chart
+        run: |
+          helm uninstall test-collector
+      - name: Install Helm chart with NRI configure-only
+        env:
+          IMAGE: ${{ needs.build-test-image.outputs.image }}
+        run: |
+          REPO="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          docker pull "$IMAGE"
+          kind load docker-image "$IMAGE" --name test-cluster
+          helm install test-collector charts/collector \
+            -f charts/collector/ci/nri-configure-only-values.yaml \
+            --set nri.init.image.repository="$REPO" \
+            --set nri.init.image.tag="$TAG" \
+            --wait --timeout 2m
+      - name: Check configuration was attempted
+        run: |
+          # Wait for pod to exist
+          echo "Waiting for collector pod to be created..."
+          for i in {1..30}; do
+            if kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null; then
+              break
+            fi
+            echo "Waiting for pod... ($i/30)"
+            sleep 2
+          done
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          # Wait for init container to complete
+          echo "Waiting for init container to complete..."
+          for i in {1..30}; do
+            STATUS=$(kubectl get pod $POD -o jsonpath='{.status.initContainerStatuses[?(@.name=="nri-init")].state}' 2>/dev/null || echo "{}")
+            if echo "$STATUS" | grep -q "terminated"; then
+              echo "Init container completed"
+              break
+            fi
+            echo "Waiting for init container... ($i/30)"
+            sleep 2
+          done
+          echo "=== NRI Init Container Logs (Configure Only) ==="
+          kubectl logs $POD -c nri-init
+          # Verify configuration flags via structured log line
+          if kubectl logs $POD -c nri-init | grep -q "Configuration: configure=true, restart=false"; then
+            echo "✓ Detected expected configuration flags in logs (configure=true, restart=false)"
+          else
+            echo "✗ Expected 'Configuration: configure=true, restart=false' in init logs"
+            kubectl logs $POD -c nri-init || true
+            exit 1
+          fi
+
+  verify-nri-preconfigured:
+    name: Verify NRI Pre-configured in K8s ${{ matrix.k8s_version }}
+    runs-on: ubuntu-latest
+    needs: [build-test-image]
+    strategy:
+      matrix:
+        k8s_version: ["1.32", "1.33"]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          node_image: kindest/node:v${{ matrix.k8s_version }}.0
+          cluster_name: test-cluster-nri-${{ matrix.k8s_version }}
+      - name: Verify NRI is already enabled
+        run: |
+          echo "=== Checking NRI status in Kubernetes ${{ matrix.k8s_version }} ==="
+          # Get the KIND node name
+          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          echo "Node name: $NODE_NAME"
+          # Check if NRI socket exists in the node
+          echo "=== Checking for NRI socket ==="
+          kubectl debug node/$NODE_NAME -it --image=busybox -- ls -la /host/var/run/nri/ 2>/dev/null || true
+          # Check containerd config for NRI
+          echo "=== Checking containerd config for NRI ==="
+          kubectl debug node/$NODE_NAME -it --image=busybox -- cat /host/etc/containerd/config.toml 2>/dev/null | grep -A 10 "nri" || true
+          # Alternative: Use docker exec to check KIND container directly
+          echo "=== Alternative check using docker exec ==="
+          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          # Check if NRI socket exists (must exist for pre-configured expectation)
+          if docker exec $CONTAINER_NAME ls -la /var/run/nri/nri.sock 2>/dev/null; then
+            echo "✓ NRI socket found at /var/run/nri/nri.sock"
+          else
+            echo "✗ NRI socket not found; expected pre-configured NRI in Kubernetes ${{ matrix.k8s_version }}"
+            docker exec $CONTAINER_NAME ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
+            exit 1
+          fi
+          # Check containerd config
+          echo "=== Containerd config NRI section ==="
+          if docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"'; then
+            echo "✓ NRI configuration found in containerd"
+            docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -A 10 'plugins."io.containerd.nri.v1.nri"'
+          else
+            echo "✗ NRI configuration NOT found in containerd config for Kubernetes ${{ matrix.k8s_version }}"
+            exit 1
+          fi
+      - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
+        env:
+          IMAGE: ${{ needs.build-test-image.outputs.image }}
+        run: |
+          echo "=== Deploying collector with NRI configuration disabled ==="
+          REPO="${IMAGE%:*}"
+          TAG="${IMAGE##*:}"
+          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          # Load the image into KIND nodes to avoid GHCR auth issues
+          docker pull "$IMAGE"
+          kind load docker-image "$IMAGE" --name "test-cluster-nri-${{ matrix.k8s_version }}"
+          helm install test-collector charts/collector \
+            -f charts/collector/ci/nri-disabled-values.yaml \
+            --set nri.init.image.repository="$REPO" \
+            --set nri.init.image.tag="$TAG" \
+            --wait --timeout 2m
+          # Wait for pod to be created and ready
+          echo "Waiting for collector pod to be ready..."
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=60s
+          # Get pod name
+          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "=== NRI Init Container Logs ==="
+          kubectl logs $POD -c nri-init
+          # Check if init container detected pre-existing NRI (socket present)
+          if kubectl logs $POD -c nri-init | grep -q "NRI socket found at"; then
+            echo "✓ Init container detected pre-configured NRI"
+          else
+            echo "✗ Init container did not detect pre-configured NRI"
+            kubectl logs $POD -c nri-init || true
+            exit 1
+          fi
+          helm uninstall test-collector
+      - name: Summary
+        run: |
+          echo "=== Summary for Kubernetes ${{ matrix.k8s_version }} ==="
+          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          if docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"' && \
+             docker exec $CONTAINER_NAME ls /var/run/nri/nri.sock 2>/dev/null; then
+            echo "✅ Kubernetes ${{ matrix.k8s_version }} has NRI fully configured and enabled out of the box"
+          elif docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"'; then
+            echo "⚠️ Kubernetes ${{ matrix.k8s_version }} has NRI configuration but socket may not be active"
+          else
+            echo "❌ Kubernetes ${{ matrix.k8s_version }} does NOT have NRI pre-configured"
+          fi
+
+  security-scan:
+    name: Security Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Validate init container runs as root (required for config changes)
+        run: |
+          if grep -q "privileged: true" charts/collector/values.yaml; then
+            echo "✓ Init container configured with required privileges"
+          else
+            echo "✗ Init container missing required privileges"
+            exit 1
+          fi
+      # Script-based init removed; no script scanning required
   build-test-image:
     name: Build and push nri-init test image
     runs-on: ubuntu-latest
