@@ -3,3 +3,5 @@
 /reference
 /.vscode
 .env
+/.claude/
+/scratchpad/
