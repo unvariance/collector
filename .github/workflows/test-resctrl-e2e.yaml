@@ -1,0 +1,109 @@
+name: test-resctrl-e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      instance-type:
+        description: 'EC2 instance type to use'
+        required: false
+        default: 'm7i.metal-24xl'
+        type: string
+      image-type:
+        description: 'Runner AMI image type'
+        required: false
+        default: 'ubuntu-24.04'
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/resctrl/**'
+      - '.github/workflows/test-resctrl-e2e.yaml'
+      - 'Cargo.toml'
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+
+jobs:
+  setup-runner:
+    name: Start EC2 runner (resctrl-capable)
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          iam-role-name: github-actions-runner
+          instance-type: ${{ inputs.instance-type || 'm7i.metal-24xl' }}
+          image-type: ${{ inputs.image-type || 'ubuntu-24.04' }}
+          market-type: 'spot'
+          volume-size: '40'
+
+  resctrl-e2e:
+    name: Run resctrl smoke test
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    env:
+      HOME: /root
+    steps:
+      - name: Prepare HOME
+        run: mkdir -p "$HOME"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          if ! command -v rustc >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          fi
+          echo "source $HOME/.cargo/env" >> $HOME/.profile
+          source $HOME/.cargo/env
+          rustc -V
+          cargo -V
+
+      - name: Ensure resctrl is mounted
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! grep -q "/sys/fs/resctrl" /proc/mounts; then
+            mount -t resctrl resctrl /sys/fs/resctrl
+          fi
+
+      - name: Run resctrl tests (unit + integration)
+        shell: bash
+        run: |
+          source $HOME/.cargo/env
+          export RESCTRL_E2E=1
+          cargo test -p resctrl --release -- --nocapture
+
+  stop-runner:
+    name: Stop EC2 runner
+    needs: [setup-runner, resctrl-e2e]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region || secrets.AWS_REGION }}

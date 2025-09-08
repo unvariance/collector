@@ -1,0 +1,13 @@
+[package]
+name = "resctrl"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+thiserror = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }

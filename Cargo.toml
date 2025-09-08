@@ -12,6 +12,7 @@ members = [
     "crates/nri",
     "crates/trace-analysis",
     "crates/nri-init",
+    "crates/resctrl",
 ]
 
 [workspace.dependencies]
