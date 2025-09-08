@@ -205,7 +205,7 @@ impl TimeslotToRecordBatchTask {
             tokio::select! {
                 // Process metadata messages when available
                 maybe_msg = async {
-                    if let Some(rx) = &mut self.metadata_receiver { rx.recv().await } else { pending().await }
+                    if let Some(rx) = &mut self.metadata_receiver { rx.recv().await } else { pending::<Option<MetadataMessage>>().await }
                 } => {
                     match maybe_msg {
                         Some(msg) => self.process_metadata_message(msg),
