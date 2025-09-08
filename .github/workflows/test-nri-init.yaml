@@ -213,24 +213,20 @@ jobs:
           fi
 
   verify-nri-preconfigured:
-    name: Verify NRI Pre-configured in K8s ${{ matrix.k8s_version }}
+    name: Verify NRI Pre-configured on KIND v0.30
     runs-on: ubuntu-latest
-    continue-on-error: true
     needs: [build-test-image]
-    strategy:
-      matrix:
-        k8s_version: ["1.32", "1.33"]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - name: Create kind cluster
+      - name: Create kind cluster (KIND v0.30)
         uses: helm/kind-action@v1
         with:
-          node_image: kindest/node:v${{ matrix.k8s_version }}.0
-          cluster_name: test-cluster-nri-${{ matrix.k8s_version }}
+          version: v0.30.0
+          cluster_name: kind-nri-preconfigured
       - name: Verify NRI is already enabled
         run: |
-          echo "=== Checking NRI status in Kubernetes ${{ matrix.k8s_version }} ==="
+          echo "=== Checking NRI status on KIND v0.30 cluster ==="
           # Get the KIND node name
           NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
           echo "Node name: $NODE_NAME"
@@ -242,7 +238,7 @@ jobs:
           kubectl debug node/$NODE_NAME -it --image=busybox -- cat /host/etc/containerd/config.toml 2>/dev/null | grep -A 10 "nri" || true
           # Alternative: Use docker exec to check KIND container directly
           echo "=== Alternative check using docker exec ==="
-          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          CONTAINER_NAME="kind-nri-preconfigured-control-plane"
           # Check if NRI socket exists (must exist for pre-configured expectation)
           if docker exec $CONTAINER_NAME ls -la /var/run/nri/nri.sock 2>/dev/null; then
             echo "✓ NRI socket found at /var/run/nri/nri.sock"
@@ -267,10 +263,10 @@ jobs:
           echo "=== Deploying collector with NRI configuration disabled ==="
           REPO="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
-          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          CONTAINER_NAME="kind-nri-preconfigured-control-plane"
           # Load the image into KIND nodes to avoid GHCR auth issues
           docker pull "$IMAGE"
-          kind load docker-image "$IMAGE" --name "test-cluster-nri-${{ matrix.k8s_version }}"
+          kind load docker-image "$IMAGE" --name "kind-nri-preconfigured"
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-disabled-values.yaml \
             --set nri.init.image.repository="$REPO" \
@@ -295,15 +291,15 @@ jobs:
           helm uninstall test-collector
       - name: Summary
         run: |
-          echo "=== Summary for Kubernetes ${{ matrix.k8s_version }} ==="
-          CONTAINER_NAME="test-cluster-nri-${{ matrix.k8s_version }}-control-plane"
+          echo "=== Summary for KIND v0.30 cluster ==="
+          CONTAINER_NAME="kind-nri-preconfigured-control-plane"
           if docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"' && \
              docker exec $CONTAINER_NAME ls /var/run/nri/nri.sock 2>/dev/null; then
-            echo "✅ Kubernetes ${{ matrix.k8s_version }} has NRI fully configured and enabled out of the box"
+            echo "✅ KIND v0.30 has NRI fully configured and enabled out of the box"
           elif docker exec $CONTAINER_NAME cat /etc/containerd/config.toml | grep -q 'plugins."io.containerd.nri.v1.nri"'; then
-            echo "⚠️ Kubernetes ${{ matrix.k8s_version }} has NRI configuration but socket may not be active"
+            echo "⚠️ KIND v0.30 has NRI configuration but socket may not be active"
           else
-            echo "❌ Kubernetes ${{ matrix.k8s_version }} does NOT have NRI pre-configured"
+            echo "❌ KIND v0.30 does NOT have NRI pre-configured"
           fi
 
   security-scan:
