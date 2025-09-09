@@ -86,6 +86,97 @@ jobs:
           path: resctrl-smoke
           if-no-files-found: error
 
+  nri-resctrl-plugin-registration:
+    name: NRI resctrl plugin registration (KIND)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure Docker is running
+        run: |
+          set -x
+          set +e
+          (sudo systemctl start docker || sudo service docker start || true)
+          docker info
+
+      - name: Install KIND and kubectl
+        run: |
+          # Install KIND
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+          kind version
+
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Create KIND cluster with NRI support
+        run: |
+          cat > kind-config.yaml << 'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: nri-resctrl-plugin-test
+          nodes:
+          - role: control-plane
+            extraMounts:
+            - hostPath: /tmp/nri
+              containerPath: /var/run/nri
+            - hostPath: /tmp/nri-conf
+              containerPath: /etc/nri/conf.d
+            - hostPath: /tmp/nri-plugins
+              containerPath: /opt/nri/plugins
+          containerdConfigPatches:
+          - |-
+            [plugins."io.containerd.nri.v1.nri"]
+              disable = false
+              disable_connections = false
+              socket_path = "/var/run/nri/nri.sock"
+              plugin_config_path = "/etc/nri/conf.d"
+              plugin_path = "/opt/nri/plugins"
+          EOF
+
+          sudo mkdir -p /tmp/nri /tmp/nri-conf /tmp/nri-plugins
+          sudo chmod 777 /tmp/nri /tmp/nri-conf /tmp/nri-plugins
+
+          kind create cluster --config kind-config.yaml --wait 300s
+          kubectl cluster-info --context kind-nri-resctrl-plugin-test
+
+      - name: Verify NRI socket
+        run: |
+          for i in {1..30}; do
+            if sudo test -S "/tmp/nri/nri.sock"; then
+              echo "NRI socket found"; ls -la /tmp/nri/nri.sock; break
+            fi
+            echo "Waiting for NRI socket ($i/30)"; sleep 2
+          done
+          sudo test -S "/tmp/nri/nri.sock" || { echo "NRI socket missing"; exit 1; }
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build plugin integration test
+        run: |
+          cargo test --package nri-resctrl-plugin --test integration_test --no-run --verbose
+          TEST_BIN=$(find target/debug/deps -name 'integration_test-*' -type f -executable | head -1)
+          echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
+
+      - name: Run plugin integration test (register + shutdown)
+        env:
+          NRI_SOCKET_PATH: /tmp/nri/nri.sock
+        run: |
+          echo "Using test binary: $TEST_BINARY_PATH"
+          sudo -E "$TEST_BINARY_PATH" --ignored --nocapture
+
+      - name: Cleanup KIND
+        if: always()
+        run: |
+          kind delete cluster --name nri-resctrl-plugin-test || true
+
 
   setup-runner:
     name: Start EC2 runner (resctrl-capable)

@@ -77,8 +77,6 @@ pub struct ResctrlPluginConfig {
     pub max_reconcile_passes: usize,
     /// Max concurrent pod operations
     pub concurrency_limit: usize,
-    /// Capacity of the event channel to the collector
-    pub event_channel_capacity: usize,
     /// Whether `resctrl` should auto-mount when not present
     pub auto_mount: bool,
 }
@@ -90,7 +88,6 @@ impl Default for ResctrlPluginConfig {
             cleanup_on_start: true,
             max_reconcile_passes: 10,
             concurrency_limit: 1,
-            event_channel_capacity: 128,
             auto_mount: false,
         }
     }
@@ -118,41 +115,34 @@ pub struct ResctrlPlugin<P: FsProvider = RealFs> {
 
 impl ResctrlPlugin<RealFs> {
     /// Create a new plugin with default real filesystem provider.
-    /// Returns the plugin and the receiver for emitted events.
-    pub fn new(cfg: ResctrlPluginConfig) -> (Self, mpsc::Receiver<PodResctrlEvent>) {
-        let (tx, rx) = mpsc::channel(cfg.event_channel_capacity);
+    /// The caller provides the event sender channel.
+    pub fn new(cfg: ResctrlPluginConfig, tx: mpsc::Sender<PodResctrlEvent>) -> Self {
         let rc_cfg = ResctrlConfig {
             group_prefix: cfg.group_prefix.clone(),
             auto_mount: cfg.auto_mount,
             ..Default::default()
         };
-        let plugin = Self {
+        Self {
             cfg,
             resctrl: Resctrl::new(rc_cfg),
             state: Mutex::new(InnerState::default()),
             tx,
             dropped_events: Arc::new(AtomicUsize::new(0)),
-        };
-        (plugin, rx)
+        }
     }
 }
 
 impl<P: FsProvider> ResctrlPlugin<P> {
     /// Create a new plugin with a custom resctrl handle (DI for tests).
-    /// Returns the plugin and the receiver for emitted events.
-    pub fn with_resctrl(
-        cfg: ResctrlPluginConfig,
-        resctrl: Resctrl<P>,
-    ) -> (Self, mpsc::Receiver<PodResctrlEvent>) {
-        let (tx, rx) = mpsc::channel(cfg.event_channel_capacity);
-        let plugin = Self {
+    /// The caller provides the event sender channel.
+    pub fn with_resctrl(cfg: ResctrlPluginConfig, resctrl: Resctrl<P>, tx: mpsc::Sender<PodResctrlEvent>) -> Self {
+        Self {
             cfg,
             resctrl,
             state: Mutex::new(InnerState::default()),
             tx,
             dropped_events: Arc::new(AtomicUsize::new(0)),
-        };
-        (plugin, rx)
+        }
     }
 
     /// Number of events dropped due to a full channel.
@@ -181,15 +171,11 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
             req.runtime_name, req.runtime_version
         );
 
-        // Subscribe to container and pod lifecycle events.
+        // Subscribe to minimal container and pod lifecycle events.
         let mut events = EventMask::new();
         events.set(&[
             Event::CREATE_CONTAINER,
-            Event::UPDATE_CONTAINER,
-            Event::STOP_CONTAINER,
-            Event::UPDATE_POD_SANDBOX,
             Event::RUN_POD_SANDBOX,
-            Event::STOP_POD_SANDBOX,
             Event::REMOVE_POD_SANDBOX,
         ]);
 
@@ -277,13 +263,13 @@ mod tests {
         assert!(cfg.cleanup_on_start);
         assert_eq!(cfg.max_reconcile_passes, 10);
         assert_eq!(cfg.concurrency_limit, 1);
-        assert_eq!(cfg.event_channel_capacity, 128);
         assert!(!cfg.auto_mount);
     }
 
     #[tokio::test]
     async fn test_configure_event_mask() {
-        let (plugin, _rx) = ResctrlPlugin::new(ResctrlPluginConfig::default());
+        let (tx, _rx) = mpsc::channel::<PodResctrlEvent>(8);
+        let plugin = ResctrlPlugin::new(ResctrlPluginConfig::default(), tx);
 
         let ctx = TtrpcContext {
             mh: ttrpc::MessageHeader::default(),
@@ -302,42 +288,9 @@ mod tests {
         let resp = plugin.configure(&ctx, req).await.unwrap();
         let events = EventMask::from_raw(resp.events);
 
-        // Must include container create/stop and pod events
+        // Must include minimal container/pod events we need
         assert!(events.is_set(Event::CREATE_CONTAINER));
-        assert!(events.is_set(Event::STOP_CONTAINER));
-        assert!(events.is_set(Event::UPDATE_CONTAINER));
-        assert!(events.is_set(Event::UPDATE_POD_SANDBOX));
         assert!(events.is_set(Event::RUN_POD_SANDBOX));
-        assert!(events.is_set(Event::STOP_POD_SANDBOX));
         assert!(events.is_set(Event::REMOVE_POD_SANDBOX));
-    }
-
-    #[test]
-    fn test_channel_capacity_no_drops_under_normal_flow() {
-        let mut cfg = ResctrlPluginConfig::default();
-        cfg.event_channel_capacity = 4;
-        let (plugin, mut rx) = ResctrlPlugin::new(cfg);
-
-        for i in 0..4 {
-            plugin.emit_event(PodResctrlEvent::Added(PodResctrlAdded {
-                pod_uid: format!("pod-{i}"),
-                group_path: Some(format!("/sys/fs/resctrl/pod_{i}")),
-                state: AssignmentState::Success,
-            }));
-        }
-
-        // No drops expected
-        assert_eq!(plugin.dropped_events(), 0);
-
-        // Receive all 4
-        for _ in 0..4 {
-            let ev = rx.try_recv().expect("must receive event");
-            match ev {
-                PodResctrlEvent::Added(a) => {
-                    assert!(a.group_path.is_some());
-                }
-                _ => panic!("unexpected event variant"),
-            }
-        }
     }
 }
