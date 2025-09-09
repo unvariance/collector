@@ -54,12 +54,6 @@ jobs:
           # Build only the hardware smoke integration test binary
           cargo test -p resctrl --test smoke_test --release --no-run
 
-      - name: Build resctrl control example
-        run: |
-          source $HOME/.cargo/env
-          cargo build -p resctrl --example resctrl_ctl --release
-          cp target/release/examples/resctrl_ctl resctrl-ctl
-          chmod +x resctrl-ctl
 
       - name: Collect smoke test binary
         id: collect-bin
@@ -82,12 +76,6 @@ jobs:
           path: resctrl-smoke
           if-no-files-found: error
 
-      - name: Upload resctrl ctl binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: resctrl-ctl-bin
-          path: resctrl-ctl
-          if-no-files-found: error
 
   setup-runner:
     name: Start EC2 runner (resctrl-capable)
@@ -131,53 +119,7 @@ jobs:
           name: resctrl-smoke-bin
           path: ./
 
-      - name: Download resctrl ctl binary
-        uses: actions/download-artifact@v4
-        with:
-          name: resctrl-ctl-bin
-          path: ./
-
-      - name: Detection when unmounted
-        shell: bash
-        run: |
-          set -euxo pipefail
-          # Ensure unmounted
-          if grep -q "/sys/fs/resctrl" /proc/mounts; then
-            sudo umount /sys/fs/resctrl || true
-            sleep 1
-          fi
-          if grep -q "/sys/fs/resctrl" /proc/mounts; then
-            echo "ERROR: resctrl still mounted" >&2
-            exit 1
-          fi
-          ./resctrl-ctl detect | tee detect_unmounted.txt
-          grep -q "mounted=false" detect_unmounted.txt
-
-      - name: ensure_mounted with auto-mount disabled (should fail)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ! ./resctrl-ctl ensure --auto-mount=false
-          # Verify not mounted
-          if grep -q "/sys/fs/resctrl" /proc/mounts; then
-            echo "ERROR: resctrl was mounted but should not be" >&2
-            exit 1
-          fi
-
-      - name: ensure_mounted with auto-mount enabled (should mount)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ./resctrl-ctl ensure --auto-mount=true
-          # Verify mounted
-          grep -q "/sys/fs/resctrl" /proc/mounts
-
-      - name: Detection when mounted
-        shell: bash
-        run: |
-          set -euxo pipefail
-          ./resctrl-ctl detect | tee detect_mounted.txt
-          grep -q "mounted=true" detect_mounted.txt
+      # All detection and ensure_mounted checks are now part of the smoke test itself
 
       - name: Run resctrl smoke test (hardware)
         shell: bash

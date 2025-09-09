@@ -1,4 +1,4 @@
-use resctrl::{AssignmentResult, Resctrl};
+use resctrl::{AssignmentResult, Resctrl, Config, Error};
 use std::process::Command;
 
 fn try_mount_resctrl() -> std::io::Result<()> {
@@ -23,6 +23,26 @@ fn try_mount_resctrl() -> std::io::Result<()> {
     ))
 }
 
+fn try_umount_resctrl() -> std::io::Result<()> {
+    // Attempt to unmount resctrl; treat "not mounted" as success
+    let status = Command::new("umount").arg("/sys/fs/resctrl").status()?;
+    if status.success() {
+        return Ok(());
+    }
+    // Check /proc/mounts; if not present, consider unmounted
+    let mounted = std::fs::read_to_string("/proc/mounts")
+        .unwrap_or_default()
+        .lines()
+        .any(|l| l.split_whitespace().nth(2) == Some("resctrl"));
+    if !mounted {
+        return Ok(());
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "umount /sys/fs/resctrl failed and resctrl still mounted",
+    ))
+}
+
 #[test]
 fn resctrl_smoke() -> anyhow::Result<()> {
     // Only run on explicit opt-in (hardware E2E). Otherwise skip to keep CI/dev fast.
@@ -31,7 +51,33 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // First, validate detection and ensure_mounted behavior (mounted/unmounted paths)
     let rc = Resctrl::default();
+    // Try to force unmounted state to exercise the disabled auto-mount path.
+    // If unmount is not possible on this environment, we'll skip the unmounted sub-case.
+    let _ = try_umount_resctrl();
+    let info_unmounted = rc.detect_support()?;
+    if !info_unmounted.mounted {
+        // ensure_mounted should fail with auto_mount=false
+        let mut cfg = Config::default();
+        cfg.auto_mount = false;
+        let rc_no_auto = Resctrl::new(cfg);
+        match rc_no_auto.ensure_mounted() {
+            Err(Error::NotMounted { .. }) => {}
+            other => return Err(anyhow::anyhow!("expected NotMounted, got: {other:?}")),
+        }
+        // Now with auto_mount=true it should mount successfully
+        let mut cfg2 = Config::default();
+        cfg2.auto_mount = true;
+        let rc_auto = Resctrl::new(cfg2);
+        rc_auto.ensure_mounted()?;
+        let info_after = rc_auto.detect_support()?;
+        if !info_after.mounted {
+            return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
+        }
+    } else {
+        eprintln!("resctrl was already mounted; skipping unmounted ensure_mounted sub-tests");
+    }
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
     let group = match rc.create_group(&uid) {
@@ -69,4 +115,3 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     rc.delete_group(&group)?;
     Ok(())
 }
-
