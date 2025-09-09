@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 func TestMetricsUp(t *testing.T) {
 
 	// Initialize module/server for standalone integration test
@@ -38,9 +37,9 @@ func TestMetricsUp(t *testing.T) {
 
 		// Check current server metrics against expected string/value
 		if err := testutil.ScrapeAndCompare(serverURL+"/metrics", strings.NewReader(expected), metricName); err == nil {
-		    return true
+			return true
 
-		// Returns an error and error message if the expected string/value is not found
+			// Returns an error and error message if the expected string/value is not found
 		} else {
 			t.Log(err.Error())
 			return false

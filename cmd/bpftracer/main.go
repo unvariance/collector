@@ -18,7 +18,7 @@ func main() {
 
 	// Set up stdout and stderr
 	cmd.Stdout = os.Stdout
-	cmd. Stderr = os.Stderr
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		fmt.Printf("Failed to start bpftrace: %v\n", err)
@@ -49,9 +49,9 @@ func main() {
 	// // Wait for a signal
 	// <-sig
 	// fmt.Println("Received signal, stopping bpftrace...")
-// 
+	//
 	// // Kill the bpftrace process
 	// if err := cmd.Process.Kill(); err != nil {
-		// fmt.Printf("Failed to kill bpftrace: %v\n", err)
+	// fmt.Printf("Failed to kill bpftrace: %v\n", err)
 	// }
 }
