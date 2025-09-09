@@ -66,17 +66,13 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         ));
     }
     // ensure_mounted should fail with auto_mount=false
-    let mut cfg = Config::default();
-    cfg.auto_mount = false;
-    let rc_no_auto = Resctrl::new(cfg);
+    let rc_no_auto = Resctrl::new(Config { auto_mount: false, ..Default::default() });
     match rc_no_auto.ensure_mounted() {
         Err(Error::NotMounted { .. }) => {}
         other => return Err(anyhow::anyhow!("expected NotMounted, got: {other:?}")),
     }
     // Now with auto_mount=true it should mount successfully
-    let mut cfg2 = Config::default();
-    cfg2.auto_mount = true;
-    let rc_auto = Resctrl::new(cfg2);
+    let rc_auto = Resctrl::new(Config { auto_mount: true, ..Default::default() });
     rc_auto.ensure_mounted()?;
     let info_after = rc_auto.detect_support()?;
     if !info_after.mounted {

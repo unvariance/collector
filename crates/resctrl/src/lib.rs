@@ -95,11 +95,9 @@ impl<P: FsProvider> Resctrl<P> {
         for line in mounts.lines() {
             // /proc/mounts format: <src> <target> <fstype> <opts> ...
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 {
-                if parts[2] == "resctrl" {
-                    mount_point = Some(PathBuf::from(parts[1]));
-                    break;
-                }
+            if parts.len() >= 3 && parts[2] == "resctrl" {
+                mount_point = Some(PathBuf::from(parts[1]));
+                break;
             }
         }
 
@@ -378,14 +376,6 @@ mod tests {
             let mut st = self.state.borrow_mut();
             st.no_perm_files.insert(p.to_path_buf());
         }
-        fn remove_file(&mut self, p: &Path) {
-            let mut st = self.state.borrow_mut();
-            st.files.remove(p);
-        }
-        fn set_no_perm_dir(&mut self, p: &Path) {
-            let mut st = self.state.borrow_mut();
-            st.no_perm_dirs.insert(p.to_path_buf());
-        }
         fn set_nospace_dir(&mut self, p: &Path) {
             let mut st = self.state.borrow_mut();
             st.nospace_dirs.insert(p.to_path_buf());
@@ -491,7 +481,7 @@ mod tests {
 
             // Also simulate presence of tasks file under mountpoint
             let tasks = target.join("tasks");
-            st.files.entry(tasks).or_insert_with(String::new);
+            st.files.entry(tasks).or_default();
             Ok(())
         }
     }
@@ -513,9 +503,9 @@ mod tests {
         fs.add_file(Path::new("/proc/mounts"), "");
         let rc = Resctrl::with_provider(fs, Config::default());
         let info = rc.detect_support().expect("detect ok");
-        assert_eq!(info.mounted, false);
+        assert!(!info.mounted);
         assert_eq!(info.mount_point, None);
-        assert_eq!(info.writable, false);
+        assert!(!info.writable);
     }
 
     #[test]
@@ -562,9 +552,9 @@ mod tests {
         fs.add_file(Path::new("/sys/fs/resctrl/tasks"), "");
         let rc = Resctrl::with_provider(fs, Config::default());
         let info = rc.detect_support().expect("detect ok");
-        assert_eq!(info.mounted, true);
+        assert!(info.mounted);
         assert_eq!(info.mount_point, Some(PathBuf::from("/sys/fs/resctrl")));
-        assert_eq!(info.writable, true);
+        assert!(info.writable);
     }
 
     #[test]
@@ -580,8 +570,8 @@ mod tests {
         fs.set_no_perm_file(tasks);
         let rc = Resctrl::with_provider(fs, Config::default());
         let info = rc.detect_support().expect("detect ok");
-        assert_eq!(info.mounted, true);
-        assert_eq!(info.writable, false);
+        assert!(info.mounted);
+        assert!(!info.writable);
     }
 
     #[test]
