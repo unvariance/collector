@@ -17,14 +17,11 @@ fn try_mount_resctrl() -> std::io::Result<()> {
     if stderr.to_lowercase().contains("busy") || stderr.to_lowercase().contains("mounted") {
         return Ok(());
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!(
-            "mount resctrl failed: status {:?}, err: {}",
-            status.code(),
-            stderr
-        ),
-    ))
+    Err(std::io::Error::other(format!(
+        "mount resctrl failed: status {:?}, err: {}",
+        status.code(),
+        stderr
+    )))
 }
 
 fn try_umount_resctrl() -> std::io::Result<()> {
@@ -41,8 +38,7 @@ fn try_umount_resctrl() -> std::io::Result<()> {
     if !mounted {
         return Ok(());
     }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Other,
+    Err(std::io::Error::other(
         "umount /sys/fs/resctrl failed and resctrl still mounted",
     ))
 }
@@ -110,7 +106,7 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     }
 
     let tasks = rc.list_group_tasks(&group)?;
-    if !tasks.iter().any(|p| *p == pid) {
+    if !tasks.contains(&pid) {
         return Err(anyhow::anyhow!(
             "pid {} not found in group task list: {:?}",
             pid,
