@@ -1,4 +1,4 @@
-use resctrl::{AssignmentResult, Resctrl, Config, Error};
+use resctrl::{AssignmentResult, Config, Error, Resctrl};
 use std::process::Command;
 
 fn try_mount_resctrl() -> std::io::Result<()> {
@@ -19,7 +19,11 @@ fn try_mount_resctrl() -> std::io::Result<()> {
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::Other,
-        format!("mount resctrl failed: status {:?}, err: {}", status.code(), stderr),
+        format!(
+            "mount resctrl failed: status {:?}, err: {}",
+            status.code(),
+            stderr
+        ),
     ))
 }
 
@@ -76,7 +80,9 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     rc_auto.ensure_mounted()?;
     let info_after = rc_auto.detect_support()?;
     if !info_after.mounted {
-        return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
+        return Err(anyhow::anyhow!(
+            "ensure_mounted succeeded but detect shows not mounted"
+        ));
     }
     if !info_after.writable {
         return Err(anyhow::anyhow!(
@@ -102,7 +108,8 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     if assigned != 1 || missing != 0 {
         return Err(anyhow::anyhow!(
             "unexpected assignment result: assigned={}, missing={}",
-            assigned, missing
+            assigned,
+            missing
         ));
     }
 
@@ -110,14 +117,18 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     if !tasks.iter().any(|p| *p == pid) {
         return Err(anyhow::anyhow!(
             "pid {} not found in group task list: {:?}",
-            pid, tasks
+            pid,
+            tasks
         ));
     }
 
     // Detach and cleanup
     let AssignmentResult { assigned, .. } = rc.assign_tasks("/sys/fs/resctrl", &[pid])?;
     if assigned != 1 {
-        eprintln!("warning: could not detach pid {} back to root (assigned={})", pid, assigned);
+        eprintln!(
+            "warning: could not detach pid {} back to root (assigned={})",
+            pid, assigned
+        );
     }
     rc.delete_group(&group)?;
     Ok(())
