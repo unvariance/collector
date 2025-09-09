@@ -169,9 +169,22 @@ impl<P: FsProvider> Resctrl<P> {
             .map_err(|e| map_basic_fs_error(&tasks_path, &e))?;
 
         let mut pids = Vec::new();
-        for line in s.lines() {
-            if let Ok(pid) = line.trim().parse::<i32>() {
-                pids.push(pid);
+        for (idx, line) in s.lines().enumerate() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            match t.parse::<i32>() {
+                Ok(pid) => pids.push(pid),
+                Err(e) => {
+                    return Err(Error::Io {
+                        path: tasks_path.clone(),
+                        source: io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("invalid pid at line {}: '{}': {}", idx + 1, t, e),
+                        ),
+                    });
+                }
             }
         }
         Ok(pids)
@@ -229,6 +242,11 @@ mod tests {
 
     #[derive(Clone, Default)]
     struct MockFs {
+        state: std::rc::Rc<std::cell::RefCell<MockState>>,
+    }
+
+    #[derive(Default)]
+    struct MockState {
         dirs: BTreeSet<PathBuf>,
         files: BTreeMap<PathBuf, String>,
         no_perm_files: HashSet<PathBuf>,
@@ -237,72 +255,89 @@ mod tests {
         missing_pids: HashSet<i32>,
     }
 
+    // Tests are single-threaded; declare Send/Sync to satisfy the trait bound.
+    unsafe impl Send for MockFs {}
+    unsafe impl Sync for MockFs {}
+
     impl MockFs {
         fn add_dir(&mut self, p: &Path) {
-            self.dirs.insert(p.to_path_buf());
+            let mut st = self.state.borrow_mut();
+            st.dirs.insert(p.to_path_buf());
         }
         fn add_file(&mut self, p: &Path, content: &str) {
-            self.files.insert(p.to_path_buf(), content.to_string());
+            let mut st = self.state.borrow_mut();
+            st.files.insert(p.to_path_buf(), content.to_string());
         }
         fn set_no_perm_file(&mut self, p: &Path) {
-            self.no_perm_files.insert(p.to_path_buf());
+            let mut st = self.state.borrow_mut();
+            st.no_perm_files.insert(p.to_path_buf());
         }
         fn set_no_perm_dir(&mut self, p: &Path) {
-            self.no_perm_dirs.insert(p.to_path_buf());
+            let mut st = self.state.borrow_mut();
+            st.no_perm_dirs.insert(p.to_path_buf());
         }
         fn set_nospace_dir(&mut self, p: &Path) {
-            self.nospace_dirs.insert(p.to_path_buf());
+            let mut st = self.state.borrow_mut();
+            st.nospace_dirs.insert(p.to_path_buf());
         }
         fn set_missing_pid(&mut self, pid: i32) {
-            self.missing_pids.insert(pid);
+            let mut st = self.state.borrow_mut();
+            st.missing_pids.insert(pid);
+        }
+
+        // helper for exists in tests
+        fn path_exists(&self, p: &Path) -> bool {
+            let st = self.state.borrow();
+            st.dirs.contains(p) || st.files.contains_key(p)
         }
     }
 
     impl FsProvider for MockFs {
         fn exists(&self, p: &Path) -> bool {
-            self.dirs.contains(p) || self.files.contains_key(p)
+            let st = self.state.borrow();
+            st.dirs.contains(p) || st.files.contains_key(p)
         }
         fn create_dir(&self, p: &Path) -> io::Result<()> {
-            if self.no_perm_dirs.contains(p) {
+            let mut st = self.state.borrow_mut();
+            if st.no_perm_dirs.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
             }
-            if self.nospace_dirs.contains(p) {
+            if st.nospace_dirs.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::ENOSPC));
             }
-            if self.dirs.contains(p) {
+            if st.dirs.contains(p) {
                 return Err(io::Error::new(io::ErrorKind::AlreadyExists, "exists"));
             }
-            // Emulate mkdir success by adding to dirs
-            let mut me = self.clone();
-            let _ = me.dirs.insert(p.to_path_buf());
+            st.dirs.insert(p.to_path_buf());
             Ok(())
         }
         fn remove_dir(&self, p: &Path) -> io::Result<()> {
-            if self.no_perm_dirs.contains(p) {
+            let mut st = self.state.borrow_mut();
+            if st.no_perm_dirs.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
             }
-            if !self.dirs.contains(p) {
+            if !st.dirs.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::ENOENT));
             }
+            st.dirs.remove(p);
             Ok(())
         }
         fn write_str(&self, p: &Path, data: &str) -> io::Result<()> {
-            if self.no_perm_files.contains(p) {
+            let mut st = self.state.borrow_mut();
+            if st.no_perm_files.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
             }
-            if !self.files.contains_key(p) {
+            if !st.files.contains_key(p) {
                 return Err(io::Error::from_raw_os_error(libc::ENOENT));
             }
             // If writing to tasks, simulate ESRCH for missing pid
             if p.ends_with("tasks") {
                 if let Ok(pid) = data.trim().parse::<i32>() {
-                    if self.missing_pids.contains(&pid) {
+                    if st.missing_pids.contains(&pid) {
                         return Err(io::Error::from_raw_os_error(libc::ESRCH));
                     }
                 }
-                // Append pid to file content with newline
-                let mut me = self.clone();
-                let entry = me.files.entry(p.to_path_buf()).or_default();
+                let entry = st.files.entry(p.to_path_buf()).or_default();
                 if !entry.ends_with('\n') && !entry.is_empty() {
                     entry.push('\n');
                 }
@@ -312,10 +347,11 @@ mod tests {
             Ok(())
         }
         fn read_to_string(&self, p: &Path) -> io::Result<String> {
-            if self.no_perm_files.contains(p) {
+            let st = self.state.borrow();
+            if st.no_perm_files.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
             }
-            match self.files.get(p) {
+            match st.files.get(p) {
                 Some(s) => Ok(s.clone()),
                 None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
             }
@@ -341,6 +377,9 @@ mod tests {
         let rc = Resctrl::with_provider(fs.clone(), cfg);
         let group = rc.create_group("my-pod:UID").expect("create ok");
         assert!(group.contains("/sys/fs/resctrl/pod_my-podUID"));
+        // also verify the fs contains the directory
+        let p = PathBuf::from(&group);
+        assert!(fs.path_exists(&p));
     }
 
     #[test]
@@ -376,8 +415,10 @@ mod tests {
         let group_path = root.join("pod_abc");
         fs.add_dir(&group_path);
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs.clone(), Config { root, group_prefix: "pod_".into() });
         rc.delete_group(group_path.to_str().unwrap()).expect("delete ok");
+        // also verify directory removed in fs
+        assert!(!fs.path_exists(&group_path));
     }
 
     #[test]
@@ -443,11 +484,32 @@ mod tests {
         let group_path = root.join("pod_abc");
         fs.add_dir(&group_path);
         let tasks = group_path.join("tasks");
-        fs.add_file(&tasks, "1\n2\nabc\n3\n");
+        fs.add_file(&tasks, "1\n2\n3\n");
 
         let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
         let pids = rc.list_group_tasks(group_path.to_str().unwrap()).expect("list ok");
         assert_eq!(pids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_list_group_tasks_invalid_content() {
+        let mut fs = MockFs::default();
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+        let group_path = root.join("pod_abc");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "1\n2\na bc\n3\n");
+
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let err = rc.list_group_tasks(group_path.to_str().unwrap()).unwrap_err();
+        match err {
+            Error::Io { path, source } => {
+                assert!(path.ends_with("tasks"));
+                assert_eq!(source.kind(), io::ErrorKind::InvalidData);
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]
