@@ -157,7 +157,7 @@ impl<P: FsProvider> Resctrl<P> {
                                 source: e,
                             })
                         }
-                        libc::ENODEV | libc::EINVAL | libc::ENOTSUP => {
+                        libc::ENODEV | libc::EINVAL | libc::ENOTSUP | libc::ENOSYS => {
                             return Err(Error::Unsupported { source: e });
                         }
                         _ => {}
