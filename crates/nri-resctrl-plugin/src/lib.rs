@@ -10,21 +10,9 @@ use tokio::sync::mpsc;
 use ttrpc::r#async::TtrpcContext;
 
 use nri::api::{
-    self,
-    ConfigureRequest,
-    ConfigureResponse,
-    CreateContainerRequest,
-    CreateContainerResponse,
-    Empty,
-    Event,
-    StateChangeEvent,
-    StopContainerRequest,
-    StopContainerResponse,
-    SynchronizeRequest,
-    SynchronizeResponse,
-    UpdateContainerRequest,
-    UpdateContainerResponse,
-    UpdatePodSandboxRequest,
+    ConfigureRequest, ConfigureResponse, CreateContainerRequest, CreateContainerResponse, Empty,
+    Event, StateChangeEvent, StopContainerRequest, StopContainerResponse, SynchronizeRequest,
+    SynchronizeResponse, UpdateContainerRequest, UpdateContainerResponse, UpdatePodSandboxRequest,
     UpdatePodSandboxResponse,
 };
 use nri::api_ttrpc::Plugin;
@@ -94,20 +82,25 @@ impl Default for ResctrlPluginConfig {
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct PodState {
     last_state: Option<AssignmentState>,
     group_path: Option<String>,
 }
 
 #[derive(Default)]
+#[allow(dead_code)]
 struct InnerState {
     pods: HashMap<String, PodState>, // keyed by pod UID
 }
 
 /// Resctrl NRI plugin. Generic over `FsProvider` for testability.
 pub struct ResctrlPlugin<P: FsProvider = RealFs> {
+    #[allow(dead_code)]
     cfg: ResctrlPluginConfig,
+    #[allow(dead_code)]
     resctrl: Resctrl<P>,
+    #[allow(dead_code)]
     state: Mutex<InnerState>,
     tx: mpsc::Sender<PodResctrlEvent>,
     dropped_events: Arc<AtomicUsize>,
@@ -135,7 +128,11 @@ impl ResctrlPlugin<RealFs> {
 impl<P: FsProvider> ResctrlPlugin<P> {
     /// Create a new plugin with a custom resctrl handle (DI for tests).
     /// The caller provides the event sender channel.
-    pub fn with_resctrl(cfg: ResctrlPluginConfig, resctrl: Resctrl<P>, tx: mpsc::Sender<PodResctrlEvent>) -> Self {
+    pub fn with_resctrl(
+        cfg: ResctrlPluginConfig,
+        resctrl: Resctrl<P>,
+        tx: mpsc::Sender<PodResctrlEvent>,
+    ) -> Self {
         Self {
             cfg,
             resctrl,
@@ -151,6 +148,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
     }
 
     /// Emit an event to the collector, drop if channel is full.
+    #[allow(dead_code)]
     fn emit_event(&self, ev: PodResctrlEvent) {
         if let Err(e) = self.tx.try_send(ev) {
             self.dropped_events.fetch_add(1, Ordering::Relaxed);
@@ -240,7 +238,11 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         Ok(UpdatePodSandboxResponse::default())
     }
 
-    async fn state_change(&self, _ctx: &TtrpcContext, req: StateChangeEvent) -> ttrpc::Result<Empty> {
+    async fn state_change(
+        &self,
+        _ctx: &TtrpcContext,
+        req: StateChangeEvent,
+    ) -> ttrpc::Result<Empty> {
         debug!("resctrl-plugin: state_change: event={:?}", req.event);
         Ok(Empty::default())
     }

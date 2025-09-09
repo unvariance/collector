@@ -19,7 +19,7 @@ pub trait Analysis {
 
     /// Return the schema for the new columns this analysis adds
     fn new_columns_schema(&self) -> Vec<Arc<Field>>;
-    
+
     /// Called after all batches have been processed to finalize the analysis
     fn finalize(&self) -> Result<()> {
         Ok(())
@@ -96,10 +96,10 @@ impl Analyzer {
 
         progress_bar.close()?;
         writer.close().with_context(|| "Failed to close writer")?;
-        
+
         // Finalize the analysis
         analysis.finalize()?;
-        
+
         Ok(())
     }
 

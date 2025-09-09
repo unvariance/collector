@@ -57,13 +57,7 @@ impl FsProvider for RealFs {
             let fstype = CString::new("resctrl").unwrap();
             let data: *const libc::c_void = std::ptr::null();
             let tgt_c = CString::new(target.as_os_str().to_string_lossy().as_bytes()).unwrap();
-            let rc = libc::mount(
-                src.as_ptr(),
-                tgt_c.as_ptr(),
-                fstype.as_ptr(),
-                0,
-                data,
-            );
+            let rc = libc::mount(src.as_ptr(), tgt_c.as_ptr(), fstype.as_ptr(), 0, data);
             if rc != 0 {
                 return Err(io::Error::last_os_error());
             }

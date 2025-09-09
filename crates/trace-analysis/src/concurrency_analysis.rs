@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use arrow_array::{Array, ArrayRef, Float64Array, RecordBatch};
 use arrow_schema::{DataType, Field};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Arc;
 use tqdm::tqdm;
 
 use crate::analyzer::Analysis;
@@ -29,25 +29,29 @@ impl ConcurrencyCpiStatistics {
             bins: HashMap::new(),
         }
     }
-    
+
     /// Add a measurement to the statistics
     pub fn add_measurement(&mut self, concurrency: f64, cpi: f64, instructions: u64) {
         // Skip invalid measurements
         if concurrency < 0.0 || cpi <= 0.0 || instructions == 0 {
             return;
         }
-        
+
         // Calculate bin indices
         let concurrency_bin = (concurrency / self.concurrency_bin_width).floor() as u32;
-        
+
         // Fold CPI values larger than max_cpi into the max CPI bin
-        let clamped_cpi = if cpi > self.max_cpi { self.max_cpi } else { cpi };
+        let clamped_cpi = if cpi > self.max_cpi {
+            self.max_cpi
+        } else {
+            cpi
+        };
         let cpi_bin = (clamped_cpi / self.cpi_bin_width).floor() as u32;
-        
+
         // Add to bin
         *self.bins.entry((concurrency_bin, cpi_bin)).or_insert(0) += instructions;
     }
-    
+
     /// Export statistics to CSV
     pub fn export_to_csv(&self, writer: &mut dyn Write, process_name: &str) -> Result<()> {
         for ((concurrency_bin, cpi_bin), instructions) in &self.bins {
@@ -55,16 +59,11 @@ impl ConcurrencyCpiStatistics {
             let concurrency_max = concurrency_min + self.concurrency_bin_width;
             let cpi_min = *cpi_bin as f64 * self.cpi_bin_width;
             let cpi_max = cpi_min + self.cpi_bin_width;
-            
+
             writeln!(
                 writer,
                 "{},{:.2},{:.2},{:.2},{:.2},{}",
-                process_name,
-                concurrency_min,
-                concurrency_max,
-                cpi_min,
-                cpi_max,
-                instructions
+                process_name, concurrency_min, concurrency_max, cpi_min, cpi_max, instructions
             )?;
         }
         Ok(())
@@ -151,11 +150,11 @@ pub struct ConcurrencyAnalysis {
     per_pid_counters: HashMap<u32, CpuTimeCounter>,
     total_counter: CpuTimeCounter,
     per_cpu_state: Vec<PerCpuState>,
-    
+
     // Statistics tracking
     per_process_total_stats: HashMap<String, ConcurrencyCpiStatistics>,
     per_process_same_process_stats: HashMap<String, ConcurrencyCpiStatistics>,
-    
+
     // Output paths for CSV files
     total_csv_path: Option<String>,
     same_process_csv_path: Option<String>,
@@ -175,7 +174,7 @@ impl ConcurrencyAnalysis {
             same_process_csv_path: None,
         })
     }
-    
+
     /// Set the output CSV file paths
     pub fn set_csv_paths(&mut self, total_path: String, same_process_path: String) {
         self.total_csv_path = Some(total_path);
@@ -322,7 +321,7 @@ impl Analysis for ConcurrencyAnalysis {
             .as_any()
             .downcast_ref::<arrow_array::Int32Array>()
             .context("Invalid next_tgid column type")?;
-        
+
         // Extract performance metrics columns
         let instructions_array = batch
             .column_by_name("instructions")
@@ -371,21 +370,23 @@ impl Analysis for ConcurrencyAnalysis {
 
             avg_total_threads.push(avg_total);
             avg_same_process_threads.push(avg_same_process);
-            
+
             // Calculate CPI and update statistics if we have valid data
             if instructions > 0 && cycles > 0 {
                 let cpi = cycles as f64 / instructions as f64;
                 let process_name_key = process_name.to_string();
-                
+
                 // Get or create statistics for this process name
                 // Using 0.5 width bins for 20x20 grid
-                let total_stats = self.per_process_total_stats.entry(process_name_key.clone()).or_insert_with(|| {
-                    ConcurrencyCpiStatistics::new(4.0, 0.2, 4.0)
-                });
-                let same_process_stats = self.per_process_same_process_stats.entry(process_name_key).or_insert_with(|| {
-                    ConcurrencyCpiStatistics::new(0.2, 0.2, 4.0)
-                });
-                
+                let total_stats = self
+                    .per_process_total_stats
+                    .entry(process_name_key.clone())
+                    .or_insert_with(|| ConcurrencyCpiStatistics::new(4.0, 0.2, 4.0));
+                let same_process_stats = self
+                    .per_process_same_process_stats
+                    .entry(process_name_key)
+                    .or_insert_with(|| ConcurrencyCpiStatistics::new(0.2, 0.2, 4.0));
+
                 // Add measurements to statistics
                 total_stats.add_measurement(avg_total, cpi, instructions);
                 same_process_stats.add_measurement(avg_same_process, cpi, instructions);
@@ -409,19 +410,22 @@ impl Analysis for ConcurrencyAnalysis {
             )),
         ]
     }
-    
+
     fn finalize(&self) -> Result<()> {
         // Export CSV files if paths are set
         if let Some(total_path) = &self.total_csv_path {
             println!("Exporting total concurrency statistics to: {}", total_path);
             self.export_total_concurrency_csv(total_path)?;
         }
-        
+
         if let Some(same_process_path) = &self.same_process_csv_path {
-            println!("Exporting same-process concurrency statistics to: {}", same_process_path);
+            println!(
+                "Exporting same-process concurrency statistics to: {}",
+                same_process_path
+            );
             self.export_same_process_concurrency_csv(same_process_path)?;
         }
-        
+
         Ok(())
     }
 }
@@ -430,24 +434,34 @@ impl ConcurrencyAnalysis {
     /// Export total concurrency statistics to CSV
     pub fn export_total_concurrency_csv(&self, file_path: &str) -> Result<()> {
         let mut file = File::create(file_path)?;
-        writeln!(file, "process_name,concurrency_min,concurrency_max,cpi_min,cpi_max,instructions")?;
-        
-        for (process_name, stats) in tqdm(&self.per_process_total_stats).desc(Some("Exporting total concurrency CSV")) {
+        writeln!(
+            file,
+            "process_name,concurrency_min,concurrency_max,cpi_min,cpi_max,instructions"
+        )?;
+
+        for (process_name, stats) in
+            tqdm(&self.per_process_total_stats).desc(Some("Exporting total concurrency CSV"))
+        {
             stats.export_to_csv(&mut file, process_name)?;
         }
-        
+
         Ok(())
     }
-    
+
     /// Export same-process concurrency statistics to CSV
     pub fn export_same_process_concurrency_csv(&self, file_path: &str) -> Result<()> {
         let mut file = File::create(file_path)?;
-        writeln!(file, "process_name,concurrency_min,concurrency_max,cpi_min,cpi_max,instructions")?;
-        
-        for (process_name, stats) in tqdm(&self.per_process_same_process_stats).desc(Some("Exporting same-process concurrency CSV")) {
+        writeln!(
+            file,
+            "process_name,concurrency_min,concurrency_max,cpi_min,cpi_max,instructions"
+        )?;
+
+        for (process_name, stats) in tqdm(&self.per_process_same_process_stats)
+            .desc(Some("Exporting same-process concurrency CSV"))
+        {
             stats.export_to_csv(&mut file, process_name)?;
         }
-        
+
         Ok(())
     }
 }

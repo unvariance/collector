@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use nri::NRI;
-use nri_resctrl_plugin::{ResctrlPlugin, ResctrlPluginConfig, PodResctrlEvent};
+use nri_resctrl_plugin::{PodResctrlEvent, ResctrlPlugin, ResctrlPluginConfig};
 
 #[tokio::test]
 #[ignore]
@@ -19,7 +19,7 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
     let plugin = ResctrlPlugin::new(ResctrlPluginConfig::default(), tx);
 
     // Start NRI server for plugin and register
-    let (nri, mut join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
+    let (nri, join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
     nri.register().await?;
 
     // Allow runtime to settle briefly
@@ -31,4 +31,3 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
 
     Ok(())
 }
-
