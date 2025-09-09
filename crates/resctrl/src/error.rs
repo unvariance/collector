@@ -16,5 +16,7 @@ pub enum Error {
 
     #[error("io error at {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
-}
 
+    #[error("resctrl unsupported by kernel: {source}")]
+    Unsupported { source: io::Error },
+}

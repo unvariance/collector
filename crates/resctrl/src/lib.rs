@@ -28,6 +28,7 @@ impl AssignmentResult {
 pub struct Config {
     pub root: PathBuf,
     pub group_prefix: String,
+    pub auto_mount: bool,
 }
 
 impl Default for Config {
@@ -35,6 +36,7 @@ impl Default for Config {
         Self {
             root: PathBuf::from(DEFAULT_ROOT),
             group_prefix: DEFAULT_PREFIX.to_string(),
+            auto_mount: false,
         }
     }
 }
@@ -72,6 +74,102 @@ impl<P: FsProvider> Resctrl<P> {
     }
 
     // Public API
+
+    /// Describe support status of resctrl on this system.
+    /// - mounted: whether resctrl is mounted
+    /// - mount_point: where it is mounted if present
+    /// - writable: whether current process can write to root tasks file
+    pub fn detect_support(&self) -> Result<SupportInfo> {
+        // Determine mount point by reading /proc/mounts
+        let mounts = match self.fs.read_to_string(Path::new("/proc/mounts")) {
+            Ok(s) => s,
+            Err(e) => {
+                return Err(Error::Io {
+                    path: PathBuf::from("/proc/mounts"),
+                    source: e,
+                })
+            }
+        };
+
+        let mut mount_point: Option<PathBuf> = None;
+        for line in mounts.lines() {
+            // /proc/mounts format: <src> <target> <fstype> <opts> ...
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 {
+                if parts[2] == "resctrl" {
+                    mount_point = Some(PathBuf::from(parts[1]));
+                    break;
+                }
+            }
+        }
+
+        let mounted = mount_point.is_some();
+        let writable = if let Some(ref mp) = mount_point {
+            let tasks = mp.join("tasks");
+            // Try to open for write without writing anything
+            self.fs.open_for_write(&tasks).is_ok()
+        } else {
+            false
+        };
+
+        Ok(SupportInfo {
+            mounted,
+            mount_point,
+            writable,
+        })
+    }
+
+    /// Ensure resctrl is mounted according to configuration.
+    /// - If already mounted, returns Ok(())
+    /// - If not mounted and auto_mount is false, returns Error::NotMounted
+    /// - If not mounted and auto_mount is true, attempts to mount and returns
+    ///   NoPermission/Unsupported/Io on failure.
+    pub fn ensure_mounted(&self) -> Result<()> {
+        let info = self.detect_support()?;
+        if info.mounted {
+            return Ok(());
+        }
+        if !self.cfg.auto_mount {
+            return Err(Error::NotMounted {
+                root: self.cfg.root.clone(),
+            });
+        }
+
+        // Try to mount at configured root
+        match self.fs.mount_resctrl(&self.cfg.root) {
+            Ok(()) => {
+                // Verify mounted after mount attempt
+                let info2 = self.detect_support()?;
+                if !info2.mounted {
+                    return Err(Error::Io {
+                        path: self.cfg.root.clone(),
+                        source: io::Error::new(io::ErrorKind::Other, "mount did not take effect"),
+                    });
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if let Some(code) = e.raw_os_error() {
+                    match code {
+                        libc::EACCES | libc::EPERM => {
+                            return Err(Error::NoPermission {
+                                path: self.cfg.root.clone(),
+                                source: e,
+                            })
+                        }
+                        libc::ENODEV | libc::EINVAL | libc::ENOTSUP => {
+                            return Err(Error::Unsupported { source: e });
+                        }
+                        _ => {}
+                    }
+                }
+                Err(Error::Io {
+                    path: self.cfg.root.clone(),
+                    source: e,
+                })
+            }
+        }
+    }
 
     pub fn create_group(&self, pod_uid: &str) -> Result<String> {
         // Ensure root exists
@@ -235,6 +333,13 @@ fn map_basic_fs_error(path: &Path, e: &io::Error) -> Error {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupportInfo {
+    pub mounted: bool,
+    pub mount_point: Option<PathBuf>,
+    pub writable: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +358,7 @@ mod tests {
         no_perm_dirs: HashSet<PathBuf>,
         nospace_dirs: HashSet<PathBuf>,
         missing_pids: HashSet<i32>,
+        mount_err: Option<i32>,
     }
 
     // Tests are single-threaded; declare Send/Sync to satisfy the trait bound.
@@ -356,6 +462,34 @@ mod tests {
                 None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
             }
         }
+        fn open_for_write(&self, p: &Path) -> io::Result<()> {
+            let st = self.state.borrow();
+            if st.no_perm_files.contains(p) {
+                return Err(io::Error::from_raw_os_error(libc::EACCES));
+            }
+            if st.files.contains_key(p) {
+                Ok(())
+            } else {
+                Err(io::Error::from_raw_os_error(libc::ENOENT))
+            }
+        }
+        fn mount_resctrl(&self, target: &Path) -> io::Result<()> {
+            let mut st = self.state.borrow_mut();
+            if let Some(code) = st.mount_err.take() {
+                return Err(io::Error::from_raw_os_error(code));
+            }
+            // Simulate mount by ensuring target dir exists and appending to /proc/mounts
+            st.dirs.insert(target.to_path_buf());
+            let line = format!("resctrl {} resctrl rw,relatime 0 0\n", target.display());
+            let pm = PathBuf::from("/proc/mounts");
+            let entry = st.files.entry(pm).or_default();
+            entry.push_str(&line);
+
+            // Also simulate presence of tasks file under mountpoint
+            let tasks = target.join("tasks");
+            st.files.entry(tasks).or_insert_with(String::new);
+            Ok(())
+        }
     }
 
     #[test]
@@ -369,11 +503,126 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_support_not_mounted() {
+        let mut fs = MockFs::default();
+        // Provide empty /proc/mounts
+        fs.add_file(Path::new("/proc/mounts"), "");
+        let rc = Resctrl::with_provider(fs, Config::default());
+        let info = rc.detect_support().expect("detect ok");
+        assert_eq!(info.mounted, false);
+        assert_eq!(info.mount_point, None);
+        assert_eq!(info.writable, false);
+    }
+
+    #[test]
+    fn test_detect_support_mounted_and_writable() {
+        let mut fs = MockFs::default();
+        // Simulate mounted under default root
+        fs.add_file(Path::new("/proc/mounts"), "resctrl /sys/fs/resctrl resctrl rw 0 0\n");
+        fs.add_dir(Path::new("/sys"));
+        fs.add_dir(Path::new("/sys/fs"));
+        fs.add_dir(Path::new("/sys/fs/resctrl"));
+        fs.add_file(Path::new("/sys/fs/resctrl/tasks"), "");
+        let rc = Resctrl::with_provider(fs, Config::default());
+        let info = rc.detect_support().expect("detect ok");
+        assert_eq!(info.mounted, true);
+        assert_eq!(info.mount_point, Some(PathBuf::from("/sys/fs/resctrl")));
+        assert_eq!(info.writable, true);
+    }
+
+    #[test]
+    fn test_detect_support_mounted_but_no_permission() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "resctrl /sys/fs/resctrl resctrl rw 0 0\n");
+        fs.add_dir(Path::new("/sys/fs/resctrl"));
+        let tasks = Path::new("/sys/fs/resctrl/tasks");
+        fs.add_file(tasks, "");
+        fs.set_no_perm_file(tasks);
+        let rc = Resctrl::with_provider(fs, Config::default());
+        let info = rc.detect_support().expect("detect ok");
+        assert_eq!(info.mounted, true);
+        assert_eq!(info.writable, false);
+    }
+
+    #[test]
+    fn test_ensure_mounted_respects_auto_mount_flag() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "");
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: PathBuf::from("/sys/fs/resctrl"), group_prefix: "pod_".into(), auto_mount: false },
+        );
+        let err = rc.ensure_mounted().unwrap_err();
+        match err {
+            Error::NotMounted { .. } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_mounted_performs_mount() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "");
+        // also ensure /sys and /sys/fs exist in mock
+        fs.add_dir(Path::new("/sys"));
+        fs.add_dir(Path::new("/sys/fs"));
+        let rc = Resctrl::with_provider(
+            fs.clone(),
+            Config { root: PathBuf::from("/sys/fs/resctrl"), group_prefix: "pod_".into(), auto_mount: true },
+        );
+        rc.ensure_mounted().expect("mounted");
+        // After mount, detect reports mounted
+        let info = rc.detect_support().expect("detect ok");
+        assert!(info.mounted);
+        assert_eq!(info.mount_point.unwrap().to_string_lossy(), "/sys/fs/resctrl");
+    }
+
+    #[test]
+    fn test_ensure_mounted_permission_failure() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "");
+        // cause mount to fail with EPERM
+        {
+            let mut st = fs.state.borrow_mut();
+            st.mount_err = Some(libc::EPERM);
+        }
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: PathBuf::from("/sys/fs/resctrl"), group_prefix: "pod_".into(), auto_mount: true },
+        );
+        let err = rc.ensure_mounted().unwrap_err();
+        match err {
+            Error::NoPermission { .. } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_ensure_mounted_unsupported_kernel() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "");
+        // cause mount to fail with ENODEV
+        {
+            let mut st = fs.state.borrow_mut();
+            st.mount_err = Some(libc::ENODEV);
+        }
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: PathBuf::from("/sys/fs/resctrl"), group_prefix: "pod_".into(), auto_mount: true },
+        );
+        let err = rc.ensure_mounted().unwrap_err();
+        match err {
+            Error::Unsupported { .. } => {}
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_create_group_success() {
         let mut fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
-        let cfg = Config { root: root.clone(), group_prefix: "pod_".into() };
+        let cfg = Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false };
         let rc = Resctrl::with_provider(fs.clone(), cfg);
         let group = rc.create_group("my-pod:UID").expect("create ok");
         assert!(group.contains("/sys/fs/resctrl/pod_my-podUID"));
@@ -398,7 +647,7 @@ mod tests {
         let mut fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
-        let cfg = Config { root: root.clone(), group_prefix: "pod_".into() };
+        let cfg = Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false };
         let group_path = root.join("pod_abc");
         fs.set_nospace_dir(&group_path);
 
@@ -415,7 +664,7 @@ mod tests {
         let group_path = root.join("pod_abc");
         fs.add_dir(&group_path);
 
-        let rc = Resctrl::with_provider(fs.clone(), Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs.clone(), Config { root, group_prefix: "pod_".into(), auto_mount: false });
         rc.delete_group(group_path.to_str().unwrap()).expect("delete ok");
         // also verify directory removed in fs
         assert!(!fs.path_exists(&group_path));
@@ -432,7 +681,7 @@ mod tests {
         fs.add_file(&tasks, "");
         fs.set_missing_pid(42);
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let res = rc.assign_tasks(group_path.to_str().unwrap(), &[1, 42, 2]).expect("assign ok");
         assert_eq!(res.assigned, 2);
         assert_eq!(res.missing, 1);
@@ -449,7 +698,7 @@ mod tests {
         fs.add_file(&tasks, "");
         fs.set_no_perm_file(&tasks);
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let err = rc.assign_tasks(group_path.to_str().unwrap(), &[1]).unwrap_err();
         match err {
             Error::NoPermission { .. } => {}
@@ -465,7 +714,7 @@ mod tests {
         let group_path = root.join("pod_abc");
         fs.add_dir(&group_path);
         // Do NOT create tasks file
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let err = rc.assign_tasks(group_path.to_str().unwrap(), &[1]).unwrap_err();
         match err {
             Error::Io { path, source } => {
@@ -486,7 +735,7 @@ mod tests {
         let tasks = group_path.join("tasks");
         fs.add_file(&tasks, "1\n2\n3\n");
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let pids = rc.list_group_tasks(group_path.to_str().unwrap()).expect("list ok");
         assert_eq!(pids, vec![1, 2, 3]);
     }
@@ -501,7 +750,7 @@ mod tests {
         let tasks = group_path.join("tasks");
         fs.add_file(&tasks, "1\n2\na bc\n3\n");
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let err = rc.list_group_tasks(group_path.to_str().unwrap()).unwrap_err();
         match err {
             Error::Io { path, source } => {
@@ -523,7 +772,7 @@ mod tests {
         fs.add_file(&tasks, "");
         fs.set_no_perm_file(&tasks);
 
-        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into() });
+        let rc = Resctrl::with_provider(fs, Config { root, group_prefix: "pod_".into(), auto_mount: false });
         let err = rc.list_group_tasks(group_path.to_str().unwrap()).unwrap_err();
         match err {
             Error::NoPermission { .. } => {}
