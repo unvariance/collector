@@ -78,6 +78,11 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     if !info_after.mounted {
         return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
     }
+    if !info_after.writable {
+        return Err(anyhow::anyhow!(
+            "resctrl mounted but root tasks file not writable by test process"
+        ));
+    }
     // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
     rc_auto.ensure_mounted()?;
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
