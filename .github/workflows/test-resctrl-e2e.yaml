@@ -67,7 +67,6 @@ jobs:
           ldd "$BIN" || true
           cp "$BIN" resctrl-smoke
           chmod +x resctrl-smoke
-          echo "bin=resctrl-smoke" >> $GITHUB_OUTPUT
 
       - name: Upload resctrl smoke binary
         uses: actions/upload-artifact@v4
@@ -97,7 +96,6 @@ jobs:
           instance-type: ${{ inputs.instance-type || 'm7i.metal-24xl' }}
           image-type: ${{ inputs.image-type || 'ubuntu-24.04' }}
           market-type: 'spot'
-          volume-size: '40'
 
   resctrl-e2e:
     name: Run resctrl smoke test
@@ -131,13 +129,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          # Locate the downloaded binary (actions/download-artifact@v4 places under a subdir)
-          BIN=$(find . -type f -name 'resctrl-smoke' | head -n 1)
-          if [ -z "$BIN" ]; then
-            echo "resctrl-smoke binary not found in workspace" >&2
-            find . -maxdepth 3 -type f | sed 's/^/  /'
-            exit 1
-          fi
+          BIN=./resctrl-smoke
           chmod +x "$BIN" || true
           echo "Executing $BIN"
           RESCTRL_E2E=1 "$BIN" --nocapture
@@ -158,4 +150,4 @@ jobs:
           ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ needs.setup-runner.outputs.region || secrets.AWS_REGION }}
+          aws-region: ${{ needs.setup-runner.outputs.region }}
