@@ -1,0 +1,19 @@
+[package]
+name = "nri-resctrl-plugin"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+nri = { workspace = true }
+resctrl = { path = "../resctrl" }
+tokio = { workspace = true, features = ["sync"] }
+async-trait = { workspace = true }
+log = { workspace = true }
+anyhow = { workspace = true }
+ttrpc = { workspace = true }
+protobuf = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }
+tempfile = { workspace = true }
+

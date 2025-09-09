@@ -13,6 +13,7 @@ members = [
     "crates/trace-analysis",
     "crates/nri-init",
     "crates/resctrl",
+    "crates/nri-resctrl-plugin",
 ]
 
 [workspace.dependencies]
@@ -21,6 +22,8 @@ perf_events = { path = "crates/perf_events" }
 timeslot = { path = "crates/timeslot" }
 bpf = { path = "crates/bpf" }
 nri = { path = "crates/nri" }
+resctrl = { path = "crates/resctrl" }
+nri-resctrl-plugin = { path = "crates/nri-resctrl-plugin" }
 
 libbpf-rs = "0.24.8"
 plain = "0.2"
