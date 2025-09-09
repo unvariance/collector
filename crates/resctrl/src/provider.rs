@@ -8,7 +8,7 @@ pub trait FsProvider: Clone + Send + Sync + 'static {
     fn remove_dir(&self, p: &Path) -> io::Result<()>;
     fn write_str(&self, p: &Path, data: &str) -> io::Result<()>;
     fn read_to_string(&self, p: &Path) -> io::Result<String>;
-    fn open_for_write(&self, p: &Path) -> io::Result<()>;
+    fn check_can_open_for_write(&self, p: &Path) -> io::Result<()>;
     fn mount_resctrl(&self, target: &Path) -> io::Result<()>;
 }
 
@@ -38,7 +38,7 @@ impl FsProvider for RealFs {
         fs::read_to_string(p)
     }
 
-    fn open_for_write(&self, p: &Path) -> io::Result<()> {
+    fn check_can_open_for_write(&self, p: &Path) -> io::Result<()> {
         let _ = OpenOptions::new().write(true).open(p)?;
         Ok(())
     }

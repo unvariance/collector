@@ -107,7 +107,7 @@ impl<P: FsProvider> Resctrl<P> {
         let writable = if let Some(ref mp) = mount_point {
             let tasks = mp.join("tasks");
             // Try to open for write without writing anything
-            self.fs.open_for_write(&tasks).is_ok()
+            self.fs.check_can_open_for_write(&tasks).is_ok()
         } else {
             false
         };
@@ -378,6 +378,10 @@ mod tests {
             let mut st = self.state.borrow_mut();
             st.no_perm_files.insert(p.to_path_buf());
         }
+        fn remove_file(&mut self, p: &Path) {
+            let mut st = self.state.borrow_mut();
+            st.files.remove(p);
+        }
         fn set_no_perm_dir(&mut self, p: &Path) {
             let mut st = self.state.borrow_mut();
             st.no_perm_dirs.insert(p.to_path_buf());
@@ -462,7 +466,7 @@ mod tests {
                 None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
             }
         }
-        fn open_for_write(&self, p: &Path) -> io::Result<()> {
+        fn check_can_open_for_write(&self, p: &Path) -> io::Result<()> {
             let st = self.state.borrow();
             if st.no_perm_files.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
@@ -512,6 +516,36 @@ mod tests {
         assert_eq!(info.mounted, false);
         assert_eq!(info.mount_point, None);
         assert_eq!(info.writable, false);
+    }
+
+    #[test]
+    fn test_detect_support_proc_mounts_missing() {
+        let fs = MockFs::default();
+        let rc = Resctrl::with_provider(fs, Config::default());
+        let err = rc.detect_support().unwrap_err();
+        match err {
+            Error::Io { path, source } => {
+                assert!(path.ends_with("/proc/mounts"));
+                assert_eq!(source.raw_os_error(), Some(libc::ENOENT));
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_detect_support_proc_mounts_permission_denied() {
+        let mut fs = MockFs::default();
+        fs.add_file(Path::new("/proc/mounts"), "");
+        fs.set_no_perm_file(Path::new("/proc/mounts"));
+        let rc = Resctrl::with_provider(fs, Config::default());
+        let err = rc.detect_support().unwrap_err();
+        match err {
+            Error::Io { path, source } => {
+                assert!(path.ends_with("/proc/mounts"));
+                assert_eq!(source.raw_os_error(), Some(libc::EACCES));
+            }
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]

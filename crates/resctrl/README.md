@@ -43,7 +43,7 @@ Errors
 Notes
 - Pod UID is sanitized to [a-zA-Z0-9_-] and truncated (<64) before prefixing.
 - Filesystem access goes through a trait to enable mocking in tests.
-- Auto-mount is opt-in due to privileges and risk. Prefer mounting from the host or orchestrator; when enabled, errors are surfaced clearly without side effects on failure.
+- Auto-mount is opt-in due to privileges and risk. Prefer mounting from the host or orchestrator; when enabled, failures return errors and do not leave a resctrl mount if the mount attempt fails.
 
 Hardware smoke test
 - Integration test `tests/smoke_test.rs` is gated by `RESCTRL_E2E=1` and will:

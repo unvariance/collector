@@ -53,9 +53,8 @@ fn resctrl_smoke() -> anyhow::Result<()> {
 
     // First, validate detection and ensure_mounted behavior (mounted/unmounted paths)
     let rc = Resctrl::default();
-    // Try to force unmounted state to exercise the disabled auto-mount path.
-    // If unmount is not possible on this environment, we'll skip the unmounted sub-case.
-    let _ = try_umount_resctrl();
+    // Force unmounted state; fail if we cannot unmount.
+    try_umount_resctrl()?;
     let info_unmounted = rc.detect_support()?;
     if !info_unmounted.mounted {
         // ensure_mounted should fail with auto_mount=false
@@ -75,8 +74,12 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         if !info_after.mounted {
             return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
         }
+        // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
+        rc_auto.ensure_mounted()?;
     } else {
-        eprintln!("resctrl was already mounted; skipping unmounted ensure_mounted sub-tests");
+        return Err(anyhow::anyhow!(
+            "expected resctrl unmounted after umount, but detect reported mounted"
+        ));
     }
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
