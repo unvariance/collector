@@ -62,7 +62,7 @@ impl FsProvider for RealFs {
                 tgt_c.as_ptr(),
                 fstype.as_ptr(),
                 0,
-                data as *const libc::c_void,
+                data,
             );
             if rc != 0 {
                 return Err(io::Error::last_os_error());

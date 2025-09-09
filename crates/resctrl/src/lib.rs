@@ -141,7 +141,7 @@ impl<P: FsProvider> Resctrl<P> {
                 if !info2.mounted {
                     return Err(Error::Io {
                         path: self.cfg.root.clone(),
-                        source: io::Error::new(io::ErrorKind::Other, "mount did not take effect"),
+                        source: io::Error::other("mount did not take effect"),
                     });
                 }
                 Ok(())
