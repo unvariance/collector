@@ -56,31 +56,30 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     // Force unmounted state; fail if we cannot unmount.
     try_umount_resctrl()?;
     let info_unmounted = rc.detect_support()?;
-    if !info_unmounted.mounted {
-        // ensure_mounted should fail with auto_mount=false
-        let mut cfg = Config::default();
-        cfg.auto_mount = false;
-        let rc_no_auto = Resctrl::new(cfg);
-        match rc_no_auto.ensure_mounted() {
-            Err(Error::NotMounted { .. }) => {}
-            other => return Err(anyhow::anyhow!("expected NotMounted, got: {other:?}")),
-        }
-        // Now with auto_mount=true it should mount successfully
-        let mut cfg2 = Config::default();
-        cfg2.auto_mount = true;
-        let rc_auto = Resctrl::new(cfg2);
-        rc_auto.ensure_mounted()?;
-        let info_after = rc_auto.detect_support()?;
-        if !info_after.mounted {
-            return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
-        }
-        // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
-        rc_auto.ensure_mounted()?;
-    } else {
+    if info_unmounted.mounted {
         return Err(anyhow::anyhow!(
             "expected resctrl unmounted after umount, but detect reported mounted"
         ));
     }
+    // ensure_mounted should fail with auto_mount=false
+    let mut cfg = Config::default();
+    cfg.auto_mount = false;
+    let rc_no_auto = Resctrl::new(cfg);
+    match rc_no_auto.ensure_mounted() {
+        Err(Error::NotMounted { .. }) => {}
+        other => return Err(anyhow::anyhow!("expected NotMounted, got: {other:?}")),
+    }
+    // Now with auto_mount=true it should mount successfully
+    let mut cfg2 = Config::default();
+    cfg2.auto_mount = true;
+    let rc_auto = Resctrl::new(cfg2);
+    rc_auto.ensure_mounted()?;
+    let info_after = rc_auto.detect_support()?;
+    if !info_after.mounted {
+        return Err(anyhow::anyhow!("ensure_mounted succeeded but detect shows not mounted"));
+    }
+    // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
+    rc_auto.ensure_mounted()?;
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
     let group = match rc.create_group(&uid) {
