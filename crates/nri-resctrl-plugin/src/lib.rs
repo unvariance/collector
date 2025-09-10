@@ -494,6 +494,31 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                     }
                 }
             }
+            Ok(Event::REMOVE_CONTAINER) => {
+                if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
+                    let pod_uid = pod.uid.clone();
+                    let mut st = self.state.lock().unwrap();
+                    if let Some(cstate) = st.containers.remove(&container.id) {
+                        if let Some(ps) = st.pods.get_mut(&pod_uid) {
+                            if ps.total_containers > 0 {
+                                ps.total_containers -= 1;
+                            }
+                            if cstate.reconciled && ps.reconciled_containers > 0 {
+                                ps.reconciled_containers -= 1;
+                            }
+                            let ev = PodResctrlEvent::Added(PodResctrlAdded {
+                                pod_uid: pod_uid.clone(),
+                                group_path: ps.group_path.clone(),
+                                state: AssignmentState::Success,
+                                total_containers: ps.total_containers,
+                                reconciled_containers: ps.reconciled_containers,
+                            });
+                            drop(st);
+                            self.emit_event(ev);
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         Ok(Empty::default())
