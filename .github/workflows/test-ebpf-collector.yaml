@@ -582,21 +582,16 @@ jobs:
             echo "Still waiting..."
           done
           echo "Kubernetes API is available!"
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
 
-      - name: Wait for default service account
+      - name: Wait for nodes
         run: |
-          echo "Waiting for default service account in 'default' namespace..."
-          for i in {1..60}; do
-            if kubectl -n default get sa default >/dev/null 2>&1; then
-              echo "✅ default service account is present"
-              kubectl -n default get sa default -o yaml | head -n 5 || true
-              break
-            fi
-            sleep 2
+          echo "Waiting for at least one node to be registered..."
+          until [ $(kubectl get nodes --no-headers | wc -l) -gt 0 ]; do
+            sleep 1
+            echo "Still waiting for node registration..."
           done
-          # Final verification (will fail job if not present)
-          kubectl -n default get sa default
+          echo "Node(s) registered, waiting for Ready status..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
 
       - name: Ensure NRI socket exists
         run: |
