@@ -553,6 +553,7 @@ jobs:
       EXPECTED_COMM: yes
       OUTPUT_PREFIX: /tmp/nri-e2e-
       NRI_SOCKET_PATH: /var/run/nri/nri.sock
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -582,6 +583,20 @@ jobs:
           done
           echo "Kubernetes API is available!"
           kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Wait for default service account
+        run: |
+          echo "Waiting for default service account in 'default' namespace..."
+          for i in {1..60}; do
+            if kubectl -n default get sa default >/dev/null 2>&1; then
+              echo "✅ default service account is present"
+              kubectl -n default get sa default -o yaml | head -n 5 || true
+              break
+            fi
+            sleep 2
+          done
+          # Final verification (will fail job if not present)
+          kubectl -n default get sa default
 
       - name: Ensure NRI socket exists
         run: |
