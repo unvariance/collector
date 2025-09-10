@@ -20,6 +20,7 @@ mod bpf_perf_to_trace;
 mod bpf_task_tracker;
 mod bpf_timeslot_tracker;
 mod metrics;
+mod nri_enrich_recordbatch_task;
 mod parquet_writer;
 mod parquet_writer_task;
 mod perf_event_processor;
@@ -27,15 +28,14 @@ mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
 mod timeslot_to_recordbatch_task;
-mod nri_enrich_recordbatch_task;
 
+use nri_enrich_recordbatch_task::NRIEnrichRecordBatchTask;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
 use perf_event_processor::{PerfEventProcessor, ProcessorMode};
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
-use nri_enrich_recordbatch_task::NRIEnrichRecordBatchTask;
 
 /// Number of perf ring buffer pages for timeslot mode
 const TIMESLOT_PERF_RING_PAGES: u32 = 32;
@@ -248,7 +248,8 @@ async fn main() -> Result<()> {
     };
 
     // Create the NRI enrichment task between conversion/trace and the writer
-    let enrich_task = NRIEnrichRecordBatchTask::new(pre_enrich_receiver, batch_sender, input_schema.clone());
+    let enrich_task =
+        NRIEnrichRecordBatchTask::new(pre_enrich_receiver, batch_sender, input_schema.clone());
     let schema = enrich_task.schema();
 
     // Spawn the enrichment task

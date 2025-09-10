@@ -25,8 +25,8 @@ const ENRICH_FIELDS: &[(&str, DataType)] = &[
 
 /// Resolve a cgroup2 mount point by scanning /proc/self/mountinfo
 fn find_cgroup2_mount_point() -> Result<PathBuf> {
-    let mount_info =
-        fs::read_to_string("/proc/self/mountinfo").context("Failed to read /proc/self/mountinfo")?;
+    let mount_info = fs::read_to_string("/proc/self/mountinfo")
+        .context("Failed to read /proc/self/mountinfo")?;
 
     for line in mount_info.lines() {
         // mountinfo format:
@@ -76,7 +76,6 @@ pub struct NRIEnrichRecordBatchTask {
     batch_sender: mpsc::Sender<RecordBatch>,
 
     // Schemas
-    input_schema: SchemaRef,
     output_schema: SchemaRef,
 
     // NRI message channel
@@ -115,7 +114,6 @@ impl NRIEnrichRecordBatchTask {
         Self {
             batch_receiver,
             batch_sender,
-            input_schema,
             output_schema,
             metadata_rx: rx,
             nri: None,
@@ -404,7 +402,10 @@ mod tests {
         let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
         let task = NRIEnrichRecordBatchTask::new(rx, tx, schema.clone());
         let out = task.schema();
-        assert_eq!(out.fields().len(), schema.fields().len() + ENRICH_FIELDS.len());
+        assert_eq!(
+            out.fields().len(),
+            schema.fields().len() + ENRICH_FIELDS.len()
+        );
         let names: Vec<_> = out.fields().iter().map(|f| f.name().clone()).collect();
         assert!(names.ends_with(&[
             "pod_name".to_string(),
@@ -420,11 +421,10 @@ mod tests {
             "container_name",
             "container_id",
         ] {
-            let f = out.field(out.fields().len() - ENRICH_FIELDS.len() + names
-                .iter()
-                .rev()
-                .position(|n| n == name)
-                .unwrap());
+            let f = out.field(
+                out.fields().len() - ENRICH_FIELDS.len()
+                    + names.iter().rev().position(|n| n == name).unwrap(),
+            );
             assert!(f.is_nullable());
         }
     }
@@ -481,7 +481,10 @@ mod tests {
         // Build batch with cgroup ids [42, 7]
         let batch = make_simple_batch(schema, &[42, 7]);
         let enriched = task.enrich_batch(&batch).unwrap();
-        assert_eq!(enriched.num_columns(), batch.num_columns() + ENRICH_FIELDS.len());
+        assert_eq!(
+            enriched.num_columns(),
+            batch.num_columns() + ENRICH_FIELDS.len()
+        );
         assert_eq!(enriched.num_rows(), 2);
 
         use arrow_array::StringArray;
