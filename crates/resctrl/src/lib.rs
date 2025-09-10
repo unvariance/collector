@@ -1040,20 +1040,86 @@ mod tests {
             },
         );
 
-        let mut first = true;
-        let pid_source = move || -> Result<Vec<i32>> {
-            // Simulate a stable desired set with one PID that cannot be assigned
-            if first {
-                first = false;
-            }
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let pid_source = || -> Result<Vec<i32>> {
+            *calls.borrow_mut() += 1;
             Ok(vec![303])
         };
 
+        let max_passes = 3;
         let res = rc
-            .reconcile_group(group_path.to_str().unwrap(), pid_source, 3)
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, max_passes)
             .expect("reconcile ok");
 
         assert_eq!(res.assigned, 0);
         assert_eq!(res.missing, 1);
+        assert_eq!(*calls.borrow(), max_passes);
+    }
+
+    #[test]
+    fn test_reconcile_group_converges_after_changes() {
+        let mut fs = MockFs::default();
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        let group_path = root.join("pod_dyn");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+        );
+
+        let mut pass = 0usize;
+        let pid_source = move || -> Result<Vec<i32>> {
+            let out = match pass {
+                0 => vec![1],
+                1 => vec![1, 2],
+                _ => vec![1, 2],
+            };
+            pass += 1;
+            Ok(out)
+        };
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 10)
+            .expect("reconcile ok");
+        assert_eq!(res.missing, 0);
+        assert_eq!(res.assigned, 2); // 1 then 2
+        // should have required at least 3 passes (implicitly via closure sequence)
+    }
+
+    #[test]
+    fn test_reconcile_group_noop_when_desired_already_present() {
+        let mut fs = MockFs::default();
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        let group_path = root.join("pod_preloaded");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "10\n11\n");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+        );
+
+        let pid_source = || -> Result<Vec<i32>> { Ok(vec![10, 11]) };
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 5)
+            .expect("reconcile ok");
+        assert_eq!(res.missing, 0);
+        assert_eq!(res.assigned, 0);
     }
 }
