@@ -372,7 +372,6 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         req: UpdateContainerRequest,
     ) -> ttrpc::Result<UpdateContainerResponse> {
         debug!("resctrl-plugin: update_container: {}", req.container.id);
-        // We don't need to handle update_container for resctrl assignment
         Ok(UpdateContainerResponse::default())
     }
 
@@ -382,7 +381,6 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         req: StopContainerRequest,
     ) -> ttrpc::Result<StopContainerResponse> {
         debug!("resctrl-plugin: stop_container: {}", req.container.id);
-        // Container removal is handled in state_change REMOVE_CONTAINER
         Ok(StopContainerResponse::default())
     }
 
