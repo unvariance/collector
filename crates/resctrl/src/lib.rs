@@ -285,6 +285,65 @@ impl<P: FsProvider> Resctrl<P> {
         }
         Ok(pids)
     }
+
+    /// Return a reference to the underlying filesystem provider.
+    pub fn fs_provider(&self) -> &P {
+        &self.fs
+    }
+
+    /// Reconcile tasks in a resctrl group with the desired PIDs produced by `pid_source`.
+    ///
+    /// The function repeatedly compares the current tasks in `group_path` with the
+    /// PIDs returned by `pid_source`, assigning only the missing ones. The loop runs
+    /// up to `max_passes` times or until convergence (no missing tasks) is reached.
+    ///
+    /// Returns `AssignmentResult { assigned, missing }` where
+    /// - `assigned` is the total number of successful task assignments across passes
+    /// - `missing` is the number of desired PIDs still not present in the group after
+    ///   the final pass (0 indicates convergence)
+    pub fn reconcile_group(
+        &self,
+        group_path: &str,
+        mut pid_source: impl FnMut() -> Result<Vec<i32>>,
+        max_passes: usize,
+    ) -> Result<AssignmentResult> {
+        use std::collections::HashSet;
+
+        let mut total_assigned = 0usize;
+        let mut last_desired: HashSet<i32> = HashSet::new();
+
+        for _ in 0..max_passes {
+            // Desired tasks for this pass
+            let desired_vec = pid_source()?;
+            last_desired = desired_vec.into_iter().collect();
+
+            // Current tasks in the group
+            let current_vec = self.list_group_tasks(group_path)?;
+            let current: HashSet<i32> = current_vec.into_iter().collect();
+
+            // Compute missing PIDs (desired but not yet in the group)
+            let missing: Vec<i32> = last_desired
+                .difference(&current)
+                .copied()
+                .collect();
+
+            if missing.is_empty() {
+                return Ok(AssignmentResult::new(total_assigned, 0));
+            }
+
+            // Try to assign missing tasks
+            let res = self.assign_tasks(group_path, &missing)?;
+            total_assigned += res.assigned;
+            // Do not treat res.missing as terminal – recompute in next pass
+        }
+
+        // After exhausting passes, calculate how many are still missing
+        let current_vec = self.list_group_tasks(group_path)?;
+        let current: std::collections::HashSet<i32> = current_vec.into_iter().collect();
+        let still_missing = last_desired.difference(&current).count();
+
+        Ok(AssignmentResult::new(total_assigned, still_missing))
+    }
 }
 
 fn sanitize_uid(uid: &str) -> String {
@@ -904,5 +963,97 @@ mod tests {
             Error::Capacity { .. } => {}
             other => panic!("expected capacity, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_reconcile_group_converges() {
+        let mut fs = MockFs::default();
+        // Simulate mounted under default root
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        // Create group and its tasks file
+        let group_path = root.join("pod_abc");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
+        );
+
+        // Desired PIDs remain stable; should converge in <= 2 passes
+        let desired = vec![101, 202];
+        let pid_source = || -> Result<Vec<i32>> { Ok(desired.clone()) };
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 10)
+            .expect("reconcile ok");
+
+        assert_eq!(res.missing, 0);
+        assert_eq!(res.assigned, desired.len());
+
+        // Verify tasks file contains the assigned PIDs
+        let listed = rc
+            .list_group_tasks(group_path.to_str().unwrap())
+            .expect("list ok");
+        assert_eq!(listed.len(), desired.len());
+        for p in desired {
+            assert!(listed.contains(&p));
+        }
+    }
+
+    #[test]
+    fn test_reconcile_group_partial_when_pids_missing() {
+        let mut fs = MockFs::default();
+        // Simulate mounted under default root
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        // Create group and its tasks file
+        let group_path = root.join("pod_def");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "");
+
+        // Mark a PID as always missing (ESRCH) when writing
+        fs.set_missing_pid(303);
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
+        );
+
+        let mut first = true;
+        let pid_source = move || -> Result<Vec<i32>> {
+            // Simulate a stable desired set with one PID that cannot be assigned
+            if first {
+                first = false;
+            }
+            Ok(vec![303])
+        };
+
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 3)
+            .expect("reconcile ok");
+
+        assert_eq!(res.assigned, 0);
+        assert_eq!(res.missing, 1);
     }
 }
