@@ -540,7 +540,7 @@ jobs:
           ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-      aws-region: ${{ needs.setup-runner.outputs.region || secrets.AWS_REGION }} 
+          aws-region: ${{ needs.setup-runner.outputs.region || secrets.AWS_REGION }} 
 
   nri-enrichment-e2e:
     name: NRI Enrichment E2E (Binary)
