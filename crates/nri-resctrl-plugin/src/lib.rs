@@ -1,3 +1,5 @@
+mod pid_source;
+
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -20,74 +22,25 @@ use nri::events_mask::EventMask;
 
 use resctrl::{Config as ResctrlConfig, FsProvider, RealFs, Resctrl};
 
-/// Source of PIDs for a container based on cgroup metadata.
-pub trait CgroupPidSource: Send + Sync {
-    fn pids_for_container(&self, c: &nri::api::Container) -> Vec<i32>;
-}
+use crate::pid_source::{CgroupPidSource, RealCgroupPidSource};
 
-pub struct RealCgroupPidSource;
-
-impl RealCgroupPidSource {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl CgroupPidSource for RealCgroupPidSource {
-    fn pids_for_container(&self, c: &nri::api::Container) -> Vec<i32> {
-        // Use cgroups-rs if available by path; fallback to reading files via std fs
-        let cg_path = c
-            .linux
-            .as_ref()
-            .map(|l| l.cgroups_path.clone())
-            .unwrap_or_default();
-        if cg_path.is_empty() {
-            return vec![];
-        }
-        // Try reading cgroup.procs directly
-        let procs_path = std::path::PathBuf::from(&cg_path).join("cgroup.procs");
-        let tasks_path = std::path::PathBuf::from(&cg_path).join("tasks");
-        let s = std::fs::read_to_string(&procs_path)
-            .or_else(|_| std::fs::read_to_string(&tasks_path));
-        match s {
-            Ok(content) => content
-                .lines()
-                .filter_map(|l| l.trim().parse::<i32>().ok())
-                .collect(),
-            Err(_) => vec![],
-        }
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-impl CgroupPidSource for RealCgroupPidSource {
-    fn pids_for_container(&self, _c: &nri::api::Container) -> Vec<i32> {
-        vec![]
-    }
-}
-
-/// Assignment state for associating pods to resctrl groups.
+/// Resctrl group state for a pod.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AssignmentState {
-    /// All known tasks assigned
-    Success,
-    /// Some tasks could not be assigned (race/inflight forks)
-    Partial,
+pub enum ResctrlGroupState {
+    /// Group exists at the given path
+    Exists(String),
     /// Group could not be created (e.g., RMID exhaustion)
-    Failure,
+    Failed,
 }
 
-/// Event payload for an added/associated pod.
+/// Event payload for an added/updated pod.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PodResctrlAdded {
+pub struct PodResctrlAddOrUpdate {
     pub pod_uid: String,
-    /// None when Failure
-    pub group_path: Option<String>,
-    pub state: AssignmentState,
+    pub group_state: ResctrlGroupState,
     /// Number of containers known for the pod
     pub total_containers: usize,
-    /// Number of containers reconciled successfully (Success)
+    /// Number of containers reconciled successfully
     pub reconciled_containers: usize,
 }
 
@@ -95,13 +48,12 @@ pub struct PodResctrlAdded {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PodResctrlRemoved {
     pub pod_uid: String,
-    pub group_path: Option<String>,
 }
 
 /// Events emitted by the resctrl plugin.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PodResctrlEvent {
-    Added(PodResctrlAdded),
+    AddOrUpdate(PodResctrlAddOrUpdate),
     Removed(PodResctrlRemoved),
 }
 
@@ -133,15 +85,13 @@ impl Default for ResctrlPluginConfig {
 }
 
 #[derive(Default)]
-#[allow(dead_code)]
 struct PodState {
-    group_path: Option<String>,
+    group_state: Option<ResctrlGroupState>,
     total_containers: usize,
     reconciled_containers: usize,
 }
 
 #[derive(Default)]
-#[allow(dead_code)]
 struct ContainerState {
     pod_uid: String,
     reconciled: bool,
@@ -225,7 +175,6 @@ impl<P: FsProvider> ResctrlPlugin<P> {
     }
 
     /// Emit an event to the collector, drop if channel is full.
-    #[allow(dead_code)]
     fn emit_event(&self, ev: PodResctrlEvent) {
         if let Err(e) = self.tx.try_send(ev) {
             self.dropped_events.fetch_add(1, Ordering::Relaxed);
@@ -233,109 +182,123 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         }
     }
 
+    /// Emit pod state update event
+    fn emit_pod_add_or_update(&self, pod_uid: &str) {
+        let st = self.state.lock().unwrap();
+        if let Some(ps) = st.pods.get(pod_uid) {
+            if let Some(group_state) = ps.group_state.as_ref() {
+                let ev = PodResctrlEvent::AddOrUpdate(PodResctrlAddOrUpdate {
+                    pod_uid: pod_uid.to_string(),
+                    group_state: group_state.clone(),
+                    total_containers: ps.total_containers,
+                    reconciled_containers: ps.reconciled_containers,
+                });
+                drop(st);
+                self.emit_event(ev);
+            }
+        }
+    }
+
     // Create or fetch pod state and ensure group exists
-    fn handle_new_pod(&self, pod: &nri::api::PodSandbox) -> Option<String> {
+    fn handle_new_pod(&self, pod: &nri::api::PodSandbox) {
         let pod_uid = &pod.uid;
         let mut st = self.state.lock().unwrap();
         let ps = st.pods.entry(pod_uid.clone()).or_insert(PodState {
-            group_path: None,
+            group_state: None,
             total_containers: 0,
             reconciled_containers: 0,
         });
-        if ps.group_path.is_none() {
+        
+        if ps.group_state.is_none() {
             match self.resctrl.create_group(pod_uid) {
                 Ok(p) => {
-                    ps.group_path = Some(p.clone());
-                    Some(p)
+                    ps.group_state = Some(ResctrlGroupState::Exists(p));
                 }
                 Err(e) => {
                     warn!("resctrl-plugin: failed to create group for pod {}: {}", pod_uid, e);
-                    None
+                    ps.group_state = Some(ResctrlGroupState::Failed);
                 }
             }
-        } else {
-            ps.group_path.clone()
         }
+        drop(st);
+        self.emit_pod_add_or_update(pod_uid);
     }
 
     fn handle_new_container(&self, pod: &nri::api::PodSandbox, container: &nri::api::Container) {
         let pod_uid = pod.uid.clone();
-        let group_path = match self.handle_new_pod(pod) {
-            Some(g) => g,
+        
+        // Ensure pod state exists
+        let group_path = {
+            let st = self.state.lock().unwrap();
+            if !st.pods.contains_key(&pod_uid) {
+                // Pod should have been created first - this is an invariant violation
+                drop(st);
+                warn!("resctrl-plugin: container {} created before pod {}, creating pod now", container.id, pod_uid);
+                self.handle_new_pod(pod);
+            }
+            
+            let st = self.state.lock().unwrap();
+            match st.pods.get(&pod_uid).and_then(|p| p.group_state.as_ref()) {
+                Some(ResctrlGroupState::Exists(path)) => Some(path.clone()),
+                _ => None
+            }
+        };
+
+        let group_path = match group_path {
+            Some(p) => p,
             None => {
-                // Emit failure for pod without group
-                let ev = PodResctrlEvent::Added(PodResctrlAdded {
-                    pod_uid: pod_uid.clone(),
-                    group_path: None,
-                    state: AssignmentState::Failure,
-                    total_containers: 0,
-                    reconciled_containers: 0,
-                });
-                self.emit_event(ev);
+                // Pod group doesn't exist or failed - skip reconciliation
                 return;
             }
         };
 
-        // Enumerate container PIDs and reconcile just this container into the pod group
-        let passes = self.cfg.max_reconcile_passes;
-        let pids = self.pid_source.pids_for_container(container);
-        let res = self
-            .resctrl
-            .reconcile_group(&group_path, || Ok(pids.clone()), passes);
+        // Create a closure that reads PIDs fresh each time
+        let container_id = container.id.clone();
+        let pid_source = self.pid_source.clone();
+        let container_clone = container.clone();
+        let pid_resolver = move || -> Result<Vec<i32>, resctrl::Error> {
+            Ok(pid_source.pids_for_container(&container_clone))
+        };
 
+        // Reconcile this container's PIDs into the pod group
+        let passes = self.cfg.max_reconcile_passes;
+        let res = self.resctrl.reconcile_group(&group_path, pid_resolver, passes);
         let container_ok = matches!(res, Ok(ar) if ar.missing == 0);
 
-        // Update state and emit event with counts
-        // Update state and emit event with counts
-        let (total, reconciled) = {
+        // Update container state and pod counts
+        {
             let mut st = self.state.lock().unwrap();
-            // Ensure pod entry and group path
-            st.pods
-                .entry(pod_uid.clone())
-                .or_default()
-                .group_path = Some(group_path.clone());
-
-            // Prior reconciled status
-            let _was_reconciled = st
-                .containers
-                .get(&container.id)
+            
+            // Check if container was previously reconciled
+            let was_reconciled = st.containers.get(&container_id)
                 .map(|c| c.reconciled)
                 .unwrap_or(false);
 
             // Update/insert container state
             st.containers.insert(
-                container.id.clone(),
+                container_id.clone(),
                 ContainerState { pod_uid: pod_uid.clone(), reconciled: container_ok },
             );
 
-            // Recompute counts
-            let total = st
-                .containers
-                .values()
+            // Update pod counts
+            // Compute the new total count first
+            let new_total = st.containers.values()
                 .filter(|c| c.pod_uid == pod_uid)
                 .count();
-            let reconciled = st
-                .containers
-                .values()
-                .filter(|c| c.pod_uid == pod_uid && c.reconciled)
-                .count();
-
+            
             if let Some(ps) = st.pods.get_mut(&pod_uid) {
-                ps.total_containers = total;
-                ps.reconciled_containers = reconciled;
+                // Update reconciled count based on state change
+                if !was_reconciled && container_ok {
+                    ps.reconciled_containers += 1;
+                } else if was_reconciled && !container_ok {
+                    ps.reconciled_containers = ps.reconciled_containers.saturating_sub(1);
+                }
+                
+                ps.total_containers = new_total;
             }
+        }
 
-            (total, reconciled)
-        };
-
-        let ev = PodResctrlEvent::Added(PodResctrlAdded {
-            pod_uid: pod_uid.clone(),
-            group_path: Some(group_path.clone()),
-            state: if container_ok { AssignmentState::Success } else { AssignmentState::Partial },
-            total_containers: total,
-            reconciled_containers: reconciled,
-        });
-        self.emit_event(ev);
+        self.emit_pod_add_or_update(&pod_uid);
     }
 }
 
@@ -355,8 +318,6 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         let mut events = EventMask::new();
         events.set(&[
             Event::CREATE_CONTAINER,
-            Event::UPDATE_CONTAINER,
-            Event::STOP_CONTAINER,
             Event::REMOVE_CONTAINER,
             Event::RUN_POD_SANDBOX,
             Event::REMOVE_POD_SANDBOX,
@@ -379,11 +340,12 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
             req.containers.len()
         );
 
-        // Ensure groups for all pods
+        // Ensure groups for all pods first
         for pod in &req.pods {
-            let _ = self.handle_new_pod(pod);
+            self.handle_new_pod(pod);
         }
-        // Reconcile each container individually
+        
+        // Then reconcile each container individually
         let pods_map: std::collections::HashMap<String, nri::api::PodSandbox> =
             req.pods.iter().map(|p| (p.id.clone(), p.clone())).collect();
         for c in &req.containers {
@@ -413,9 +375,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         req: UpdateContainerRequest,
     ) -> ttrpc::Result<UpdateContainerResponse> {
         debug!("resctrl-plugin: update_container: {}", req.container.id);
-        if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
-            self.handle_new_container(pod, container);
-        }
+        // We don't need to handle update_container for resctrl assignment
         Ok(UpdateContainerResponse::default())
     }
 
@@ -425,29 +385,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         req: StopContainerRequest,
     ) -> ttrpc::Result<StopContainerResponse> {
         debug!("resctrl-plugin: stop_container: {}", req.container.id);
-        if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
-            let pod_uid = pod.uid.clone();
-            let mut st = self.state.lock().unwrap();
-            if let Some(cstate) = st.containers.remove(&container.id) {
-                if let Some(ps) = st.pods.get_mut(&pod_uid) {
-                    if ps.total_containers > 0 {
-                        ps.total_containers -= 1;
-                    }
-                    if cstate.reconciled && ps.reconciled_containers > 0 {
-                        ps.reconciled_containers -= 1;
-                    }
-                    let ev = PodResctrlEvent::Added(PodResctrlAdded {
-                        pod_uid: pod_uid.clone(),
-                        group_path: ps.group_path.clone(),
-                        state: AssignmentState::Success,
-                        total_containers: ps.total_containers,
-                        reconciled_containers: ps.reconciled_containers,
-                    });
-                    drop(st);
-                    self.emit_event(ev);
-                }
-            }
-        }
+        // Container removal is handled in state_change REMOVE_CONTAINER
         Ok(StopContainerResponse::default())
     }
 
@@ -471,52 +409,50 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                 if let Some(pod) = req.pod.as_ref() {
                     let pod_uid = pod.uid.clone();
                     let mut st = self.state.lock().unwrap();
-                    let group_path = st
-                        .pods
-                        .get(&pod_uid)
-                        .and_then(|ps| ps.group_path.clone());
+                    
+                    // Get group path before removing pod state
+                    let group_path = st.pods.get(&pod_uid)
+                        .and_then(|ps| match &ps.group_state {
+                            Some(ResctrlGroupState::Exists(path)) => Some(path.clone()),
+                            _ => None
+                        });
+                    
+                    // Remove all containers for this pod
                     st.containers.retain(|_, c| c.pod_uid != pod_uid);
+                    // Remove pod state
                     st.pods.remove(&pod_uid);
                     drop(st);
+                    
+                    // Delete resctrl group if it exists
                     if let Some(gp) = group_path {
                         if let Err(e) = self.resctrl.delete_group(&gp) {
                             warn!("resctrl-plugin: failed to delete group {}: {}", gp, e);
                         }
-                        self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved {
-                            pod_uid,
-                            group_path: Some(gp),
-                        }));
-                    } else {
-                        self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved {
-                            pod_uid,
-                            group_path: None,
-                        }));
                     }
+                    
+                    // Emit removal event
+                    self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved {
+                        pod_uid,
+                    }));
                 }
             }
             Ok(Event::REMOVE_CONTAINER) => {
                 if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
                     let pod_uid = pod.uid.clone();
                     let mut st = self.state.lock().unwrap();
+                    
                     if let Some(cstate) = st.containers.remove(&container.id) {
                         if let Some(ps) = st.pods.get_mut(&pod_uid) {
-                            if ps.total_containers > 0 {
-                                ps.total_containers -= 1;
+                            ps.total_containers = ps.total_containers.saturating_sub(1);
+                            if cstate.reconciled {
+                                ps.reconciled_containers = ps.reconciled_containers.saturating_sub(1);
                             }
-                            if cstate.reconciled && ps.reconciled_containers > 0 {
-                                ps.reconciled_containers -= 1;
-                            }
-                            let ev = PodResctrlEvent::Added(PodResctrlAdded {
-                                pod_uid: pod_uid.clone(),
-                                group_path: ps.group_path.clone(),
-                                state: AssignmentState::Success,
-                                total_containers: ps.total_containers,
-                                reconciled_containers: ps.reconciled_containers,
-                            });
-                            drop(st);
-                            self.emit_event(ev);
                         }
                     }
+                    drop(st);
+                    
+                    // Emit update event with new counts
+                    self.emit_pod_add_or_update(&pod_uid);
                 }
             }
             _ => {}
@@ -534,7 +470,6 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
 mod tests {
     use super::*;
     use protobuf::SpecialFields;
-    use std::sync::Arc;
 
     #[derive(Clone, Default)]
     struct TestFsState {
@@ -655,14 +590,13 @@ mod tests {
         assert!(events.is_set(Event::CREATE_CONTAINER));
         assert!(events.is_set(Event::RUN_POD_SANDBOX));
         assert!(events.is_set(Event::REMOVE_POD_SANDBOX));
-        assert!(events.is_set(Event::UPDATE_CONTAINER));
-        assert!(events.is_set(Event::STOP_CONTAINER));
         assert!(events.is_set(Event::REMOVE_CONTAINER));
     }
 
     #[tokio::test]
+    #[cfg(target_os = "linux")]
     async fn test_reconcile_emits_counts() {
-        // Build a plugin with a test FS-backed resctrl
+        // This test requires Linux-specific functionality
         let fs = TestFs::default();
         // Ensure resctrl root exists
         fs.add_dir(std::path::Path::new("/sys"));
@@ -683,13 +617,12 @@ mod tests {
             },
         );
 
-        // Inject a mock PID source that returns two PIDs for our container
-        struct MockPidSrc;
-        impl CgroupPidSource for MockPidSrc {
-            fn pids_for_container(&self, _c: &nri::api::Container) -> Vec<i32> { vec![1,2] }
-        }
+        // Use mock PID source from the module
+        use crate::pid_source::test_support::MockCgroupPidSource;
+        let mut mock_pid_src = MockCgroupPidSource::new();
+        mock_pid_src.set_pids("ctr1".to_string(), vec![1, 2]);
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(8);
-        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(MockPidSrc));
+        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src));
 
         // Build synchronize request with one pod and one container
         let mut pod = nri::api::PodSandbox::default();
@@ -713,36 +646,48 @@ mod tests {
         let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
         let _ = plugin.synchronize(&ctx, req).await.unwrap();
 
-        // Expect an Added event with Success and counts
-        let ev = rx.recv().await.expect("one event");
-        match ev {
-            PodResctrlEvent::Added(a) => {
-                assert_eq!(a.pod_uid, "u123");
-                assert_eq!(a.state, AssignmentState::Success);
-                assert!(a.group_path.is_some());
-                assert_eq!(a.total_containers, 1);
-                assert_eq!(a.reconciled_containers, 1);
+        // Expect pod creation event and container reconciliation event
+        use tokio::time::{timeout, Duration};
+        timeout(Duration::from_millis(100), async {
+            let mut events_received = 0;
+            while let Some(ev) = rx.recv().await {
+                events_received += 1;
+                match ev {
+                    PodResctrlEvent::AddOrUpdate(a) => {
+                        assert_eq!(a.pod_uid, "u123");
+                        assert!(matches!(a.group_state, ResctrlGroupState::Exists(_)));
+                        // After synchronize, we should have 1 container reconciled
+                        if events_received > 1 {
+                            assert_eq!(a.total_containers, 1);
+                            assert_eq!(a.reconciled_containers, 1);
+                            break;
+                        }
+                    }
+                    _ => panic!("unexpected event type"),
+                }
             }
-            _ => panic!("unexpected event type"),
-        }
+        }).await.expect("Should receive events within timeout");
 
-        // Trigger update for the same container; should emit another event with same counts
-        let ureq = UpdateContainerRequest {
+        // Test container removal
+        let state_req = StateChangeEvent {
+            event: Event::REMOVE_CONTAINER.into(),
             pod: protobuf::MessageField::some(pod.clone()),
             container: protobuf::MessageField::some(container.clone()),
-            linux_resources: protobuf::MessageField::none(),
             special_fields: SpecialFields::default(),
         };
-        let _ = plugin.update_container(&ctx, ureq).await.unwrap();
+        let _ = plugin.state_change(&ctx, state_req).await.unwrap();
 
-        // Expect a second event
-        let ev2 = rx.recv().await.expect("second event");
-        match ev2 {
-            PodResctrlEvent::Added(a) => {
-                assert_eq!(a.total_containers, 1);
-                assert_eq!(a.reconciled_containers, 1);
+        // Should get an update event with reduced counts
+        timeout(Duration::from_millis(100), async {
+            if let Some(ev) = rx.recv().await {
+                match ev {
+                    PodResctrlEvent::AddOrUpdate(a) => {
+                        assert_eq!(a.total_containers, 0);
+                        assert_eq!(a.reconciled_containers, 0);
+                    }
+                    _ => panic!("unexpected event type"),
+                }
             }
-            _ => panic!("unexpected event type"),
-        }
+        }).await.expect("Should receive event within timeout");
     }
 }

@@ -8,6 +8,9 @@ mod error;
 mod provider;
 pub use provider::{FsProvider, RealFs};
 
+#[cfg(test)]
+mod test_utils;
+
 const DEFAULT_ROOT: &str = "/sys/fs/resctrl";
 const DEFAULT_PREFIX: &str = "pod_";
 const MAX_UID_LEN: usize = 63; // limit UID segment (<64)
@@ -400,150 +403,7 @@ pub struct SupportInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet, HashSet};
-
-    #[derive(Clone, Default)]
-    struct MockFs {
-        state: std::rc::Rc<std::cell::RefCell<MockState>>,
-    }
-
-    #[derive(Default)]
-    struct MockState {
-        dirs: BTreeSet<PathBuf>,
-        files: BTreeMap<PathBuf, String>,
-        no_perm_files: HashSet<PathBuf>,
-        no_perm_dirs: HashSet<PathBuf>,
-        nospace_dirs: HashSet<PathBuf>,
-        missing_pids: HashSet<i32>,
-        mount_err: Option<i32>,
-    }
-
-    // Tests are single-threaded; declare Send/Sync to satisfy the trait bound.
-    unsafe impl Send for MockFs {}
-    unsafe impl Sync for MockFs {}
-
-    impl MockFs {
-        fn add_dir(&mut self, p: &Path) {
-            let mut st = self.state.borrow_mut();
-            st.dirs.insert(p.to_path_buf());
-        }
-        fn add_file(&mut self, p: &Path, content: &str) {
-            let mut st = self.state.borrow_mut();
-            st.files.insert(p.to_path_buf(), content.to_string());
-        }
-        fn set_no_perm_file(&mut self, p: &Path) {
-            let mut st = self.state.borrow_mut();
-            st.no_perm_files.insert(p.to_path_buf());
-        }
-        fn set_nospace_dir(&mut self, p: &Path) {
-            let mut st = self.state.borrow_mut();
-            st.nospace_dirs.insert(p.to_path_buf());
-        }
-        fn set_missing_pid(&mut self, pid: i32) {
-            let mut st = self.state.borrow_mut();
-            st.missing_pids.insert(pid);
-        }
-
-        // helper for exists in tests
-        fn path_exists(&self, p: &Path) -> bool {
-            let st = self.state.borrow();
-            st.dirs.contains(p) || st.files.contains_key(p)
-        }
-    }
-
-    impl FsProvider for MockFs {
-        fn exists(&self, p: &Path) -> bool {
-            let st = self.state.borrow();
-            st.dirs.contains(p) || st.files.contains_key(p)
-        }
-        fn create_dir(&self, p: &Path) -> io::Result<()> {
-            let mut st = self.state.borrow_mut();
-            if st.no_perm_dirs.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::EACCES));
-            }
-            if st.nospace_dirs.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::ENOSPC));
-            }
-            if st.dirs.contains(p) {
-                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "exists"));
-            }
-            st.dirs.insert(p.to_path_buf());
-            Ok(())
-        }
-        fn remove_dir(&self, p: &Path) -> io::Result<()> {
-            let mut st = self.state.borrow_mut();
-            if st.no_perm_dirs.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::EACCES));
-            }
-            if !st.dirs.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::ENOENT));
-            }
-            st.dirs.remove(p);
-            Ok(())
-        }
-        fn write_str(&self, p: &Path, data: &str) -> io::Result<()> {
-            let mut st = self.state.borrow_mut();
-            if st.no_perm_files.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::EACCES));
-            }
-            if !st.files.contains_key(p) {
-                return Err(io::Error::from_raw_os_error(libc::ENOENT));
-            }
-            // If writing to tasks, simulate ESRCH for missing pid
-            if p.ends_with("tasks") {
-                if let Ok(pid) = data.trim().parse::<i32>() {
-                    if st.missing_pids.contains(&pid) {
-                        return Err(io::Error::from_raw_os_error(libc::ESRCH));
-                    }
-                }
-                let entry = st.files.entry(p.to_path_buf()).or_default();
-                if !entry.ends_with('\n') && !entry.is_empty() {
-                    entry.push('\n');
-                }
-                entry.push_str(data);
-                entry.push('\n');
-            }
-            Ok(())
-        }
-        fn read_to_string(&self, p: &Path) -> io::Result<String> {
-            let st = self.state.borrow();
-            if st.no_perm_files.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::EACCES));
-            }
-            match st.files.get(p) {
-                Some(s) => Ok(s.clone()),
-                None => Err(io::Error::from_raw_os_error(libc::ENOENT)),
-            }
-        }
-        fn check_can_open_for_write(&self, p: &Path) -> io::Result<()> {
-            let st = self.state.borrow();
-            if st.no_perm_files.contains(p) {
-                return Err(io::Error::from_raw_os_error(libc::EACCES));
-            }
-            if st.files.contains_key(p) {
-                Ok(())
-            } else {
-                Err(io::Error::from_raw_os_error(libc::ENOENT))
-            }
-        }
-        fn mount_resctrl(&self, target: &Path) -> io::Result<()> {
-            let mut st = self.state.borrow_mut();
-            if let Some(code) = st.mount_err.take() {
-                return Err(io::Error::from_raw_os_error(code));
-            }
-            // Simulate mount by ensuring target dir exists and appending to /proc/mounts
-            st.dirs.insert(target.to_path_buf());
-            let line = format!("resctrl {} resctrl rw,relatime 0 0\n", target.display());
-            let pm = PathBuf::from("/proc/mounts");
-            let entry = st.files.entry(pm).or_default();
-            entry.push_str(&line);
-
-            // Also simulate presence of tasks file under mountpoint
-            let tasks = target.join("tasks");
-            st.files.entry(tasks).or_default();
-            Ok(())
-        }
-    }
+    use crate::test_utils::mock_fs::MockFs;
 
     #[test]
     fn test_group_sanitization() {
@@ -557,7 +417,7 @@ mod tests {
 
     #[test]
     fn test_detect_support_not_mounted() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         // Provide empty /proc/mounts
         fs.add_file(Path::new("/proc/mounts"), "");
         let rc = Resctrl::with_provider(fs, Config::default());
@@ -583,7 +443,7 @@ mod tests {
 
     #[test]
     fn test_detect_support_proc_mounts_permission_denied() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(Path::new("/proc/mounts"), "");
         fs.set_no_perm_file(Path::new("/proc/mounts"));
         let rc = Resctrl::with_provider(fs, Config::default());
@@ -599,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_detect_support_mounted_and_writable() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         // Simulate mounted under default root
         fs.add_file(
             Path::new("/proc/mounts"),
@@ -618,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_detect_support_mounted_but_no_permission() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(
             Path::new("/proc/mounts"),
             "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
@@ -635,7 +495,7 @@ mod tests {
 
     #[test]
     fn test_ensure_mounted_respects_auto_mount_flag() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(Path::new("/proc/mounts"), "");
         let rc = Resctrl::with_provider(
             fs,
@@ -654,7 +514,7 @@ mod tests {
 
     #[test]
     fn test_ensure_mounted_performs_mount() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(Path::new("/proc/mounts"), "");
         // also ensure /sys and /sys/fs exist in mock
         fs.add_dir(Path::new("/sys"));
@@ -679,13 +539,10 @@ mod tests {
 
     #[test]
     fn test_ensure_mounted_permission_failure() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(Path::new("/proc/mounts"), "");
         // cause mount to fail with EPERM
-        {
-            let mut st = fs.state.borrow_mut();
-            st.mount_err = Some(libc::EPERM);
-        }
+        fs.set_mount_err(libc::EPERM);
         let rc = Resctrl::with_provider(
             fs,
             Config {
@@ -703,13 +560,10 @@ mod tests {
 
     #[test]
     fn test_ensure_mounted_unsupported_kernel() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(Path::new("/proc/mounts"), "");
         // cause mount to fail with ENODEV
-        {
-            let mut st = fs.state.borrow_mut();
-            st.mount_err = Some(libc::ENODEV);
-        }
+        fs.set_mount_err(libc::ENODEV);
         let rc = Resctrl::with_provider(
             fs,
             Config {
@@ -727,7 +581,7 @@ mod tests {
 
     #[test]
     fn test_create_group_success() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let cfg = Config {
@@ -756,7 +610,7 @@ mod tests {
 
     #[test]
     fn test_create_group_enospc_maps_capacity() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let cfg = Config {
@@ -774,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_delete_group_success() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -796,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_assign_tasks_success_and_missing() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -822,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_assign_tasks_no_permission() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -850,7 +704,7 @@ mod tests {
 
     #[test]
     fn test_assign_tasks_enoent_group_missing() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -878,7 +732,7 @@ mod tests {
 
     #[test]
     fn test_list_group_tasks_success() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -902,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_list_group_tasks_invalid_content() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -932,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_list_group_tasks_no_permission() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         let root = PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(&root);
         let group_path = root.join("pod_abc");
@@ -967,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_reconcile_group_converges() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         // Simulate mounted under default root
         fs.add_file(
             Path::new("/proc/mounts"),
@@ -993,13 +847,20 @@ mod tests {
 
         // Desired PIDs remain stable; should converge in <= 2 passes
         let desired = vec![101, 202];
-        let pid_source = || -> Result<Vec<i32>> { Ok(desired.clone()) };
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let pid_source = || -> Result<Vec<i32>> { 
+            *calls.borrow_mut() += 1;
+            Ok(desired.clone()) 
+        };
         let res = rc
             .reconcile_group(group_path.to_str().unwrap(), pid_source, 10)
             .expect("reconcile ok");
 
         assert_eq!(res.missing, 0);
         assert_eq!(res.assigned, desired.len());
+        // Should converge in 2 passes (first to assign, second to verify)
+        assert!(*calls.borrow() <= 2, "Expected <= 2 iterations, got {}", *calls.borrow());
 
         // Verify tasks file contains the assigned PIDs
         let listed = rc
@@ -1013,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_reconcile_group_partial_when_pids_missing() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         // Simulate mounted under default root
         fs.add_file(
             Path::new("/proc/mounts"),
@@ -1059,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_reconcile_group_converges_after_changes() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(
             Path::new("/proc/mounts"),
             "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
@@ -1097,7 +958,7 @@ mod tests {
 
     #[test]
     fn test_reconcile_group_noop_when_desired_already_present() {
-        let mut fs = MockFs::default();
+        let fs = MockFs::default();
         fs.add_file(
             Path::new("/proc/mounts"),
             "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
@@ -1115,11 +976,113 @@ mod tests {
             Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
         );
 
-        let pid_source = || -> Result<Vec<i32>> { Ok(vec![10, 11]) };
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let pid_source = || -> Result<Vec<i32>> { 
+            *calls.borrow_mut() += 1;
+            Ok(vec![10, 11]) 
+        };
         let res = rc
             .reconcile_group(group_path.to_str().unwrap(), pid_source, 5)
             .expect("reconcile ok");
         assert_eq!(res.missing, 0);
         assert_eq!(res.assigned, 0);
+        // Should only need 1 pass since PIDs are already there
+        assert_eq!(*calls.borrow(), 1, "Expected 1 iteration for already-present PIDs");
+    }
+
+    #[test]
+    fn test_reconcile_group_no_convergence_with_continuous_changes() {
+        let fs = MockFs::default();
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        let group_path = root.join("pod_chaos");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "");
+
+        // Mark all PIDs from earlier iterations as missing to simulate process churn
+        for i in 0..10 {
+            fs.set_missing_pid(100 + i);
+            fs.set_missing_pid(200 + i);
+        }
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+        );
+
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let pid_source = || -> Result<Vec<i32>> {
+            let iteration = *calls.borrow();
+            *calls.borrow_mut() += 1;
+            // PIDs keep changing every iteration - simulate high churn
+            Ok(vec![100 + iteration as i32, 200 + iteration as i32])
+        };
+
+        let max_passes = 5;
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, max_passes)
+            .expect("reconcile ok");
+
+        // Should not converge as all PIDs fail with ESRCH (missing)
+        assert_eq!(res.assigned, 0, "Should not have assigned any PIDs due to ESRCH");
+        assert_eq!(res.missing, 2, "Should have 2 missing PIDs from last iteration");
+        assert_eq!(*calls.borrow(), max_passes, "Should have tried all {} passes", max_passes);
+    }
+
+    #[test]
+    fn test_reconcile_group_handles_forking_processes() {
+        let fs = MockFs::default();
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        let group_path = root.join("pod_fork");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        // Simulate that PID 100 is already in resctrl group (parent already assigned)
+        fs.add_file(&tasks, "100\n");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+        );
+
+        use std::cell::RefCell;
+        let calls = RefCell::new(0usize);
+        let pid_source = || -> Result<Vec<i32>> {
+            *calls.borrow_mut() += 1;
+            // Simulate parent PID 100 forked and created child PIDs 101, 102
+            // All three PIDs are now in the cgroup
+            Ok(vec![100, 101, 102])
+        };
+
+        let res = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 10)
+            .expect("reconcile ok");
+
+        assert_eq!(res.missing, 0);
+        // Should have assigned the 2 new child PIDs (101, 102)
+        assert_eq!(res.assigned, 2);
+        assert!(*calls.borrow() <= 2, "Should converge quickly for fork scenario");
+
+        // Verify all PIDs are in the group
+        let listed = rc
+            .list_group_tasks(group_path.to_str().unwrap())
+            .expect("list ok");
+        assert_eq!(listed.len(), 3);
+        assert!(listed.contains(&100));
+        assert!(listed.contains(&101));
+        assert!(listed.contains(&102));
     }
 }
