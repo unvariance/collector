@@ -13,6 +13,9 @@ anyhow = { workspace = true }
 ttrpc = { workspace = true }
 protobuf = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+cgroups-rs = "0.3"
+
 [dev-dependencies]
 uuid = { workspace = true }
 tempfile = { workspace = true }
