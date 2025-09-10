@@ -10,7 +10,6 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use nri::metadata::{ContainerMetadata, MetadataMessage, MetadataPlugin};
 use nri::NRI;
@@ -100,9 +99,13 @@ impl NRIEnrichRecordBatchTask {
         input_schema: SchemaRef,
     ) -> Self {
         // Build output schema (input + appended nullable columns)
-        let mut fields: Vec<Field> = input_schema.fields().iter().cloned().collect();
-        for (name, dt) in ENRICH_FIELDS {
-            fields.push(Field::new(name, dt.clone(), true));
+        let mut fields: Vec<Field> = input_schema
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        for (name, dt) in ENRICH_FIELDS.iter() {
+            fields.push(Field::new(*name, dt.clone(), true));
         }
         let output_schema = Arc::new(Schema::new(fields));
 
@@ -542,4 +545,3 @@ mod tests {
         }
     }
 }
-
