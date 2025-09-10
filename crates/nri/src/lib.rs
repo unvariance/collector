@@ -212,3 +212,49 @@ pub mod types {
 // Include examples
 #[cfg(feature = "examples")]
 pub mod examples;
+
+/// Compute the full cgroups path from container and pod information.
+///
+/// The container.linux.cgroups_path contains a colon-delimited string like:
+/// "kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice:cri-containerd:cafbf51befe66f13ea3ece8780e7a7f711893d6fba12ddd5d689642fcdeba9b9"
+/// 
+/// The pod.linux.cgroup_parent contains the parent path like:
+/// "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice"
+///
+/// We need to extract the second and third parts from the container path and combine them as:
+/// "/sys/fs/cgroup" + pod.linux.cgroup_parent + "/" + second_part + "-" + third_part + ".scope"
+pub fn compute_full_cgroup_path(
+    container: &api::Container,
+    pod: Option<&api::PodSandbox>,
+) -> String {
+    // Get the container's cgroups path
+    let container_cgroups_path = container
+        .linux
+        .as_ref()
+        .map(|linux| linux.cgroups_path.as_str())
+        .unwrap_or("");
+
+    // Get the pod's cgroup parent
+    let pod_cgroup_parent = pod
+        .and_then(|p| p.linux.as_ref())
+        .map(|linux| linux.cgroup_parent.as_str())
+        .unwrap_or("");
+
+    // Parse the container cgroups path (colon-delimited)
+    let parts: Vec<&str> = container_cgroups_path.split(':').collect();
+    
+    // We need at least 3 parts: the first part (already in pod parent), runtime, and container ID
+    if parts.len() >= 3 && !pod_cgroup_parent.is_empty() {
+        let runtime = parts[1];  // e.g., "cri-containerd"
+        let container_id = parts[2];  // e.g., "cafbf51befe66f13ea3ece8780e7a7f711893d6fba12ddd5d689642fcdeba9b9"
+        
+        // Construct the full path
+        format!("/sys/fs/cgroup{}/{}-{}.scope", pod_cgroup_parent, runtime, container_id)
+    } else if !container_cgroups_path.is_empty() {
+        // Fallback: if we don't have the expected format, return the container path with prefix
+        format!("/sys/fs/cgroup/{}", container_cgroups_path)
+    } else {
+        // No cgroup information available
+        String::new()
+    }
+}

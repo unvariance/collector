@@ -81,11 +81,7 @@ impl MetadataPlugin {
         container: &api::Container,
         pod: Option<&api::PodSandbox>,
     ) -> ContainerMetadata {
-        let cgroup_path = if let Some(linux_container) = container.linux.as_ref() {
-            linux_container.cgroups_path.clone()
-        } else {
-            String::new()
-        };
+        let cgroup_path = crate::compute_full_cgroup_path(container, pod);
 
         let (pod_name, pod_namespace, pod_uid) = if let Some(pod) = pod {
             (pod.name.clone(), pod.namespace.clone(), pod.uid.clone())
@@ -256,14 +252,14 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
         let plugin = MetadataPlugin::new(tx);
 
-        // Create a test container
+        // Create a test container with colon-delimited cgroups_path
         let container = api::Container {
             id: "container1".to_string(),
             pod_sandbox_id: "pod1".to_string(),
             name: "test-container".to_string(),
             pid: 1234,
             linux: MessageField::some(api::LinuxContainer {
-                cgroups_path: "/sys/fs/cgroup/test".to_string(),
+                cgroups_path: "kubelet-kubepods-besteffort-pod123.slice:cri-containerd:abc123def456".to_string(),
                 namespaces: vec![],
                 devices: vec![],
                 resources: MessageField::none(),
@@ -273,7 +269,7 @@ mod tests {
             ..Default::default()
         };
 
-        // Create a test pod
+        // Create a test pod with linux cgroup_parent
         let pod = api::PodSandbox {
             id: "pod1".to_string(),
             name: "test-pod".to_string(),
@@ -282,7 +278,15 @@ mod tests {
             labels: Default::default(),
             annotations: Default::default(),
             runtime_handler: "".to_string(),
-            linux: MessageField::none(),
+            linux: MessageField::some(api::LinuxPodSandbox {
+                cgroup_parent: "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod123.slice".to_string(),
+                cgroups_path: String::new(),
+                pod_overhead: MessageField::none(),
+                pod_resources: MessageField::none(),
+                resources: MessageField::none(),
+                namespaces: vec![],
+                special_fields: SpecialFields::default(),
+            }),
             pid: 0,
             ips: vec![],
             special_fields: SpecialFields::default(),
@@ -297,7 +301,7 @@ mod tests {
         assert_eq!(metadata.pod_namespace, "test-namespace");
         assert_eq!(metadata.pod_uid, "pod-uid-123");
         assert_eq!(metadata.container_name, "test-container");
-        assert_eq!(metadata.cgroup_path, "/sys/fs/cgroup/test");
+        assert_eq!(metadata.cgroup_path, "/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod123.slice/cri-containerd-abc123def456.scope");
         assert_eq!(metadata.pid, Some(1234));
 
         // Test sending a message
@@ -316,6 +320,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_metadata_extraction_without_pod() {
+        // Create a channel for testing
+        let (tx, _rx) = mpsc::channel(100);
+        let plugin = MetadataPlugin::new(tx);
+
+        // Create a test container without pod information
+        let container = api::Container {
+            id: "container1".to_string(),
+            pod_sandbox_id: "pod1".to_string(),
+            name: "test-container".to_string(),
+            pid: 1234,
+            linux: MessageField::some(api::LinuxContainer {
+                cgroups_path: "system.slice/docker-abc123.scope".to_string(),
+                namespaces: vec![],
+                devices: vec![],
+                resources: MessageField::none(),
+                oom_score_adj: MessageField::none(),
+                special_fields: SpecialFields::default(),
+            }),
+            ..Default::default()
+        };
+
+        // Extract metadata without pod
+        let metadata = plugin.extract_metadata(&container, None);
+
+        // Verify metadata - should fall back to prefixing the container path
+        assert_eq!(metadata.container_id, "container1");
+        assert_eq!(metadata.pod_name, "");
+        assert_eq!(metadata.pod_namespace, "");
+        assert_eq!(metadata.pod_uid, "");
+        assert_eq!(metadata.container_name, "test-container");
+        assert_eq!(metadata.cgroup_path, "/sys/fs/cgroup/system.slice/docker-abc123.scope");
+        assert_eq!(metadata.pid, Some(1234));
+    }
+
+    #[tokio::test]
     async fn test_metadata_plugin_lifecycle() {
         // Create a channel for testing with sufficient capacity
         let (tx, mut rx) = mpsc::channel(100);
@@ -326,7 +366,7 @@ mod tests {
             id: &str,
             pod_id: &str,
             name: &str,
-            cgroup_path: &str,
+            container_hash: &str,
         ) -> api::Container {
             api::Container {
                 id: id.to_string(),
@@ -336,7 +376,7 @@ mod tests {
                 labels: Default::default(),
                 annotations: Default::default(),
                 linux: MessageField::some(api::LinuxContainer {
-                    cgroups_path: cgroup_path.to_string(),
+                    cgroups_path: format!("kubelet-kubepods-besteffort-{}.slice:cri-containerd:{}", pod_id, container_hash),
                     namespaces: vec![],
                     devices: vec![],
                     resources: MessageField::none(),
@@ -369,7 +409,15 @@ mod tests {
                 labels: Default::default(),
                 annotations: Default::default(),
                 runtime_handler: "".to_string(),
-                linux: MessageField::none(),
+                linux: MessageField::some(api::LinuxPodSandbox {
+                    cgroup_parent: format!("/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-{}.slice", id),
+                    cgroups_path: String::new(),
+                    pod_overhead: MessageField::none(),
+                    pod_resources: MessageField::none(),
+                    resources: MessageField::none(),
+                    namespaces: vec![],
+                    special_fields: SpecialFields::default(),
+                }),
                 pid: 0,
                 ips: vec![],
                 special_fields: SpecialFields::default(),
@@ -382,12 +430,14 @@ mod tests {
             expected_container_id: &str,
             expected_pod_name: &str,
             expected_container_name: &str,
-            expected_cgroup_path: &str,
+            expected_pod_id: &str,
+            expected_container_hash: &str,
         ) {
             assert_eq!(metadata.container_id, expected_container_id);
             assert_eq!(metadata.pod_name, expected_pod_name);
             assert_eq!(metadata.container_name, expected_container_name);
-            assert_eq!(metadata.cgroup_path, expected_cgroup_path);
+            let expected_cgroup = format!("/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-{}.slice/cri-containerd-{}.scope", expected_pod_id, expected_container_hash);
+            assert_eq!(metadata.cgroup_path, expected_cgroup);
         }
 
         let context = TtrpcContext {
@@ -426,7 +476,7 @@ mod tests {
             "container1",
             "pod1",
             "test-container",
-            "/sys/fs/cgroup/test",
+            "abc123def456",
         );
 
         let sync_req = SynchronizeRequest {
@@ -448,7 +498,8 @@ mod tests {
                     "container1",
                     "test-pod",
                     "test-container",
-                    "/sys/fs/cgroup/test",
+                    "pod1",
+                    "abc123def456",
                 );
             }
             _ => panic!("Expected Add message for container1"),
@@ -457,7 +508,7 @@ mod tests {
         // Test 3: Create a new container
         let new_pod = create_test_pod("pod2", "new-pod", "test-namespace");
         let new_container =
-            create_test_container("container2", "pod2", "new-container", "/sys/fs/cgroup/new");
+            create_test_container("container2", "pod2", "new-container", "xyz789ghi012");
 
         let create_req = CreateContainerRequest {
             pod: MessageField::some(new_pod),
@@ -477,7 +528,8 @@ mod tests {
                     "container2",
                     "new-pod",
                     "new-container",
-                    "/sys/fs/cgroup/new",
+                    "pod2",
+                    "xyz789ghi012",
                 );
             }
             _ => panic!("Expected Add message for container2"),
@@ -489,7 +541,7 @@ mod tests {
             "container2",
             "pod2",
             "new-container",
-            "/sys/fs/cgroup/updated",
+            "xyz789ghi012",
         );
         updated_container.pid = 2000;
 
@@ -512,7 +564,8 @@ mod tests {
                     "container2",
                     "new-pod",
                     "new-container",
-                    "/sys/fs/cgroup/updated",
+                    "pod2",
+                    "xyz789ghi012",
                 );
                 assert_eq!(metadata.pid, Some(2000));
             }
@@ -525,7 +578,7 @@ mod tests {
             "container1",
             "pod1",
             "test-container",
-            "/sys/fs/cgroup/test",
+            "abc123def456",
         );
 
         let stop_req = StopContainerRequest {
