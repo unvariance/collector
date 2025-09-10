@@ -320,6 +320,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_metadata_extraction_with_prefix_in_parent() {
+        // Create a channel for testing
+        let (tx, _rx) = mpsc::channel(100);
+        let plugin = MetadataPlugin::new(tx);
+
+        // Create a test container with colon-delimited cgroups_path
+        let container = api::Container {
+            id: "container1".to_string(),
+            pod_sandbox_id: "pod1".to_string(),
+            name: "test-container".to_string(),
+            pid: 1234,
+            linux: MessageField::some(api::LinuxContainer {
+                cgroups_path: "kubelet-kubepods-besteffort-pod123.slice:cri-containerd:abc123def456".to_string(),
+                namespaces: vec![],
+                devices: vec![],
+                resources: MessageField::none(),
+                oom_score_adj: MessageField::none(),
+                special_fields: SpecialFields::default(),
+            }),
+            ..Default::default()
+        };
+
+        // Create a test pod with linux cgroup_parent that already has the prefix
+        let pod = api::PodSandbox {
+            id: "pod1".to_string(),
+            name: "test-pod".to_string(),
+            namespace: "test-namespace".to_string(),
+            uid: "pod-uid-123".to_string(),
+            labels: Default::default(),
+            annotations: Default::default(),
+            runtime_handler: "".to_string(),
+            linux: MessageField::some(api::LinuxPodSandbox {
+                cgroup_parent: "/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod123.slice".to_string(),
+                cgroups_path: String::new(),
+                pod_overhead: MessageField::none(),
+                pod_resources: MessageField::none(),
+                resources: MessageField::none(),
+                namespaces: vec![],
+                special_fields: SpecialFields::default(),
+            }),
+            pid: 0,
+            ips: vec![],
+            special_fields: SpecialFields::default(),
+        };
+
+        // Extract metadata
+        let metadata = plugin.extract_metadata(&container, Some(&pod));
+
+        // Verify metadata - should not duplicate the prefix
+        assert_eq!(metadata.container_id, "container1");
+        assert_eq!(metadata.pod_name, "test-pod");
+        assert_eq!(metadata.pod_namespace, "test-namespace");
+        assert_eq!(metadata.pod_uid, "pod-uid-123");
+        assert_eq!(metadata.container_name, "test-container");
+        assert_eq!(metadata.cgroup_path, "/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-pod123.slice/cri-containerd-abc123def456.scope");
+        assert_eq!(metadata.pid, Some(1234));
+    }
+
+    #[tokio::test]
     async fn test_metadata_extraction_without_pod() {
         // Create a channel for testing
         let (tx, _rx) = mpsc::channel(100);

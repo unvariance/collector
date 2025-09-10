@@ -220,9 +220,11 @@ pub mod examples;
 /// 
 /// The pod.linux.cgroup_parent contains the parent path like:
 /// "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice"
+/// or sometimes with the prefix already:
+/// "/sys/fs/cgroup/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice"
 ///
 /// We need to extract the second and third parts from the container path and combine them as:
-/// "/sys/fs/cgroup" + pod.linux.cgroup_parent + "/" + second_part + "-" + third_part + ".scope"
+/// "/sys/fs/cgroup" (if not present) + pod.linux.cgroup_parent + "/" + second_part + "-" + third_part + ".scope"
 pub fn compute_full_cgroup_path(
     container: &api::Container,
     pod: Option<&api::PodSandbox>,
@@ -248,11 +250,22 @@ pub fn compute_full_cgroup_path(
         let runtime = parts[1];  // e.g., "cri-containerd"
         let container_id = parts[2];  // e.g., "cafbf51befe66f13ea3ece8780e7a7f711893d6fba12ddd5d689642fcdeba9b9"
         
+        // Check if pod_cgroup_parent already has the /sys/fs/cgroup prefix
+        let full_parent = if pod_cgroup_parent.starts_with("/sys/fs/cgroup") {
+            pod_cgroup_parent.to_string()
+        } else {
+            format!("/sys/fs/cgroup{}", pod_cgroup_parent)
+        };
+        
         // Construct the full path
-        format!("/sys/fs/cgroup{}/{}-{}.scope", pod_cgroup_parent, runtime, container_id)
+        format!("{}/{}-{}.scope", full_parent, runtime, container_id)
     } else if !container_cgroups_path.is_empty() {
-        // Fallback: if we don't have the expected format, return the container path with prefix
-        format!("/sys/fs/cgroup/{}", container_cgroups_path)
+        // Fallback: if we don't have the expected format, return the container path with prefix if needed
+        if container_cgroups_path.starts_with("/sys/fs/cgroup") {
+            container_cgroups_path.to_string()
+        } else {
+            format!("/sys/fs/cgroup/{}", container_cgroups_path)
+        }
     } else {
         // No cgroup information available
         String::new()
