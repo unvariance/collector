@@ -129,6 +129,8 @@ spec:
             - name: data-volume
               mountPath: /data
             {{- end }}
+            - name: var-run
+              mountPath: /var/run
             - name: sys-kernel-debug
               mountPath: /sys/kernel/debug
             - name: sys-kernel-tracing

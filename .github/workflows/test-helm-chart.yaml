@@ -346,8 +346,12 @@ jobs:
             echo "Setting up aggregated mode field verification..."
             REQUIRED_FIELDS=("pid" "start_time" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses")
           fi
+
+          # NRI enrichment fields are expected in both modes (nullable)
+          ENRICH_FIELDS=("pod_name" "pod_namespace" "pod_uid" "container_name" "container_id")
+          REQUIRED_FIELDS+=("${ENRICH_FIELDS[@]}")
           
-          # Verify all required fields are present in schema
+          # Verify all required fields are present in schema (including NRI enrichment)
           echo "Verifying required fields in schema..."
           for field in "${REQUIRED_FIELDS[@]}"; do
             if ! grep -q "$field" schema.txt; then
@@ -389,6 +393,167 @@ jobs:
           done
           
           echo "Parquet file verification completed successfully for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode"
+
+  nri-enrichment-e2e:
+    name: NRI Enrichment E2E
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    env:
+      HOME: /root
+      KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+      POD_NAME: nri-enrichment-test
+      POD_NAMESPACE: default
+      EXPECTED_COMM: sleep
+      RELEASE_NAME: collector-nri-e2e
+    steps:
+      - name: Create HOME directory
+        run: mkdir -p $HOME
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Install K3s (recent version with NRI enabled by default)
+        run: |
+          curl -sfL https://get.k3s.io | sh
+          systemctl status k3s || true
+
+      - name: Wait for Kubernetes API
+        run: |
+          echo "Waiting for Kubernetes API..."
+          until kubectl get nodes &>/dev/null; do
+            sleep 1
+            echo "Still waiting..."
+          done
+          echo "Kubernetes API is available!"
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+          pqrs --version
+
+      - name: Deploy test pod (${POD_NAME})
+        run: |
+          cat > pod.yaml << EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: ${POD_NAME}
+            namespace: ${POD_NAMESPACE}
+            labels:
+              app: nri-enrichment-test
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: tester
+                image: busybox:1.36
+                command: ["sh", "-c", "sleep 600"]
+          EOF
+          kubectl apply -f pod.yaml
+          kubectl wait --for=condition=Ready pod/${POD_NAME} -n ${POD_NAMESPACE} --timeout=90s
+          kubectl get pod ${POD_NAME} -n ${POD_NAMESPACE} -o wide
+
+      - name: Deploy Collector (local storage)
+        run: |
+          # Use local chart and local storage; var-run is mounted by the chart to access NRI socket
+          cat > values-override.yaml << EOF
+          collector:
+            verbose: true
+            trace: false
+          storage:
+            type: "local"
+            prefix: "nri-e2e-"
+          EOF
+          helm upgrade --install ${RELEASE_NAME} ./charts/collector -f values-override.yaml
+          kubectl wait --for=condition=Ready pods --timeout=120s -l app.kubernetes.io/name=collector
+          kubectl get pods -l app.kubernetes.io/name=collector -o wide
+
+      - name: Let collector run and gather data
+        run: |
+          echo "Sleeping to allow metrics collection..."
+          sleep 20
+
+      - name: Flush and stop collector
+        run: |
+          COLLECTOR_POD=$(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "Collector pod: $COLLECTOR_POD"
+          # Trigger graceful shutdown to flush parquet
+          kubectl exec "$COLLECTOR_POD" -c collector -- /bin/sh -c "kill -INT 1" || true
+          sleep 5
+
+      - name: Copy parquet to host
+        run: |
+          COLLECTOR_POD=$(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+          echo "Collector pod: $COLLECTOR_POD"
+          echo "Listing files in /data:"
+          kubectl exec "$COLLECTOR_POD" -c collector -- ls -la /data || true
+          FILE=$(kubectl exec "$COLLECTOR_POD" -c collector -- /bin/sh -c "ls -1 /data/*.parquet 2>/dev/null | head -n1")
+          if [ -z "$FILE" ]; then
+            echo "No parquet file found in collector pod"
+            exit 1
+          fi
+          echo "Found parquet: $FILE"
+          kubectl cp "$COLLECTOR_POD:$FILE" /tmp/nri-e2e.parquet -c collector
+          ls -la /tmp/nri-e2e.parquet
+
+      - name: Verify enrichment fields and values
+        env:
+          PARQUET: /tmp/nri-e2e.parquet
+        run: |
+          echo "Schema:"
+          pqrs schema "$PARQUET"
+          # Verify fields exist
+          for f in pod_name pod_namespace pod_uid container_name container_id process_name cgroup_id; do
+            if ! pqrs schema "$PARQUET" | grep -q "$f"; then
+              echo "Missing expected field: $f"
+              exit 1
+            fi
+          done
+          # Filter rows for our pod
+          pqrs cat --json "$PARQUET" | jq -c "select(.pod_name==\"$POD_NAME\")" > /tmp/nri-rows.json || true
+          COUNT=$(wc -l < /tmp/nri-rows.json | tr -d ' ')
+          echo "Rows for pod $POD_NAME: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "No rows found for pod $POD_NAME; enrichment likely failed"
+            exit 1
+          fi
+          # Verify container name matches
+          CNAMES=$(jq -r .container_name /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Container names: $CNAMES"
+          if ! echo "$CNAMES" | grep -qw "tester"; then
+            echo "Expected container_name 'tester' not found"
+            exit 1
+          fi
+          # Verify process name includes expected comm (sleep)
+          COMMS=$(jq -r .process_name /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Process names: $COMMS"
+          if ! echo "$COMMS" | grep -qw "$EXPECTED_COMM"; then
+            echo "Expected process_name '$EXPECTED_COMM' not found among: $COMMS"
+            exit 1
+          fi
+          # Verify namespace
+          NSES=$(jq -r .pod_namespace /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Namespaces: $NSES"
+          if ! echo "$NSES" | grep -qw "$POD_NAMESPACE"; then
+            echo "Expected pod_namespace '$POD_NAMESPACE' not found"
+            exit 1
+          fi
+          echo "✅ NRI enrichment verified for pod $POD_NAME"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          helm uninstall ${RELEASE_NAME} --wait --timeout=60s || true
+          kubectl delete pod ${POD_NAME} -n ${POD_NAMESPACE} --ignore-not-found
 
   stop-runner:
     name: Stop EC2 runner

@@ -27,6 +27,7 @@ mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
 mod timeslot_to_recordbatch_task;
+mod nri_enrich_recordbatch_task;
 
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
@@ -34,6 +35,7 @@ use perf_event_processor::{PerfEventProcessor, ProcessorMode};
 use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
+use nri_enrich_recordbatch_task::NRIEnrichRecordBatchTask;
 
 /// Number of perf ring buffer pages for timeslot mode
 const TIMESLOT_PERF_RING_PAGES: u32 = 32;
@@ -212,6 +214,9 @@ async fn main() -> Result<()> {
     };
 
     // Create channels for the pipeline
+    // Upstream processors -> Enricher
+    let (pre_enrich_sender, pre_enrich_receiver) = mpsc::channel::<RecordBatch>(1000);
+    // Enricher -> Writer
     let (batch_sender, batch_receiver) = mpsc::channel::<RecordBatch>(1000);
     let (rotate_sender, rotate_receiver) = mpsc::channel::<()>(1);
 
@@ -220,16 +225,16 @@ async fn main() -> Result<()> {
     let task_tracker = TaskTracker::new();
 
     // Configure processor mode and schema based on trace flag
-    let (processor_mode, schema) = if opts.trace {
+    let (processor_mode, input_schema) = if opts.trace {
         // Trace mode: direct RecordBatch output
         let schema = crate::bpf_perf_to_trace::create_schema();
-        (ProcessorMode::Trace(batch_sender), schema)
+        (ProcessorMode::Trace(pre_enrich_sender), schema)
     } else {
         // Timeslot mode: aggregated output with conversion
         let (timeslot_sender, timeslot_receiver) = mpsc::channel::<TimeslotData>(1000);
 
         // Create the conversion task and get schema
-        let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, batch_sender);
+        let conversion_task = TimeslotToRecordBatchTask::new(timeslot_receiver, pre_enrich_sender);
         let schema = conversion_task.schema();
 
         // Spawn the conversion task
@@ -241,6 +246,17 @@ async fn main() -> Result<()> {
 
         (ProcessorMode::Timeslot(timeslot_sender), schema)
     };
+
+    // Create the NRI enrichment task between conversion/trace and the writer
+    let enrich_task = NRIEnrichRecordBatchTask::new(pre_enrich_receiver, batch_sender, input_schema.clone());
+    let schema = enrich_task.schema();
+
+    // Spawn the enrichment task
+    task_tracker.spawn(task_completion_handler(
+        enrich_task.run(),
+        shutdown_token.clone(),
+        "NRIEnrichRecordBatchTask",
+    ));
 
     // Create the ParquetWriter with the appropriate schema
     debug!(
