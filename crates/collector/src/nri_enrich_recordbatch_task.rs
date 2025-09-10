@@ -315,7 +315,7 @@ impl NRIEnrichRecordBatchTask {
                 }
 
                 // Handle metadata messages to update mapping
-                maybe_msg = self.metadata_rx.recv() => {
+                maybe_msg = self.metadata_rx.recv(), if self.nri.is_some() => {
                     if let Some(msg) = maybe_msg {
                         self.process_metadata_message(msg);
                     } else {
