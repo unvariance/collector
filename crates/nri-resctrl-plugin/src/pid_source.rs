@@ -32,43 +32,16 @@ impl CgroupPidSource for RealCgroupPidSource {
             return vec![];
         }
 
-        // Try to use cgroups-rs to get PIDs
-        match Cgroup::load_from_relative_path(cg_path.clone()) {
+        // Use cgroups-rs to get PIDs
+        match Cgroup::load_from_relative_path(cg_path) {
             Ok(cgroup) => {
                 // Get all PIDs (processes) in this cgroup
-                match cgroup.procs() {
-                    Ok(pids) => pids.into_iter()
-                        .map(|pid| pid.pid as i32)
-                        .collect(),
-                    Err(_) => {
-                        // Fallback to reading files directly if cgroups-rs fails
-                        Self::read_pids_from_files(&cg_path)
-                    }
-                }
+                cgroup.procs()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|pid| pid.pid as i32)
+                    .collect()
             }
-            Err(_) => {
-                // Fallback to reading files directly if cgroup loading fails
-                Self::read_pids_from_files(&cg_path)
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl RealCgroupPidSource {
-    fn read_pids_from_files(cg_path: &str) -> Vec<i32> {
-        // Read cgroup.procs or tasks file directly as fallback
-        let procs_path = std::path::PathBuf::from(cg_path).join("cgroup.procs");
-        let tasks_path = std::path::PathBuf::from(cg_path).join("tasks");
-        
-        let s = std::fs::read_to_string(&procs_path)
-            .or_else(|_| std::fs::read_to_string(&tasks_path));
-            
-        match s {
-            Ok(content) => content
-                .lines()
-                .filter_map(|l| l.trim().parse::<i32>().ok())
-                .collect(),
             Err(_) => vec![],
         }
     }
