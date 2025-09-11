@@ -706,7 +706,7 @@ mod tests {
                     Ok(0) => break,
                     Ok(n) => {
                         // Echo back the data
-                        if let Err(_) = server.write_all(&buf[..n]).await {
+                        if server.write_all(&buf[..n]).await.is_err() {
                             break;
                         }
                     }
