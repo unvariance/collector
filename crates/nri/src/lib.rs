@@ -242,32 +242,33 @@ pub fn compute_full_cgroup_path(
         .map(|linux| linux.cgroup_parent.as_str())
         .unwrap_or("");
 
+    // Early return if there's no cgroup information at all
+    if container_cgroups_path.is_empty() && pod_cgroup_parent.is_empty() {
+        return String::new();
+    }
+
+    // Helper to ensure a path is rooted at /sys/fs/cgroup without duplicating slashes
+    fn ensure_cgroup_prefix(path: &str) -> String {
+        if path.starts_with("/sys/fs/cgroup") {
+            path.to_string()
+        } else if path.starts_with('/') {
+            format!("/sys/fs/cgroup{}", path)
+        } else {
+            format!("/sys/fs/cgroup/{}", path)
+        }
+    }
+
     // Parse the container cgroups path (colon-delimited)
     let parts: Vec<&str> = container_cgroups_path.split(':').collect();
-    
-    // We need at least 3 parts: the first part (already in pod parent), runtime, and container ID
+
+    // Preferred construction when we have both pod parent and container runtime/id
     if parts.len() >= 3 && !pod_cgroup_parent.is_empty() {
-        let runtime = parts[1];  // e.g., "cri-containerd"
-        let container_id = parts[2];  // e.g., "cafbf51befe66f13ea3ece8780e7a7f711893d6fba12ddd5d689642fcdeba9b9"
-        
-        // Check if pod_cgroup_parent already has the /sys/fs/cgroup prefix
-        let full_parent = if pod_cgroup_parent.starts_with("/sys/fs/cgroup") {
-            pod_cgroup_parent.to_string()
-        } else {
-            format!("/sys/fs/cgroup{}", pod_cgroup_parent)
-        };
-        
-        // Construct the full path
-        format!("{}/{}-{}.scope", full_parent, runtime, container_id)
-    } else if !container_cgroups_path.is_empty() {
-        // Fallback: if we don't have the expected format, return the container path with prefix if needed
-        if container_cgroups_path.starts_with("/sys/fs/cgroup") {
-            container_cgroups_path.to_string()
-        } else {
-            format!("/sys/fs/cgroup/{}", container_cgroups_path)
-        }
-    } else {
-        // No cgroup information available
-        String::new()
+        let runtime = parts[1];       // e.g., "cri-containerd"
+        let container_id = parts[2];  // e.g., "cafb..."
+        let full_parent = ensure_cgroup_prefix(pod_cgroup_parent);
+        return format!("{}/{}-{}.scope", full_parent, runtime, container_id);
     }
+
+    // Fallback: return container path (already absolute) with the cgroup prefix if missing
+    ensure_cgroup_prefix(container_cgroups_path)
 }

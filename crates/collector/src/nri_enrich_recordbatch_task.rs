@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -10,6 +10,7 @@ use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use nri::metadata::{ContainerMetadata, MetadataMessage, MetadataPlugin};
 use nri::NRI;
@@ -23,49 +24,14 @@ const ENRICH_FIELDS: &[(&str, DataType)] = &[
     ("container_id", DataType::Utf8),
 ];
 
-/// Resolve a cgroup2 mount point by scanning /proc/self/mountinfo
-fn find_cgroup2_mount_point() -> Result<PathBuf> {
-    let mount_info = fs::read_to_string("/proc/self/mountinfo")
-        .context("Failed to read /proc/self/mountinfo")?;
-
-    for line in mount_info.lines() {
-        // mountinfo format:
-        // 33 30 0:29 / /sys/fs/cgroup rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 9 && parts[8].contains("cgroup2") {
-            // parts[4] is the mountpoint
-            let mount_point = parts[4].to_string();
-            return Ok(PathBuf::from(mount_point));
-        }
-    }
-
-    Err(anyhow!("Could not find cgroup2 mount point"))
-}
-
 /// Attempt to resolve a cgroup path to an inode number (cgroup id)
 ///
-/// Handles:
-/// - Absolute cgroup paths (stat directly)
-/// - Paths relative to cgroup2 mountpoint (join accordingly)
+/// Assumes `cgroup_path` is an absolute path under `/sys/fs/cgroup` and attempts to
+/// resolve its inode number via `stat`.
 fn resolve_cgroup_inode(cgroup_path: &str) -> Result<u64> {
-    // First try as-is if it's an absolute path
     let path = Path::new(cgroup_path);
-    if path.is_absolute() {
-        if let Ok(metadata) = fs::metadata(path) {
-            return Ok(metadata.ino());
-        }
-    }
-
-    // Otherwise, try to join with the cgroup2 mount point
-    let mount_point = find_cgroup2_mount_point()?;
-    let joined = if cgroup_path.starts_with('/') {
-        mount_point.join(&cgroup_path[1..])
-    } else {
-        mount_point.join(cgroup_path)
-    };
-
-    let metadata = fs::metadata(&joined)
-        .with_context(|| format!("Failed to get metadata for cgroup path: {:?}", joined))?;
+    let metadata = fs::metadata(path)
+        .with_context(|| format!("Failed to get metadata for cgroup path: {:?}", path))?;
     Ok(metadata.ino())
 }
 
@@ -83,7 +49,8 @@ pub struct NRIEnrichRecordBatchTask {
 
     // NRI runtime
     nri: Option<NRI>,
-    nri_join_done: Option<tokio::sync::oneshot::Receiver<anyhow::Result<()>>>,
+    // Cancellation token for coordinating with outer runtime
+    shutdown_token: CancellationToken,
 
     // Mapping structures
     container_to_inode: HashMap<String, u64>,
@@ -96,6 +63,7 @@ impl NRIEnrichRecordBatchTask {
         batch_receiver: mpsc::Receiver<RecordBatch>,
         batch_sender: mpsc::Sender<RecordBatch>,
         input_schema: SchemaRef,
+        shutdown_token: CancellationToken,
     ) -> Self {
         // Build output schema (input + appended nullable columns)
         let mut fields: Vec<Field> = input_schema
@@ -117,7 +85,7 @@ impl NRIEnrichRecordBatchTask {
             output_schema,
             metadata_rx: rx,
             nri: None,
-            nri_join_done: None,
+            shutdown_token,
             container_to_inode: HashMap::new(),
             inode_to_metadata: HashMap::new(),
         }
@@ -128,8 +96,9 @@ impl NRIEnrichRecordBatchTask {
         self.output_schema.clone()
     }
 
-    /// Initialize NRI plugin and connection. Returns Ok if connected or best-effort disabled.
-    async fn init_nri(&mut self) -> Result<()> {
+    /// Initialize NRI plugin and connection. Returns Ok and a JoinHandle if connected, or Ok(None)
+    /// if best-effort disabled.
+    async fn init_nri(&mut self) -> Result<Option<tokio::task::JoinHandle<Result<()>>>> {
         // Rebuild a fresh channel for metadata messages and plugin
         let (tx, rx) = mpsc::channel::<MetadataMessage>(1000);
         self.metadata_rx = rx;
@@ -155,20 +124,9 @@ impl NRIEnrichRecordBatchTask {
                     return Ok(()); // Best-effort: remain without an active NRI
                 }
 
-                // Create a oneshot channel to receive join result
-                let (done_tx, done_rx) = tokio::sync::oneshot::channel();
-                tokio::spawn(async move {
-                    let res = join_handle.await;
-                    let mapped = match res {
-                        Ok(inner) => inner,
-                        Err(join_err) => Err(anyhow!("NRI join error: {}", join_err)),
-                    };
-                    let _ = done_tx.send(mapped);
-                });
-
                 self.nri = Some(nri);
-                self.nri_join_done = Some(done_rx);
                 info!("NRI plugin registered successfully");
+                Ok(Some(join_handle))
             }
             Err(e) => {
                 warn!(
@@ -176,10 +134,9 @@ impl NRIEnrichRecordBatchTask {
                     socket_path, e
                 );
                 // Best-effort: keep nri as None; enrichment will produce nulls
+                Ok(None)
             }
         }
-
-        Ok(())
     }
 
     /// Process a single metadata message: update or remove mappings
@@ -234,6 +191,9 @@ impl NRIEnrichRecordBatchTask {
         let num_rows = batch.num_rows();
 
         // Builders for enrichment columns
+        // Note: append_value may extend the StringBuilders if they need more space. We preallocate
+        // ~16 bytes per row on average to balance memory usage with the overhead of reallocations;
+        // not every row may have a value and the actual string sizes can be smaller overall.
         let mut pod_name_b = StringBuilder::with_capacity(num_rows, num_rows * 16);
         let mut pod_ns_b = StringBuilder::with_capacity(num_rows, num_rows * 16);
         let mut pod_uid_b = StringBuilder::with_capacity(num_rows, num_rows * 16);
@@ -272,11 +232,30 @@ impl NRIEnrichRecordBatchTask {
     /// Run the enrichment task: read metadata and batches, output enriched batches
     pub async fn run(mut self) -> Result<()> {
         // Try initializing NRI (best-effort)
-        if let Err(e) = self.init_nri().await {
-            warn!(
-                "Failed to initialize NRI (best-effort mode, continuing without enrichment): {}",
-                e
-            );
+        match self.init_nri().await {
+            Ok(Some(join_handle)) => {
+                // Monitor NRI lifecycle using the common task completion handler
+                let token = self.shutdown_token.clone();
+                tokio::spawn(async move {
+                    crate::task_completion_handler::task_completion_handler(
+                        async move {
+                            join_handle
+                                .await
+                                .map_err(|e| anyhow!("NRI join error: {}", e))?
+                        },
+                        token,
+                        "NRIPlugin",
+                    )
+                    .await;
+                });
+            }
+            Ok(None) => { /* best-effort without NRI */ }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize NRI (best-effort mode, continuing without enrichment): {}",
+                    e
+                );
+            }
         }
 
         loop {
@@ -288,27 +267,21 @@ impl NRIEnrichRecordBatchTask {
                             match self.enrich_batch(&batch) {
                                 Ok(enriched) => {
                                     if let Err(e) = self.batch_sender.send(enriched).await {
-                                        // Downstream closed - stop the task
-                                        debug!("Downstream batch channel closed: {}", e);
+                                        // Shutdown should initiate from upstream; downstream closed is an error
+                                        error!("Downstream batch channel closed unexpectedly: {}", e);
                                         break;
                                     }
                                 },
                                 Err(e) => {
-                                    // If enrichment fails due to schema issues, log and forward original batch
-                                    warn!("Failed to enrich batch (forwarding original): {}", e);
-                                    if let Err(e) = self.batch_sender.send(batch).await {
-                                        debug!("Downstream batch channel closed: {}", e);
-                                        break;
-                                    }
+                                    // Treat enrichment failure as fatal
+                                    error!("Failed to enrich batch: {}", e);
+                                    break;
                                 }
                             }
                         },
                         None => {
-                            // Input closed; shutdown NRI and exit
-                            debug!("Input batch channel closed, shutting down NRI enrichment task");
-                            if let Some(nri) = &self.nri {
-                                let _ = nri.close().await; // best-effort close
-                            }
+                            // Input closed; shut down
+                            debug!("Input batch channel closed, shutting down");
                             break;
                         }
                     }
@@ -319,43 +292,20 @@ impl NRIEnrichRecordBatchTask {
                     if let Some(msg) = maybe_msg {
                         self.process_metadata_message(msg);
                     } else {
-                        // If the metadata channel closed unexpectedly, keep going; enrichment stays best-effort
-                        debug!("NRI metadata channel closed");
-                    }
-                }
-
-                // Monitor NRI plugin lifecycle when active
-                result = async {
-                    if let Some(done_rx) = &mut self.nri_join_done {
-                        Some(done_rx.await)
-                    } else {
-                        None
-                    }
-                } => {
-                    if let Some(join_result) = result {
-                        match join_result {
-                            Ok(Ok(())) => {
-                                // Clean shutdown of NRI; continue processing without enrichment
-                                info!("NRI plugin exited cleanly");
-                                self.nri = None;
-                                self.nri_join_done = None;
-                            }
-                            Ok(Err(e)) => {
-                                error!("NRI plugin failed: {}", e);
-                                // Propagate error to task_completion_handler as required by spec
-                                return Err(e);
-                            }
-                            Err(recv_err) => {
-                                // oneshot channel dropped; treat as non-fatal
-                                debug!("NRI join result channel dropped: {}", recv_err);
-                                self.nri = None;
-                                self.nri_join_done = None;
-                            }
-                        }
+                        // If the metadata channel closed unexpectedly, treat as error
+                        error!("NRI metadata channel closed unexpectedly");
+                        break;
                     }
                 }
             }
         }
+
+        // Cleanup NRI on any exit path
+        if let Some(nri) = &self.nri {
+            let _ = nri.close().await;
+        }
+        // Close downstream to signal shutdown
+        self.batch_sender.close_channel();
 
         Ok(())
     }
@@ -400,7 +350,12 @@ mod tests {
     fn test_schema_appended_fields() {
         let schema = make_input_schema();
         let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let task = NRIEnrichRecordBatchTask::new(rx, tx, schema.clone());
+        let task = NRIEnrichRecordBatchTask::new(
+            rx,
+            tx,
+            schema.clone(),
+            CancellationToken::new(),
+        );
         let out = task.schema();
         assert_eq!(
             out.fields().len(),
@@ -433,7 +388,7 @@ mod tests {
     fn test_process_metadata_map_updates() {
         let schema = make_input_schema();
         let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let mut task = NRIEnrichRecordBatchTask::new(rx, tx, schema);
+        let mut task = NRIEnrichRecordBatchTask::new(rx, tx, schema, CancellationToken::new());
 
         // Use a known directory for inode: root "/" should exist
         let inode = fs::metadata("/").unwrap().ino();
@@ -462,7 +417,12 @@ mod tests {
     fn test_enrich_batch_known_unknown() {
         let schema = make_input_schema();
         let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let mut task = NRIEnrichRecordBatchTask::new(rx, tx, schema.clone());
+        let mut task = NRIEnrichRecordBatchTask::new(
+            rx,
+            tx,
+            schema.clone(),
+            CancellationToken::new(),
+        );
 
         // Prepare mapping for inode 42
         let cm = ContainerMetadata {
@@ -543,8 +503,13 @@ mod tests {
             }
         }
         if let Some(path) = cg_path {
-            // Not asserting equality with bpf here, just ensure it doesn't error
-            let _ = resolve_cgroup_inode(&path);
+            // Construct absolute cgroup path under /sys/fs/cgroup
+            let abs_path = if path.starts_with('/') {
+                format!("/sys/fs/cgroup{}", path)
+            } else {
+                format!("/sys/fs/cgroup/{}", path)
+            };
+            let _ = resolve_cgroup_inode(&abs_path);
         }
     }
 }
