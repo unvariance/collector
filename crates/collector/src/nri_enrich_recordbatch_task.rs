@@ -11,6 +11,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use nri::metadata::{ContainerMetadata, MetadataMessage, MetadataPlugin};
 use nri::NRI;
@@ -51,6 +52,8 @@ pub struct NRIEnrichRecordBatchTask {
     nri: Option<NRI>,
     // Cancellation token for coordinating with outer runtime
     shutdown_token: CancellationToken,
+    // Tracker for internal tasks (e.g., NRI plugin lifecycle)
+    task_tracker: TaskTracker,
 
     // Mapping structures
     container_to_inode: HashMap<String, u64>,
@@ -86,6 +89,7 @@ impl NRIEnrichRecordBatchTask {
             metadata_rx: rx,
             nri: None,
             shutdown_token,
+            task_tracker: TaskTracker::new(),
             container_to_inode: HashMap::new(),
             inode_to_metadata: HashMap::new(),
         }
@@ -236,18 +240,16 @@ impl NRIEnrichRecordBatchTask {
             Ok(Some(join_handle)) => {
                 // Monitor NRI lifecycle using the common task completion handler
                 let token = self.shutdown_token.clone();
-                tokio::spawn(async move {
-                    crate::task_completion_handler::task_completion_handler(
-                        async move {
-                            join_handle
-                                .await
-                                .map_err(|e| anyhow!("NRI join error: {}", e))?
-                        },
-                        token,
-                        "NRIPlugin",
-                    )
-                    .await;
-                });
+                self.task_tracker.spawn(crate::task_completion_handler::task_completion_handler(
+                    async move {
+                        join_handle
+                            .await
+                            .map_err(|e| anyhow!("NRI join error: {}", e))?;
+                        Ok(())
+                    },
+                    token,
+                    "NRIPlugin",
+                ));
             }
             Ok(None) => { /* best-effort without NRI */ }
             Err(e) => {
@@ -257,6 +259,9 @@ impl NRIEnrichRecordBatchTask {
                 );
             }
         }
+
+        // No more internal tasks will be spawned from here on
+        self.task_tracker.close();
 
         loop {
             tokio::select! {
@@ -304,6 +309,8 @@ impl NRIEnrichRecordBatchTask {
         if let Some(nri) = &self.nri {
             let _ = nri.close().await;
         }
+        // Wait for internal tasks (e.g., NRI plugin) to complete
+        self.task_tracker.wait().await;
         // Close downstream to signal shutdown
         self.batch_sender.close_channel();
 
