@@ -248,17 +248,12 @@ async fn main() -> Result<()> {
     };
 
     // Create the NRI enrichment task between conversion/trace and the writer
-    let enrich_task = NRIEnrichRecordBatchTask::new(
-        pre_enrich_receiver,
-        batch_sender,
-        input_schema.clone(),
-        shutdown_token.clone(),
-    );
+    let enrich_task = NRIEnrichRecordBatchTask::new(input_schema.clone());
     let schema = enrich_task.schema();
 
     // Spawn the enrichment task
     task_tracker.spawn(task_completion_handler(
-        enrich_task.run(),
+        enrich_task.run(pre_enrich_receiver, batch_sender, shutdown_token.clone()),
         shutdown_token.clone(),
         "NRIEnrichRecordBatchTask",
     ));

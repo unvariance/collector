@@ -38,20 +38,8 @@ fn resolve_cgroup_inode(cgroup_path: &str) -> Result<u64> {
 
 /// Task that enriches incoming RecordBatches with container metadata based on cgroup_id
 pub struct NRIEnrichRecordBatchTask {
-    // IO
-    batch_receiver: mpsc::Receiver<RecordBatch>,
-    batch_sender: mpsc::Sender<RecordBatch>,
-
     // Schemas
     output_schema: SchemaRef,
-
-    // NRI message channel
-    metadata_rx: mpsc::Receiver<MetadataMessage>,
-
-    // NRI runtime
-    nri: Option<NRI>,
-    // Cancellation token for coordinating with outer runtime
-    shutdown_token: CancellationToken,
 
     // Mapping structures
     container_to_inode: HashMap<String, u64>,
@@ -60,12 +48,7 @@ pub struct NRIEnrichRecordBatchTask {
 
 impl NRIEnrichRecordBatchTask {
     /// Create a new enrichment task with channels and input schema
-    pub fn new(
-        batch_receiver: mpsc::Receiver<RecordBatch>,
-        batch_sender: mpsc::Sender<RecordBatch>,
-        input_schema: SchemaRef,
-        shutdown_token: CancellationToken,
-    ) -> Self {
+    pub fn new(input_schema: SchemaRef) -> Self {
         // Build output schema (input + appended nullable columns)
         let mut fields: Vec<Field> = input_schema
             .fields()
@@ -77,16 +60,8 @@ impl NRIEnrichRecordBatchTask {
         }
         let output_schema = Arc::new(Schema::new(fields));
 
-        // Create metadata channel for NRI plugin
-        let (_tx, rx) = mpsc::channel::<MetadataMessage>(1000);
-
         Self {
-            batch_receiver,
-            batch_sender,
             output_schema,
-            metadata_rx: rx,
-            nri: None,
-            shutdown_token,
             container_to_inode: HashMap::new(),
             inode_to_metadata: HashMap::new(),
         }
@@ -97,13 +72,12 @@ impl NRIEnrichRecordBatchTask {
         self.output_schema.clone()
     }
 
-    /// Initialize NRI plugin and connection. Returns Ok and a JoinHandle if connected, or Ok(None)
-    /// if best-effort disabled.
-    async fn init_nri(&mut self) -> Result<Option<tokio::task::JoinHandle<Result<()>>>> {
-        // Rebuild a fresh channel for metadata messages and plugin
-        let (tx, rx) = mpsc::channel::<MetadataMessage>(1000);
-        self.metadata_rx = rx;
-        let plugin = MetadataPlugin::new(tx);
+    /// Initialize NRI plugin and connection using the provided metadata sender. Returns an
+    /// active NRI instance and join handle when connected, or Ok(None) when best-effort disabled.
+    async fn init_nri_with_sender(
+        metadata_tx: mpsc::Sender<MetadataMessage>,
+    ) -> Result<Option<(NRI, tokio::task::JoinHandle<Result<()>>)>> {
+        let plugin = MetadataPlugin::new(metadata_tx);
 
         // Determine socket path
         let socket_path = std::env::var("NRI_SOCKET_PATH")
@@ -125,9 +99,8 @@ impl NRIEnrichRecordBatchTask {
                     return Ok(None); // Best-effort: remain without an active NRI
                 }
 
-                self.nri = Some(nri);
                 info!("NRI plugin registered successfully");
-                Ok(Some(join_handle))
+                Ok(Some((nri, join_handle)))
             }
             Err(e) => {
                 warn!(
@@ -231,15 +204,26 @@ impl NRIEnrichRecordBatchTask {
     }
 
     /// Run the enrichment task: read metadata and batches, output enriched batches
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(
+        mut self,
+        mut batch_receiver: mpsc::Receiver<RecordBatch>,
+        batch_sender: mpsc::Sender<RecordBatch>,
+        shutdown_token: CancellationToken,
+    ) -> Result<()> {
         // Internal tracker for ancillary tasks (e.g., NRI plugin lifecycle)
         let task_tracker = TaskTracker::new();
+        // Metadata channel for NRI plugin
+        let (metadata_tx, mut metadata_rx) = mpsc::channel::<MetadataMessage>(1000);
 
         // Try initializing NRI (best-effort)
-        match self.init_nri().await {
-            Ok(Some(join_handle)) => {
+        let mut nri_opt: Option<NRI> = None;
+        let mut nri_active = false;
+        match Self::init_nri_with_sender(metadata_tx).await {
+            Ok(Some((nri, join_handle))) => {
                 // Monitor NRI lifecycle using the common task completion handler
-                let token = self.shutdown_token.clone();
+                nri_active = true;
+                nri_opt = Some(nri);
+                let token = shutdown_token.clone();
                 task_tracker.spawn(crate::task_completion_handler::task_completion_handler::<_, (), anyhow::Error>(
                     async move {
                         join_handle
@@ -269,12 +253,12 @@ impl NRIEnrichRecordBatchTask {
         loop {
             tokio::select! {
                 // Handle input record batches
-                maybe_batch = self.batch_receiver.recv() => {
+                maybe_batch = batch_receiver.recv() => {
                     match maybe_batch {
                         Some(batch) => {
                             match self.enrich_batch(&batch) {
                                 Ok(enriched) => {
-                                    if let Err(e) = self.batch_sender.send(enriched).await {
+                                    if let Err(e) = batch_sender.send(enriched).await {
                                         // Shutdown should initiate from upstream; downstream closed is an error
                                         debug!("Downstream batch channel closed unexpectedly: {}", e);
                                         res = Err(anyhow!("downstream batch channel closed: {}", e));
@@ -299,7 +283,7 @@ impl NRIEnrichRecordBatchTask {
                 }
 
                 // Handle metadata messages to update mapping
-                maybe_msg = self.metadata_rx.recv(), if self.nri.is_some() => {
+                maybe_msg = metadata_rx.recv(), if nri_active => {
                     if let Some(msg) = maybe_msg {
                         self.process_metadata_message(msg);
                     } else {
@@ -313,7 +297,7 @@ impl NRIEnrichRecordBatchTask {
         }
 
         // Cleanup NRI on any exit path
-        if let Some(nri) = &self.nri {
+        if let Some(nri) = &nri_opt {
             let _ = nri.close().await;
         }
         // Wait for internal tasks (e.g., NRI plugin) to complete
@@ -363,13 +347,7 @@ mod tests {
     #[test]
     fn test_schema_appended_fields() {
         let schema = make_input_schema();
-        let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let task = NRIEnrichRecordBatchTask::new(
-            rx,
-            tx,
-            schema.clone(),
-            CancellationToken::new(),
-        );
+        let task = NRIEnrichRecordBatchTask::new(schema.clone());
         let out = task.schema();
         assert_eq!(
             out.fields().len(),
@@ -401,8 +379,7 @@ mod tests {
     #[test]
     fn test_process_metadata_map_updates() {
         let schema = make_input_schema();
-        let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let mut task = NRIEnrichRecordBatchTask::new(rx, tx, schema, CancellationToken::new());
+        let mut task = NRIEnrichRecordBatchTask::new(schema);
 
         // Use a known directory for inode: root "/" should exist
         let inode = fs::metadata("/").unwrap().ino();
@@ -430,13 +407,7 @@ mod tests {
     #[test]
     fn test_enrich_batch_known_unknown() {
         let schema = make_input_schema();
-        let (rx, tx) = (mpsc::channel(1).1, mpsc::channel(1).0); // dummy
-        let mut task = NRIEnrichRecordBatchTask::new(
-            rx,
-            tx,
-            schema.clone(),
-            CancellationToken::new(),
-        );
+        let mut task = NRIEnrichRecordBatchTask::new(schema.clone());
 
         // Prepare mapping for inode 42
         let cm = ContainerMetadata {
