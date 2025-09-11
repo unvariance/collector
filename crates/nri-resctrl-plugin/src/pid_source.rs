@@ -1,6 +1,6 @@
-/// Source of PIDs for a container based on cgroup metadata.
+/// Source of PIDs for a container based on cgroup path.
 pub trait CgroupPidSource: Send + Sync {
-    fn pids_for_container(&self, c: &nri::api::Container) -> resctrl::Result<Vec<i32>>;
+    fn pids_for_path(&self, cgroup_path: &str) -> resctrl::Result<Vec<i32>>;
 }
 
 pub struct RealCgroupPidSource;
@@ -19,21 +19,15 @@ impl Default for RealCgroupPidSource {
 
 #[cfg(target_os = "linux")]
 impl CgroupPidSource for RealCgroupPidSource {
-    fn pids_for_container(&self, c: &nri::api::Container) -> resctrl::Result<Vec<i32>> {
+    fn pids_for_path(&self, cgroup_path: &str) -> resctrl::Result<Vec<i32>> {
         use cgroups_rs::{cgroup::Cgroup, hierarchies};
 
-        let cg_path = c
-            .linux
-            .as_ref()
-            .map(|l| l.cgroups_path.clone())
-            .unwrap_or_default();
-
-        if cg_path.is_empty() {
+        if cgroup_path.is_empty() {
             return Ok(vec![]);
         }
 
         let hier = hierarchies::auto();
-        let cg = Cgroup::load(hier, &cg_path);
+        let cg = Cgroup::load(hier, cgroup_path);
 
         let procs = cg.procs();
         Ok(procs.into_iter().map(|pid| pid.pid as i32).collect())
@@ -42,7 +36,7 @@ impl CgroupPidSource for RealCgroupPidSource {
 
 #[cfg(not(target_os = "linux"))]
 impl CgroupPidSource for RealCgroupPidSource {
-    fn pids_for_container(&self, _c: &nri::api::Container) -> resctrl::Result<Vec<i32>> {
+    fn pids_for_path(&self, _cgroup_path: &str) -> resctrl::Result<Vec<i32>> {
         Ok(vec![])
     }
 }
@@ -62,14 +56,15 @@ pub mod test_support {
             Self::default()
         }
 
-        pub fn set_pids(&mut self, container_id: String, pids: Vec<i32>) {
-            self.pids_map.insert(container_id, pids);
+        #[allow(dead_code)]
+        pub fn set_pids(&mut self, cgroup_path: String, pids: Vec<i32>) {
+            self.pids_map.insert(cgroup_path, pids);
         }
     }
 
     impl CgroupPidSource for MockCgroupPidSource {
-        fn pids_for_container(&self, c: &nri::api::Container) -> resctrl::Result<Vec<i32>> {
-            Ok(self.pids_map.get(&c.id).cloned().unwrap_or_default())
+        fn pids_for_path(&self, cgroup_path: &str) -> resctrl::Result<Vec<i32>> {
+            Ok(self.pids_map.get(cgroup_path).cloned().unwrap_or_default())
         }
     }
 }
