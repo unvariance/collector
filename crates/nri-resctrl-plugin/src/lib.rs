@@ -827,7 +827,7 @@ mod tests {
 
         // Now remove the pod
         let state_req = StateChangeEvent {
-            event: Event::REMOVE_POD.into(),
+            event: Event::REMOVE_POD_SANDBOX.into(),
             pod: protobuf::MessageField::some(pod.clone()),
             container: protobuf::MessageField::none(),
             special_fields: SpecialFields::default(),
