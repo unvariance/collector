@@ -91,17 +91,12 @@ struct PodState {
     reconciled_containers: usize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum ContainerSyncState {
+    #[default]
     NoPod,
     Partial,
     Reconciled,
-}
-
-impl Default for ContainerSyncState {
-    fn default() -> Self {
-        ContainerSyncState::NoPod
-    }
 }
 
 #[derive(Default)]
