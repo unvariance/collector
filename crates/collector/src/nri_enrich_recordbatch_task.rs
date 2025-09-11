@@ -240,7 +240,7 @@ impl NRIEnrichRecordBatchTask {
             Ok(Some(join_handle)) => {
                 // Monitor NRI lifecycle using the common task completion handler
                 let token = self.shutdown_token.clone();
-                task_tracker.spawn(crate::task_completion_handler::task_completion_handler(
+                task_tracker.spawn(crate::task_completion_handler::task_completion_handler::<_, (), anyhow::Error>(
                     async move {
                         join_handle
                             .await
@@ -321,6 +321,7 @@ impl NRIEnrichRecordBatchTask {
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, Int64Builder};
+    use arrow_array::Array;
     use arrow_schema::Field;
 
     fn make_input_schema() -> SchemaRef {
