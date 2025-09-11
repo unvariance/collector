@@ -8,7 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -232,8 +232,7 @@ impl NRIEnrichRecordBatchTask {
                     async move {
                         join_handle
                             .await
-                            .map_err(|e| anyhow!("NRI join error: {}", e))?;
-                        Ok(())
+                            .map_err(|e| anyhow!("NRI join error: {}", e))?
                     },
                     token,
                     "NRIPlugin",
