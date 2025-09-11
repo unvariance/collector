@@ -843,24 +843,24 @@ mod tests {
         client_conn1
             .write_all(msg1)
             .await
-            .map_err(|e| MuxError::Write(e))?;
+            .map_err(MuxError::Write)?;
         client_conn2
             .write_all(msg2)
             .await
-            .map_err(|e| MuxError::Write(e))?;
+            .map_err(MuxError::Write)?;
 
         // Verify data was received
         let mut buf = [0u8; 1024];
         let n = server_conn1
             .read(&mut buf)
             .await
-            .map_err(|e| MuxError::Read(e))?;
+            .map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg1);
 
         let n = server_conn2
             .read(&mut buf)
             .await
-            .map_err(|e| MuxError::Read(e))?;
+            .map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg2);
 
         // Close one connection
@@ -875,12 +875,12 @@ mod tests {
         client_conn2
             .write_all(msg3)
             .await
-            .map_err(|e| MuxError::Write(e))?;
+            .map_err(MuxError::Write)?;
 
         let n = server_conn2
             .read(&mut buf)
             .await
-            .map_err(|e| MuxError::Read(e))?;
+            .map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg3);
 
         // Verify connection was removed from map
@@ -916,7 +916,7 @@ mod tests {
         client_conn
             .write_all(&message)
             .await
-            .map_err(|e| MuxError::Write(e))?;
+            .map_err(MuxError::Write)?;
 
         // Read with small buffer (1KB)
         let mut received = Vec::new();
@@ -926,7 +926,7 @@ mod tests {
             let n = server_conn
                 .read(&mut buf)
                 .await
-                .map_err(|e| MuxError::Read(e))?;
+                .map_err(MuxError::Read)?;
             if n == 0 {
                 break;
             }
@@ -944,7 +944,7 @@ mod tests {
         client_conn
             .write_all(&message)
             .await
-            .map_err(|e| MuxError::Write(e))?;
+            .map_err(MuxError::Write)?;
 
         // Read with small buffer
         received.clear();
@@ -952,7 +952,7 @@ mod tests {
             let n = server_conn
                 .read(&mut buf)
                 .await
-                .map_err(|e| MuxError::Read(e))?;
+                .map_err(MuxError::Read)?;
             if n == 0 {
                 break;
             }
@@ -1010,14 +1010,14 @@ mod tests {
                 client_conn
                     .write_all(msg.as_bytes())
                     .await
-                    .map_err(|e| MuxError::Write(e))?;
+                    .map_err(MuxError::Write)?;
 
                 // Read response
                 let mut buf = [0u8; 1024];
                 let n = client_conn
                     .read(&mut buf)
                     .await
-                    .map_err(|e| MuxError::Read(e))?;
+                    .map_err(MuxError::Read)?;
                 let response = String::from_utf8_lossy(&buf[..n]);
 
                 assert_eq!(response, format!("response from server {}", i));
@@ -1038,7 +1038,7 @@ mod tests {
                 let n = server_conn
                     .read(&mut buf)
                     .await
-                    .map_err(|e| MuxError::Read(e))?;
+                    .map_err(MuxError::Read)?;
                 let msg = String::from_utf8_lossy(&buf[..n]);
 
                 assert_eq!(msg, format!("message from client {}", i));
@@ -1048,7 +1048,7 @@ mod tests {
                 server_conn
                     .write_all(response.as_bytes())
                     .await
-                    .map_err(|e| MuxError::Write(e))?;
+                    .map_err(MuxError::Write)?;
 
                 Ok::<_, MuxError>(())
             });
@@ -1108,14 +1108,14 @@ mod tests {
             client_conn
                 .write_all(msg.as_bytes())
                 .await
-                .map_err(|e| MuxError::Write(e))?;
+                .map_err(MuxError::Write)?;
 
             // Read the message
             let mut buf = [0u8; 1024];
             let n = server_conn
                 .read(&mut buf)
                 .await
-                .map_err(|e| MuxError::Read(e))?;
+                .map_err(MuxError::Read)?;
             let received = String::from_utf8_lossy(&buf[..n]);
 
             // Verify the message
