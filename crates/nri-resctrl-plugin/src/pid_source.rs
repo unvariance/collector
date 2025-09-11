@@ -35,11 +35,7 @@ impl CgroupPidSource for RealCgroupPidSource {
         let hier = hierarchies::auto();
         let cg = Cgroup::load(hier, &cg_path);
 
-        let procs = cg.procs().map_err(|e| resctrl::Error::Io {
-            path: std::path::PathBuf::from(cg_path.clone()).join("cgroup.procs"),
-            source: std::io::Error::other(format!("read procs failed: {e}")),
-        })?;
-
+        let procs = cg.procs();
         Ok(procs.into_iter().map(|pid| pid.pid as i32).collect())
     }
 }
