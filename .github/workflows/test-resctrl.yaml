@@ -15,9 +15,10 @@ on:
         type: string
   push:
     branches:
-      - main
+      - '**'
     paths:
       - 'crates/resctrl/**'
+      - 'crates/nri-resctrl-plugin/**'
       - '.github/workflows/test-resctrl.yaml'
       - 'Cargo.toml'
 
@@ -51,12 +52,22 @@ jobs:
         run: |
           source $HOME/.cargo/env
           cargo clippy -p resctrl --all-targets -- -D warnings
+      
+      - name: Clippy (nri-resctrl-plugin)
+        run: |
+          source $HOME/.cargo/env
+          cargo clippy -p nri-resctrl-plugin --all-targets -- -D warnings
 
       - name: Run unit tests (no hardware)
         run: |
           source $HOME/.cargo/env
           # RESCTRL_E2E not set, so smoke test is skipped
           cargo test -p resctrl --release -- --nocapture
+
+      - name: Run unit tests (nri-resctrl-plugin)
+        run: |
+          source $HOME/.cargo/env
+          cargo test -p nri-resctrl-plugin -- --nocapture
 
       - name: Build test binaries (no-run)
         run: |

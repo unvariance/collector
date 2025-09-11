@@ -20,7 +20,7 @@ impl Default for RealCgroupPidSource {
 #[cfg(target_os = "linux")]
 impl CgroupPidSource for RealCgroupPidSource {
     fn pids_for_container(&self, c: &nri::api::Container) -> resctrl::Result<Vec<i32>> {
-        use cgroups_rs::cgroup::Cgroup;
+        use cgroups_rs::{cgroup::Cgroup, hierarchies};
 
         let cg_path = c
             .linux
@@ -32,11 +32,10 @@ impl CgroupPidSource for RealCgroupPidSource {
             return Ok(vec![]);
         }
 
-        // Use cgroups-rs to get PIDs
-        let cg = Cgroup::load_from_relative_path(&cg_path).map_err(|e| resctrl::Error::Io {
-            path: std::path::PathBuf::from(cg_path.clone()),
-            source: std::io::Error::other(format!("cgroup load failed: {e}")),
-        })?;
+        // Use cgroups-rs to get PIDs. Load with auto-detected hierarchy.
+        // cgroups-rs 0.3.x does not expose `load_from_relative_path`; use `load` with auto hierarchy.
+        let hier = hierarchies::auto();
+        let cg = Cgroup::load(hier, &cg_path);
 
         let procs = cg.procs().map_err(|e| resctrl::Error::Io {
             path: std::path::PathBuf::from(cg_path.clone()).join("cgroup.procs"),
