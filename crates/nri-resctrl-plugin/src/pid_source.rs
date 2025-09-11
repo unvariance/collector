@@ -21,9 +21,22 @@ impl Default for RealCgroupPidSource {
 impl CgroupPidSource for RealCgroupPidSource {
     fn pids_for_path(&self, cgroup_path: &str) -> resctrl::Result<Vec<i32>> {
         use cgroups_rs::{cgroup::Cgroup, hierarchies};
+        use std::io;
+        use std::path::Path;
 
         if cgroup_path.is_empty() {
-            return Ok(vec![]);
+            return Err(resctrl::Error::Io {
+                path: std::path::PathBuf::from("<cgroup path>"),
+                source: io::Error::new(io::ErrorKind::InvalidInput, "empty cgroup path"),
+            });
+        }
+
+        // Explicitly error if the cgroup path does not exist
+        if !Path::new(cgroup_path).exists() {
+            return Err(resctrl::Error::Io {
+                path: std::path::PathBuf::from(cgroup_path),
+                source: io::Error::from_raw_os_error(libc::ENOENT),
+            });
         }
 
         let hier = hierarchies::auto();

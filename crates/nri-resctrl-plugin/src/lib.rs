@@ -236,56 +236,68 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
     fn handle_new_container(&self, pod: &nri::api::PodSandbox, container: &nri::api::Container) {
         let pod_uid = pod.uid.clone();
-        // Inspect current pod state
-        let (has_pod, group_path_opt) = {
-            let st = self.state.lock().unwrap();
-            let has = st.pods.contains_key(&pod_uid);
-            let gp = st.pods.get(&pod_uid).and_then(|p| match &p.group_state {
-                ResctrlGroupState::Exists(path) => Some(path.clone()),
-                _ => None,
-            });
-            (has, gp)
-        };
-
         let container_id = container.id.clone();
 
-        // If we haven't seen the pod yet, mark container as NoPod and do not emit a message
-        if !has_pod {
-            error!(
-                "resctrl-plugin: container {} observed before pod {}. Marking NoPod.",
-                container.id, pod_uid
-            );
+        // Hold the lock to check for duplicates and pod presence, and to handle
+        // simple state updates that don't involve external syscalls.
+        let (group_path_opt, early_return) = {
             let mut st = self.state.lock().unwrap();
-            st.containers.insert(
-                container_id,
-                ContainerState {
-                    pod_uid: pod_uid.clone(),
-                    state: ContainerSyncState::NoPod,
-                },
-            );
-            return;
-        }
 
-        // If pod exists but has no group path (failed), container is Partial
-        if group_path_opt.is_none() {
-            let mut st = self.state.lock().unwrap();
-            let old_state = st.containers.get(&container_id).map(|c| c.state);
-            st.containers.insert(
-                container_id,
-                ContainerState {
-                    pod_uid: pod_uid.clone(),
-                    state: ContainerSyncState::Partial,
-                },
-            );
-            if let Some(ps) = st.pods.get_mut(&pod_uid) {
-                // Incremental update: count this container towards total if not previously counted
-                let was_counted = matches!(old_state, Some(s) if s != ContainerSyncState::NoPod);
-                if !was_counted {
-                    ps.total_containers += 1;
+            // First, error if the container is already known
+            if st.containers.contains_key(&container_id) {
+                error!(
+                    "resctrl-plugin: container {} already exists in state; ignoring duplicate",
+                    container_id
+                );
+                (None, Some(()))
+            } else if !st.pods.contains_key(&pod_uid) {
+                // No pod yet: mark container as NoPod and return
+                error!(
+                    "resctrl-plugin: container {} observed before pod {}. Marking NoPod.",
+                    container.id, pod_uid
+                );
+                st.containers.insert(
+                    container_id.clone(),
+                    ContainerState {
+                        pod_uid: pod_uid.clone(),
+                        state: ContainerSyncState::NoPod,
+                    },
+                );
+                (None, Some(()))
+            } else {
+                // Pod exists; fetch group path state
+                let gp = st.pods.get(&pod_uid).and_then(|p| match &p.group_state {
+                    ResctrlGroupState::Exists(path) => Some(path.clone()),
+                    _ => None,
+                });
+
+                // If pod exists but has no group path (Failed), container is Partial
+                if gp.is_none() {
+                    let old_state = st.containers.get(&container_id).map(|c| c.state);
+                    st.containers.insert(
+                        container_id.clone(),
+                        ContainerState {
+                            pod_uid: pod_uid.clone(),
+                            state: ContainerSyncState::Partial,
+                        },
+                    );
+                    if let Some(ps) = st.pods.get_mut(&pod_uid) {
+                        // Increment total if this container wasn't previously counted
+                        let was_counted = matches!(old_state, Some(s) if s != ContainerSyncState::NoPod);
+                        if !was_counted {
+                            ps.total_containers += 1;
+                        }
+                        // Reconciled count unchanged
+                        self.emit_pod_add_or_update(&pod_uid, ps);
+                    }
+                    (None, Some(()))
+                } else {
+                    (gp, None)
                 }
-                // Reconciled count unchanged
-                self.emit_pod_add_or_update(&pod_uid, ps);
             }
+        };
+
+        if early_return.is_some() {
             return;
         }
 
