@@ -52,8 +52,6 @@ pub struct NRIEnrichRecordBatchTask {
     nri: Option<NRI>,
     // Cancellation token for coordinating with outer runtime
     shutdown_token: CancellationToken,
-    // Tracker for internal tasks (e.g., NRI plugin lifecycle)
-    task_tracker: TaskTracker,
 
     // Mapping structures
     container_to_inode: HashMap<String, u64>,
@@ -89,7 +87,6 @@ impl NRIEnrichRecordBatchTask {
             metadata_rx: rx,
             nri: None,
             shutdown_token,
-            task_tracker: TaskTracker::new(),
             container_to_inode: HashMap::new(),
             inode_to_metadata: HashMap::new(),
         }
@@ -235,12 +232,15 @@ impl NRIEnrichRecordBatchTask {
 
     /// Run the enrichment task: read metadata and batches, output enriched batches
     pub async fn run(mut self) -> Result<()> {
+        // Internal tracker for ancillary tasks (e.g., NRI plugin lifecycle)
+        let task_tracker = TaskTracker::new();
+
         // Try initializing NRI (best-effort)
         match self.init_nri().await {
             Ok(Some(join_handle)) => {
                 // Monitor NRI lifecycle using the common task completion handler
                 let token = self.shutdown_token.clone();
-                self.task_tracker.spawn(crate::task_completion_handler::task_completion_handler(
+                task_tracker.spawn(crate::task_completion_handler::task_completion_handler(
                     async move {
                         join_handle
                             .await
@@ -261,7 +261,7 @@ impl NRIEnrichRecordBatchTask {
         }
 
         // No more internal tasks will be spawned from here on
-        self.task_tracker.close();
+        task_tracker.close();
 
         loop {
             tokio::select! {
@@ -310,7 +310,7 @@ impl NRIEnrichRecordBatchTask {
             let _ = nri.close().await;
         }
         // Wait for internal tasks (e.g., NRI plugin) to complete
-        self.task_tracker.wait().await;
+        task_tracker.wait().await;
         // Close downstream to signal shutdown
         self.batch_sender.close_channel();
 
