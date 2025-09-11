@@ -325,10 +325,7 @@ impl<P: FsProvider> Resctrl<P> {
             let current: HashSet<i32> = current_vec.into_iter().collect();
 
             // Compute missing PIDs (desired but not yet in the group)
-            let missing: Vec<i32> = last_desired
-                .difference(&current)
-                .copied()
-                .collect();
+            let missing: Vec<i32> = last_desired.difference(&current).copied().collect();
 
             if missing.is_empty() {
                 return Ok(AssignmentResult::new(total_assigned, 0));
@@ -849,9 +846,9 @@ mod tests {
         let desired = vec![101, 202];
         use std::cell::RefCell;
         let calls = RefCell::new(0usize);
-        let pid_source = || -> Result<Vec<i32>> { 
+        let pid_source = || -> Result<Vec<i32>> {
             *calls.borrow_mut() += 1;
-            Ok(desired.clone()) 
+            Ok(desired.clone())
         };
         let res = rc
             .reconcile_group(group_path.to_str().unwrap(), pid_source, 10)
@@ -860,7 +857,11 @@ mod tests {
         assert_eq!(res.missing, 0);
         assert_eq!(res.assigned, desired.len());
         // Should converge in 2 passes (first to assign, second to verify)
-        assert!(*calls.borrow() <= 2, "Expected <= 2 iterations, got {}", *calls.borrow());
+        assert!(
+            *calls.borrow() <= 2,
+            "Expected <= 2 iterations, got {}",
+            *calls.borrow()
+        );
 
         // Verify tasks file contains the assigned PIDs
         let listed = rc
@@ -935,7 +936,11 @@ mod tests {
 
         let rc = Resctrl::with_provider(
             fs,
-            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
         );
 
         let mut pass = 0usize;
@@ -953,7 +958,7 @@ mod tests {
             .expect("reconcile ok");
         assert_eq!(res.missing, 0);
         assert_eq!(res.assigned, 2); // 1 then 2
-        // should have required at least 3 passes (implicitly via closure sequence)
+                                     // should have required at least 3 passes (implicitly via closure sequence)
     }
 
     #[test]
@@ -973,14 +978,18 @@ mod tests {
 
         let rc = Resctrl::with_provider(
             fs,
-            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
         );
 
         use std::cell::RefCell;
         let calls = RefCell::new(0usize);
-        let pid_source = || -> Result<Vec<i32>> { 
+        let pid_source = || -> Result<Vec<i32>> {
             *calls.borrow_mut() += 1;
-            Ok(vec![10, 11]) 
+            Ok(vec![10, 11])
         };
         let res = rc
             .reconcile_group(group_path.to_str().unwrap(), pid_source, 5)
@@ -988,7 +997,11 @@ mod tests {
         assert_eq!(res.missing, 0);
         assert_eq!(res.assigned, 0);
         // Should only need 1 pass since PIDs are already there
-        assert_eq!(*calls.borrow(), 1, "Expected 1 iteration for already-present PIDs");
+        assert_eq!(
+            *calls.borrow(),
+            1,
+            "Expected 1 iteration for already-present PIDs"
+        );
     }
 
     #[test]
@@ -1014,7 +1027,11 @@ mod tests {
 
         let rc = Resctrl::with_provider(
             fs,
-            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
         );
 
         use std::cell::RefCell;
@@ -1032,9 +1049,20 @@ mod tests {
             .expect("reconcile ok");
 
         // Should not converge as all PIDs fail with ESRCH (missing)
-        assert_eq!(res.assigned, 0, "Should not have assigned any PIDs due to ESRCH");
-        assert_eq!(res.missing, 2, "Should have 2 missing PIDs from last iteration");
-        assert_eq!(*calls.borrow(), max_passes, "Should have tried all {} passes", max_passes);
+        assert_eq!(
+            res.assigned, 0,
+            "Should not have assigned any PIDs due to ESRCH"
+        );
+        assert_eq!(
+            res.missing, 2,
+            "Should have 2 missing PIDs from last iteration"
+        );
+        assert_eq!(
+            *calls.borrow(),
+            max_passes,
+            "Should have tried all {} passes",
+            max_passes
+        );
     }
 
     #[test]
@@ -1055,7 +1083,11 @@ mod tests {
 
         let rc = Resctrl::with_provider(
             fs,
-            Config { root: root.clone(), group_prefix: "pod_".into(), auto_mount: false },
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+                auto_mount: false,
+            },
         );
 
         use std::cell::RefCell;
@@ -1074,7 +1106,10 @@ mod tests {
         assert_eq!(res.missing, 0);
         // Should have assigned the 2 new child PIDs (101, 102)
         assert_eq!(res.assigned, 2);
-        assert!(*calls.borrow() <= 2, "Should converge quickly for fork scenario");
+        assert!(
+            *calls.borrow() <= 2,
+            "Should converge quickly for fork scenario"
+        );
 
         // Verify all PIDs are in the group
         let listed = rc
