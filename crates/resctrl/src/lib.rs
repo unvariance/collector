@@ -1106,7 +1106,7 @@ mod tests {
             fs_mut
                 .write_str(&tasks_path, &format!("{}", dyn_pid))
                 .expect("write tasks");
-            Ok(vec![100, dyn_pid])
+            Ok(vec![100, 101, dyn_pid])
         };
 
         let res = rc
