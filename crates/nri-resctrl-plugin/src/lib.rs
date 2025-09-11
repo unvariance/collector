@@ -693,16 +693,22 @@ mod tests {
         );
 
         // Build synchronize request with one pod and one container
-        let mut pod = nri::api::PodSandbox::default();
-        pod.id = "pod-sb-1".into();
-        pod.uid = "u123".into();
+        let pod = nri::api::PodSandbox {
+            id: "pod-sb-1".into(),
+            uid: "u123".into(),
+            ..Default::default()
+        };
 
-        let mut linux = nri::api::LinuxContainer::default();
-        linux.cgroups_path = cg.to_string_lossy().into_owned();
-        let mut container = nri::api::Container::default();
-        container.id = "ctr1".into();
-        container.pod_sandbox_id = pod.id.clone();
-        container.linux = protobuf::MessageField::some(linux);
+        let linux = nri::api::LinuxContainer {
+            cgroups_path: cg.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let container = nri::api::Container {
+            id: "ctr1".into(),
+            pod_sandbox_id: pod.id.clone(),
+            linux: protobuf::MessageField::some(linux),
+            ..Default::default()
+        };
 
         let req = SynchronizeRequest {
             pods: vec![pod.clone()],
@@ -796,9 +802,11 @@ mod tests {
         );
 
         // Create a pod
-        let mut pod = nri::api::PodSandbox::default();
-        pod.id = "pod-sb-removal-test".into();
-        pod.uid = "u456".into();
+        let pod = nri::api::PodSandbox {
+            id: "pod-sb-removal-test".into(),
+            uid: "u456".into(),
+            ..Default::default()
+        };
 
         // First synchronize with the pod
         let req = SynchronizeRequest {
@@ -876,9 +884,11 @@ mod tests {
         let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src));
 
         // Define a pod sandbox
-        let mut pod = nri::api::PodSandbox::default();
-        pod.id = "pod-sb-run-test".into();
-        pod.uid = "u789".into();
+        let pod = nri::api::PodSandbox {
+            id: "pod-sb-run-test".into(),
+            uid: "u789".into(),
+            ..Default::default()
+        };
 
         // Send RUN_POD_SANDBOX via state_change
         let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
