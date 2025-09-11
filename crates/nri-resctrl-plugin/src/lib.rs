@@ -853,4 +853,57 @@ mod tests {
         // Verify the resctrl group was deleted
         assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u456")));
     }
+
+    #[tokio::test]
+    async fn test_run_pod_sandbox_creates_group_and_emits_event() {
+        let fs = TestFs::default();
+        // Ensure resctrl root exists
+        fs.add_dir(std::path::Path::new("/sys"));
+        fs.add_dir(std::path::Path::new("/sys/fs"));
+        fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
+
+        let rc = Resctrl::with_provider(
+            fs.clone(),
+            resctrl::Config {
+                auto_mount: false,
+                ..Default::default()
+            },
+        );
+
+        use crate::pid_source::test_support::MockCgroupPidSource;
+        let mock_pid_src = MockCgroupPidSource::new();
+        let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(8);
+        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src));
+
+        // Define a pod sandbox
+        let mut pod = nri::api::PodSandbox::default();
+        pod.id = "pod-sb-run-test".into();
+        pod.uid = "u789".into();
+
+        // Send RUN_POD_SANDBOX via state_change
+        let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
+        let state_req = StateChangeEvent {
+            event: Event::RUN_POD_SANDBOX.into(),
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::none(),
+            special_fields: SpecialFields::default(),
+        };
+        let _ = plugin.state_change(&ctx, state_req).await.unwrap();
+
+        // Should receive an AddOrUpdate event with existing group state
+        use tokio::time::{timeout, Duration};
+        timeout(Duration::from_millis(100), async {
+            if let Some(ev) = rx.recv().await {
+                match ev {
+                    PodResctrlEvent::AddOrUpdate(a) => {
+                        assert_eq!(a.pod_uid, "u789");
+                        assert!(matches!(a.group_state, ResctrlGroupState::Exists(_)));
+                    }
+                    _ => panic!("Expected AddOrUpdate event, got: {:?}", ev),
+                }
+            } else {
+                panic!("Expected AddOrUpdate event, got nothing");
+            }
+        }).await.expect("Should receive event within timeout");
+    }
 }
