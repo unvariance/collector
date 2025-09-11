@@ -13,7 +13,7 @@ fn main() {
     // Generate the ttrpc code
     ttrpc_codegen::Codegen::new()
         .out_dir(&out_dir)
-        .inputs(&[proto_file])
+        .inputs([proto_file])
         .include("src")
         .rust_protobuf() // generate both protobuf messages and ttrpc services
         .customize(Customize {

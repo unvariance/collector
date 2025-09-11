@@ -1,5 +1,6 @@
 #[cfg(test)]
 pub mod mock_fs {
+    #![allow(dead_code)]
     use crate::FsProvider;
     use std::collections::{HashMap, HashSet};
     use std::io;
