@@ -122,7 +122,7 @@ impl NRIEnrichRecordBatchTask {
                         "NRI registration failed (best-effort mode, continuing without enrichment): {}",
                         e
                     );
-                    return Ok(()); // Best-effort: remain without an active NRI
+                    return Ok(None); // Best-effort: remain without an active NRI
                 }
 
                 self.nri = Some(nri);
@@ -311,8 +311,7 @@ impl NRIEnrichRecordBatchTask {
         }
         // Wait for internal tasks (e.g., NRI plugin) to complete
         task_tracker.wait().await;
-        // Close downstream to signal shutdown
-        self.batch_sender.close_channel();
+        // Output channel closes when sender is dropped (self goes out of scope here)
 
         Ok(())
     }
