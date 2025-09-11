@@ -32,8 +32,6 @@ impl CgroupPidSource for RealCgroupPidSource {
             return Ok(vec![]);
         }
 
-        // Use cgroups-rs to get PIDs. Load with auto-detected hierarchy.
-        // cgroups-rs 0.3.x does not expose `load_from_relative_path`; use `load` with auto hierarchy.
         let hier = hierarchies::auto();
         let cg = Cgroup::load(hier, &cg_path);
 
