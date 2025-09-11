@@ -308,9 +308,6 @@ async fn main() -> Result<()> {
         "RotationHandler",
     ));
 
-    // Close the tracker since we've added all tasks
-    task_tracker.close();
-
     // Create a BPF loader with the specified verbosity and appropriate buffer size
     let perf_ring_pages = if opts.trace {
         TRACE_PERF_RING_PAGES
@@ -334,6 +331,9 @@ async fn main() -> Result<()> {
     task_tracker.spawn(async move {
         PerfEventProcessor::run_error_reporting(error_receiver).await;
     });
+
+    // Close the tracker after all tasks have been spawned
+    task_tracker.close();
 
     // Attach BPF programs
     bpf_loader.attach()?;
