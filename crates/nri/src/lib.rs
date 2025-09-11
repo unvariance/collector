@@ -217,7 +217,7 @@ pub mod examples;
 ///
 /// The container.linux.cgroups_path contains a colon-delimited string like:
 /// "kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice:cri-containerd:cafbf51befe66f13ea3ece8780e7a7f711893d6fba12ddd5d689642fcdeba9b9"
-/// 
+///
 /// The pod.linux.cgroup_parent contains the parent path like:
 /// "/kubelet.slice/kubelet-kubepods.slice/kubelet-kubepods-besteffort.slice/kubelet-kubepods-besteffort-podef89bdb6_d5d3_4396_9ed2_3a2006e0b6aa.slice"
 /// or sometimes with the prefix already:
@@ -263,8 +263,8 @@ pub fn compute_full_cgroup_path(
 
     // Preferred construction when we have both pod parent and container runtime/id
     if parts.len() >= 3 && !pod_cgroup_parent.is_empty() {
-        let runtime = parts[1];       // e.g., "cri-containerd"
-        let container_id = parts[2];  // e.g., "cafb..."
+        let runtime = parts[1]; // e.g., "cri-containerd"
+        let container_id = parts[2]; // e.g., "cafb..."
         let full_parent = ensure_cgroup_prefix(pod_cgroup_parent);
         return format!("{}/{}-{}.scope", full_parent, runtime, container_id);
     }

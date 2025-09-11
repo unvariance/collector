@@ -259,7 +259,9 @@ mod tests {
             name: "test-container".to_string(),
             pid: 1234,
             linux: MessageField::some(api::LinuxContainer {
-                cgroups_path: "kubelet-kubepods-besteffort-pod123.slice:cri-containerd:abc123def456".to_string(),
+                cgroups_path:
+                    "kubelet-kubepods-besteffort-pod123.slice:cri-containerd:abc123def456"
+                        .to_string(),
                 namespaces: vec![],
                 devices: vec![],
                 resources: MessageField::none(),
@@ -360,7 +362,10 @@ mod tests {
         assert_eq!(metadata.pod_namespace, "");
         assert_eq!(metadata.pod_uid, "");
         assert_eq!(metadata.container_name, "test-container");
-        assert_eq!(metadata.cgroup_path, "/sys/fs/cgroup/system.slice/docker-abc123.scope");
+        assert_eq!(
+            metadata.cgroup_path,
+            "/sys/fs/cgroup/system.slice/docker-abc123.scope"
+        );
         assert_eq!(metadata.pid, Some(1234));
     }
 
@@ -385,7 +390,10 @@ mod tests {
                 labels: Default::default(),
                 annotations: Default::default(),
                 linux: MessageField::some(api::LinuxContainer {
-                    cgroups_path: format!("kubelet-kubepods-besteffort-{}.slice:cri-containerd:{}", pod_id, container_hash),
+                    cgroups_path: format!(
+                        "kubelet-kubepods-besteffort-{}.slice:cri-containerd:{}",
+                        pod_id, container_hash
+                    ),
                     namespaces: vec![],
                     devices: vec![],
                     resources: MessageField::none(),
@@ -481,12 +489,8 @@ mod tests {
 
         // Test 2: Synchronize with existing containers
         let test_pod = create_test_pod("pod1", "test-pod", "test-namespace");
-        let test_container = create_test_container(
-            "container1",
-            "pod1",
-            "test-container",
-            "abc123def456",
-        );
+        let test_container =
+            create_test_container("container1", "pod1", "test-container", "abc123def456");
 
         let sync_req = SynchronizeRequest {
             pods: vec![test_pod],
@@ -546,12 +550,8 @@ mod tests {
 
         // Test 4: Update a container
         let updated_pod = create_test_pod("pod2", "new-pod", "test-namespace");
-        let mut updated_container = create_test_container(
-            "container2",
-            "pod2",
-            "new-container",
-            "xyz789ghi012",
-        );
+        let mut updated_container =
+            create_test_container("container2", "pod2", "new-container", "xyz789ghi012");
         updated_container.pid = 2000;
 
         let update_req = UpdateContainerRequest {
@@ -583,12 +583,8 @@ mod tests {
 
         // Test 5: Stop a container
         let stop_pod = create_test_pod("pod1", "test-pod", "test-namespace");
-        let stop_container = create_test_container(
-            "container1",
-            "pod1",
-            "test-container",
-            "abc123def456",
-        );
+        let stop_container =
+            create_test_container("container1", "pod1", "test-container", "abc123def456");
 
         let stop_req = StopContainerRequest {
             pod: MessageField::some(stop_pod),

@@ -224,7 +224,11 @@ impl NRIEnrichRecordBatchTask {
                 nri_active = true;
                 nri_opt = Some(nri);
                 let token = shutdown_token.clone();
-                task_tracker.spawn(crate::task_completion_handler::task_completion_handler::<_, (), anyhow::Error>(
+                task_tracker.spawn(crate::task_completion_handler::task_completion_handler::<
+                    _,
+                    (),
+                    anyhow::Error,
+                >(
                     async move {
                         join_handle
                             .await
