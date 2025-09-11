@@ -263,6 +263,9 @@ impl NRIEnrichRecordBatchTask {
         // No more internal tasks will be spawned from here on
         task_tracker.close();
 
+        // Default to success; if any error occurs, set this to Err and break.
+        let mut res: Result<()> = Ok(());
+
         loop {
             tokio::select! {
                 // Handle input record batches
@@ -273,13 +276,15 @@ impl NRIEnrichRecordBatchTask {
                                 Ok(enriched) => {
                                     if let Err(e) = self.batch_sender.send(enriched).await {
                                         // Shutdown should initiate from upstream; downstream closed is an error
-                                        error!("Downstream batch channel closed unexpectedly: {}", e);
+                                        debug!("Downstream batch channel closed unexpectedly: {}", e);
+                                        res = Err(anyhow!("downstream batch channel closed: {}", e));
                                         break;
                                     }
                                 },
                                 Err(e) => {
                                     // Treat enrichment failure as fatal
-                                    error!("Failed to enrich batch: {}", e);
+                                    debug!("Failed to enrich batch: {}", e);
+                                    res = Err(e);
                                     break;
                                 }
                             }
@@ -287,6 +292,7 @@ impl NRIEnrichRecordBatchTask {
                         None => {
                             // Input closed; shut down
                             debug!("Input batch channel closed, shutting down");
+                            // Graceful shutdown: keep res as Ok
                             break;
                         }
                     }
@@ -298,7 +304,8 @@ impl NRIEnrichRecordBatchTask {
                         self.process_metadata_message(msg);
                     } else {
                         // If the metadata channel closed unexpectedly, treat as error
-                        error!("NRI metadata channel closed unexpectedly");
+                        debug!("NRI metadata channel closed unexpectedly");
+                        res = Err(anyhow!("nri metadata channel closed"));
                         break;
                     }
                 }
@@ -313,7 +320,7 @@ impl NRIEnrichRecordBatchTask {
         task_tracker.wait().await;
         // Output channel closes when sender is dropped (self goes out of scope here)
 
-        Ok(())
+        res
     }
 }
 
