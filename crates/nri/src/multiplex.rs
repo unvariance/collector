@@ -83,7 +83,6 @@ const MAX_PAYLOAD_SIZE: usize = TTRPC_MESSAGE_HEADER_LENGTH + TTRPC_MESSAGE_LENG
 ///     Ok(())
 /// }
 /// ```
-
 /// A request to write data to the underlying socket.
 struct WriteRequest {
     conn_id: ConnID,
@@ -134,6 +133,12 @@ pub struct Mux {
 }
 
 /// MuxSocket represents a logical connection within the multiplexer.
+// Reduce type complexity for clippy by aliasing the nested future type
+type ReservePermitFuture = Pin<
+    Box<dyn Future<Output = std::result::Result<(), mpsc::error::SendError<()>>> + Send>,
+>;
+type PendingPermit = Option<Mutex<ReservePermitFuture>>;
+
 pub struct MuxSocket {
     /// The connection ID for this socket.
     conn_id: ConnID,
@@ -148,15 +153,7 @@ pub struct MuxSocket {
     /// Whether this socket has been closed.
     closed: bool,
     /// Pending permit reservation future, if any.
-    pending_permit: Option<
-        Mutex<
-            Pin<
-                Box<
-                    dyn Future<Output = std::result::Result<(), mpsc::error::SendError<()>>> + Send,
-                >,
-            >,
-        >,
-    >,
+    pending_permit: PendingPermit,
 }
 
 impl Mux {
@@ -208,7 +205,7 @@ impl Mux {
                             error!("Reader error: {}", e);
                             // Create a new error rather than moving the original
                             let err_msg = e.to_string();
-                            Err(MuxError::Read(io::Error::new(ErrorKind::Other, err_msg)))
+                            Err(MuxError::Read(io::Error::other(err_msg)))
                         }
                         Err(e) => {
                             error!("Reader task panicked: {}", e);
@@ -230,7 +227,7 @@ impl Mux {
                             error!("Writer error: {}", e);
                             // Create a new error rather than moving the original
                             let err_msg = e.to_string();
-                            Err(MuxError::Write(io::Error::new(ErrorKind::Other, err_msg)))
+                            Err(MuxError::Write(io::Error::other(err_msg)))
                         }
                         Err(e) => {
                             error!("Writer task panicked: {}", e);
@@ -287,9 +284,8 @@ impl Mux {
                 maybe_request = write_rx.recv() => {
                     match maybe_request {
                         Some(request) => {
-                            if let Err(e) = Self::write_frame(&mut writer, request).await {
-                                return Err(e);
-                            }
+                            // Propagate errors using the ? operator
+                            Self::write_frame(&mut writer, request).await?;
                         }
                         None => {
                             // Write channel closed, exit
@@ -638,14 +634,9 @@ impl AsyncWrite for MuxSocket {
         let future = self.close();
         futures::pin_mut!(future);
 
-        future.poll_unpin(cx).map(|result| {
-            result.map_err(|e| {
-                io::Error::new(
-                    ErrorKind::Other,
-                    format!("Failed to close connection: {}", e),
-                )
-            })
-        })
+        future
+            .poll_unpin(cx)
+            .map(|result| result.map_err(|e| io::Error::other(format!("Failed to close connection: {}", e))))
     }
 }
 

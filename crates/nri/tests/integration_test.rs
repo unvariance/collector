@@ -135,8 +135,8 @@ async fn find_container_by_pod_name(
     let result = timeout(timeout_duration, async {
         while let Some(msg) = metadata_rx.recv().await {
             match msg {
-                MetadataMessage::Add(_, metadata) if metadata.pod_name == pod_name => {
-                    return Ok(metadata);
+                MetadataMessage::Add(_, metadata) if metadata.as_ref().pod_name == pod_name => {
+                    return Ok(*metadata);
                 }
                 _ => continue,
             }
@@ -193,7 +193,7 @@ async fn collect_initial_containers(
         while last_received.elapsed() < quiet_period {
             match tokio::time::timeout(quiet_period, metadata_rx.recv()).await {
                 Ok(Some(MetadataMessage::Add(id, metadata))) => {
-                    containers.insert(id, metadata);
+                    containers.insert(id, *metadata);
                     last_received = std::time::Instant::now();
                 }
                 Ok(Some(_)) => {
