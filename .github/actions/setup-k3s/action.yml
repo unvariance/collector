@@ -236,9 +236,21 @@ runs:
       run: |
         set -euo pipefail
         export KUBECONFIG="${{ inputs.kubeconfig_path }}"
-        echo "Waiting for kube-system pods..."
+        echo "Waiting for kube-system pods to be registered..."
         RETRIES=${{ inputs.max_retries_kube_system_ready }}
         TIMEOUT=${{ inputs.timeout_kube_system_each_seconds }}
+        APPEAR_DEADLINE=$((SECONDS + (RETRIES * TIMEOUT)))
+        until [ "$(kubectl get pods -n kube-system --field-selector=status.phase!=Succeeded --no-headers 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; do
+          if [ $SECONDS -ge $APPEAR_DEADLINE ]; then
+            echo "Timed out waiting for kube-system pod registration"
+            echo "=== kube-system pods (none or not yet listed) ==="; kubectl get pods -n kube-system -o wide || true
+            echo "=== events (recent kube-system) ==="; kubectl -n kube-system get events --sort-by=.lastTimestamp | tail -n 200 || true
+            echo "=== recent k3s logs ==="; sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "kube-system pod(s) registered; checking readiness..."
         for i in $(seq 1 "$RETRIES"); do
           echo "Attempt $i/$RETRIES (timeout ${TIMEOUT}s)"
           if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout="${TIMEOUT}s"; then
@@ -256,6 +268,7 @@ runs:
             exit 1
           else
             echo "Attempt $i failed; retrying shortly..."
+            sleep 1
           fi
         done
 
