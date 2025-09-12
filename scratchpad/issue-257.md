@@ -31,12 +31,10 @@ Handle resctrl RMID/monitoring capacity exhaustion on group creation and expose 
     - `retry_container_reconcile(&self, container_id: &str) -> resctrl::Result<ContainerSyncState>`
       - Look up the container; if its pod's `group_state` is `Exists(path)`, reconcile just this container using the current cgroup path and `max_reconcile_passes`.
       - Do not attempt reconciliation for containers in `NoPod` state or when the pod group is `Failed`.
-      - Update the container's `ContainerSyncState` accordingly and recompute the pod's counts; emit `AddOrUpdate` if counts change.
->> By re-computing, I'd like us to just increment the reconciled count if we changed the collector state. No heavyweight scans please.
+      - Update the container's `ContainerSyncState` accordingly and, if it transitions from `Partial` to `Reconciled`, increment the pod's `reconciled_containers` by one. Do not rescan all containers. Emit `AddOrUpdate` only if the count changed.
     - `retry_all_once(&self) -> resctrl::Result<()>`
       - Iterate all pods. For `Failed`, call `retry_group_creation` until the first `Error::Capacity` is encountered, then skip further group-creation retries in this pass.
-      - For pods with `Exists(_)`, iterate their containers in the container map and call `retry_container_reconcile` for each.
->> We do not keep a container map per pod; instead retry_all_once would iterate the container data structure and for containers in Partial state, call retry_container_reconcile.
+      - Iterate the global container data and, for containers in `Partial` state, call `retry_container_reconcile`.
 
 ## Out of Scope
 - Internal timers/backoff or autonomous retries; cadence is caller-controlled.
@@ -57,21 +55,16 @@ Handle resctrl RMID/monitoring capacity exhaustion on group creation and expose 
     - Under lock, snapshot required data (e.g., current `group_state`, list of container IDs for the pod, and `max_reconcile_passes`).
     - Drop the lock to perform `resctrl.create_group` and per-container `reconcile_group` calls.
     - Reacquire the lock and re-read current state before mutating it. If the state has changed (e.g., group already created by another thread, containers added/removed), adjust behavior accordingly:
-      - For `retry_group_creation`, if `group_state` is now `Exists(_)`, treat the create as idempotent and do not emit unless transitioning from `Failed`.
->> why "unless transitioning"? If it's now Exists we can assume whoever changed it to Exists alrady emitted, there is no unless right?
-      - For reconciliation, compute new counts from the container states after updating individual containers; do not rely on previously snapshotted counts.
->> No, we should assume that the data structures are consistent. We re-read the reconciled container's state. If it is still Partial and we successfully reconciled it, we can just increment the pod's reconciled count. No need to rescan all containers and we must not (too expensive).
+      - For `retry_group_creation`, if `group_state` is now `Exists(_)`, treat the create as idempotent and do not emit (the actor that performed the transition is responsible for the event).
+      - For reconciliation, re-read the container's state and, if it is still `Partial` and the reconcile succeeded, increment the pod's `reconciled_containers`. Avoid rescanning all containers.
     - Emit while holding the lock to preserve state/event ordering; keep critical sections short.
 - Container enumeration:
   - Reuse `pid_source` and `nri::compute_full_cgroup_path(container, Some(pod))` to generate PIDs per container on demand during reconciliation.
-  - Factor out an internal helper (e.g., `reconcile_container_locked_unlocked(...)`) that encapsulates: computing the full cgroup path, invoking `pid_source`, calling `resctrl.reconcile_group`, and returning the resulting `ContainerSyncState`. Use it from both `handle_new_container` and retry flows to avoid duplication.
->> What's the locked_unlocked in the name mean? can't we just call it reconcile_container?
+  - Factor out an internal helper (e.g., `reconcile_container(...)`) that encapsulates: computing the full cgroup path, invoking `pid_source`, calling `resctrl.reconcile_group`, and returning the resulting `ContainerSyncState`. Use it from both `handle_new_container` and retry flows to avoid duplication.
 - Event dedup:
-  - Compare previous `PodState` to the new one. Only send `AddOrUpdate` when `group_state`, `total_containers`, or `reconciled_containers` change.
->> The statement about sending AddOrUpdate when something changes is correct. But we should not only compare previous PodState, it is confusing. We should actually compare what we did against the *new* PodState and ContainerState.
+  - Emit `AddOrUpdate` only when our operation changes the current state: either the pod's `group_state` transitions or the pod's counts are incremented by our action. Decide based on the new `PodState` and affected `ContainerState` after applying the operation.
   - For `retry_group_creation`, emit only on `group_state` transition (`Failed` → `Exists(path)`).
-  - For reconciliation, recompute counts from current container states after updates and emit only if the resulting counts differ from the stored pod counts; update the stored counts atomically with the emission decision.
->> again, we should update the counts incrementally, not recompute them. change this in all the document.
+  - For reconciliation, emit only if we incremented `reconciled_containers`; update and persist the count atomically with the emission decision (no full rescan).
 - Config knobs:
   - No new config needed;
 
@@ -80,25 +73,21 @@ Handle resctrl RMID/monitoring capacity exhaustion on group creation and expose 
 
 ## Testing
 - Use existing test scaffolding in `crates/nri-resctrl-plugin`:
-  - `TestFs` (mock `FsProvider`) to simulate ENOSPC, directory existence, and tasks file writes.
+  - `TestFs` (mock `FsProvider`) to simulate ENOSPC, directory existence, and tasks file writes. Extend it to support per-path ENOSPC for `create_dir` and the ability to remove a path from the ENOSPC set during a test.
   - `MockCgroupPidSource` to control PID enumeration.
 - Add targeted tests under `#[cfg(test)]` in the plugin module for retry flows and event dedup.
 
 Test cases and setup details:
 
 - Capacity error → Failed event
-  - Setup: `TestFs` with `/sys/fs/resctrl` present and configure `create_dir` for the group path to return ENOSPC. Plugin with channel `(tx, rx)` and empty state. Define a pod sandbox with `uid = u1`.
-  - Action: Trigger `RUN_POD_SANDBOX` (or call internal pod handler) so `create_group(u1)` is attempted.
->> call the internal handler please, don't want to use channels for this type of test.
-  - Expect: Receive `AddOrUpdate` with `pod_uid = u1`, `group_state = Failed`, counts `0/0`.
+  - Setup: `TestFs` with `/sys/fs/resctrl` present and configure `create_dir` for the group path to return ENOSPC. Initialize the plugin with empty state and a mock PID source. Define a pod sandbox with `uid = u1`.
+  - Action: Call the internal pod handler to process `RUN_POD_SANDBOX` so `create_group(u1)` is attempted.
+  - Expect: One `AddOrUpdate` with `pod_uid = u1`, `group_state = Failed`, counts `0/0`.
 
-- retry_group_creation transitions Failed → Exists
-  - Setup: As above, but simulate first call to `create_dir` ENOSPC and second call success. This can be done by flipping a flag in `TestFs` between attempts or injecting a provider that returns ENOSPC once then succeeds.
->> The setup is identical to the previous test, so let's just join the two tests. This tests continues from where the previous test left off and we wouldn't need to repeat the setup.
->> We whouldn't flip a flag in TestFs or inject a provider. TestFs should support removing a folder from the ENOSPC config. If it doesn't we should add that (if so, specify it here)
->> We should also add a container, verify that we get an AddOrUpdate with 1/0. Then after second retry we should still have 1/0 (we will verify that there is no accidental reset or increment of the counts).
-  - Action: First attempt: cause a Failed state; call `retry_group_creation("u1")` while ENOSPC is still configured. Then reconfigure `TestFs` to allow directory creation and call `retry_group_creation("u1")` again.
-  - Expect: First retry returns `Err(Capacity)` and emits no new event; second retry returns `Exists(path)` and emits one `AddOrUpdate` transitioning `group_state` to `Exists(_)` with counts unchanged.
+- retry_group_creation transitions Failed → Exists (continuation)
+  - Setup: Continue from the previous test state. Add one container `c1` for pod `u1` and process its add event through the internal container handler; verify an `AddOrUpdate` with counts `total=1, reconciled=0` is emitted while the pod remains `Failed`.
+  - Action: Call `retry_group_creation("u1")` once while ENOSPC is still configured (expect `Err(Capacity)` and no event). Then remove the group path from the `TestFs` ENOSPC set and call `retry_group_creation("u1")` again.
+  - Expect: First retry returns `Err(Capacity)` with no event. Second retry returns `Exists(path)` and emits one `AddOrUpdate` transitioning `group_state` to `Exists(_)` with counts still `1/0` (no accidental reset or increment).
 
 - retry_container_reconcile improves counts
   - Setup: `TestFs` with `/sys/fs/resctrl/pod_u1` directory and a `tasks` file. One container `c1` belongs to the pod; `MockCgroupPidSource` initially returns PIDs that do not converge (simulate missing), then updated to return stable PIDs presentable in tasks. State shows `c1` as `Partial` and pod counts `total=1, reconciled=0`.
@@ -108,8 +97,7 @@ Test cases and setup details:
 - retry_all_once behavior
   - Setup: Two pods: `uA` in `Failed` (capacity) and `uB` with `Exists(_)` and one `Partial` container. Configure `TestFs` so the first create attempt for `uA` yields ENOSPC and remains so. `MockCgroupPidSource` for `uB` returns assignable PIDs.
   - Action: Call `retry_all_once()`.
-  - Expect: Group-creation retries stop after the first `Err(Capacity)` without attempting further failed pods. `uB` containers are reconciled; counts for `uB` improve and emit an event; `uA` state unchanged and no duplicate event.
->> Do we have a way to verify that we stopped after the first capacity error? I guess we can count calls to create_dir in TestFs and verify that it is exactly one. Is that the best way to do that?
+  - Expect: Group-creation retries stop after the first `Err(Capacity)` without attempting further failed pods. `uB` containers are reconciled; counts for `uB` improve and emit an event; `uA` state unchanged and no duplicate event. Verify early-stop by instrumenting `TestFs` to count `create_dir` invocations for resctrl group paths and asserting it is exactly one in this pass.
 ## Risks
 - Retry loops can be noisy; rely on event dedup and caller-controlled cadence.
 - Holding the lock while emitting events can back pressure if the channel is full; keep critical sections short and track `dropped_events()` (already exposed) for observability.
