@@ -122,13 +122,29 @@ Exiting to prevent incorrect performance measurements."#,
     fn handle_lost_events(&self, ring_index: usize, _data: &[u8]) {
         if let Some(sender) = &self.error_sender {
             let event = ErrorEvent::LostEvents;
-            // Block on send to ensure we don't lose visibility into errors
-            if let Err(_) = sender.blocking_send(event) {
-                // Channel is closed, fall back to direct logging
-                error!(
-                    "Lost events notification on ring {} (error channel closed)",
-                    ring_index
-                );
+
+            // If we're inside a Tokio runtime, avoid blocking the runtime thread.
+            // Use an async send via spawn; otherwise, fall back to a blocking send.
+            if tokio::runtime::Handle::try_current().is_ok() {
+                let sender = sender.clone();
+                tokio::spawn(async move {
+                    if let Err(_) = sender.send(event).await {
+                        // Channel is closed, fall back to direct logging
+                        error!(
+                            "Lost events notification on ring {} (error channel closed)",
+                            ring_index
+                        );
+                    }
+                });
+            } else {
+                // Not in a Tokio runtime — it's safe to block.
+                if let Err(_) = sender.blocking_send(event) {
+                    // Channel is closed, fall back to direct logging
+                    error!(
+                        "Lost events notification on ring {} (error channel closed)",
+                        ring_index
+                    );
+                }
             }
         } else {
             // No sender available, fall back to direct logging
