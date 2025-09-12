@@ -316,10 +316,10 @@ jobs:
             docker exec $CONTAINER_NAME ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
             exit 1
           fi
-        - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
-          env:
-            IMAGE: ${{ needs.build-test-image.outputs.image }}
-          run: |
+      - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
+        env:
+          IMAGE: ${{ needs.build-test-image.outputs.image }}
+        run: |
             echo "=== Deploying collector with NRI configuration disabled ==="
             REPO="${IMAGE%:*}"
             TAG="${IMAGE##*:}"
