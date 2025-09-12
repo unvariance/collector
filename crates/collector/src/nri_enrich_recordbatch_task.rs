@@ -128,7 +128,7 @@ impl NRIEnrichRecordBatchTask {
                     Ok(inode) => {
                         // Update both maps
                         self.container_to_inode.insert(container_id.clone(), inode);
-                        self.inode_to_metadata.insert(inode, metadata);
+                        self.inode_to_metadata.insert(inode, *metadata);
                     }
                     Err(e) => {
                         warn!(

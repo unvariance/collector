@@ -12,6 +12,7 @@ log = { workspace = true }
 anyhow = { workspace = true }
 ttrpc = { workspace = true }
 protobuf = { workspace = true }
+libc = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cgroups-rs = "0.3"
