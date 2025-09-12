@@ -40,7 +40,10 @@ impl MmapStorage {
         attr.size = std::mem::size_of::<sys::bindings::perf_event_attr>() as u32;
         attr.type_ = sys::bindings::PERF_TYPE_SOFTWARE;
         attr.config = sys::bindings::PERF_COUNT_SW_BPF_OUTPUT as u64;
-        attr.sample_type = sys::bindings::PERF_SAMPLE_RAW;
+        #[allow(clippy::unnecessary_cast)]
+        {
+            attr.sample_type = sys::bindings::PERF_SAMPLE_RAW as u64;
+        }
 
         // Configure watermark behavior
         if n_watermark_bytes > 0 {
