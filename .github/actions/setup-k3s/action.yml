@@ -196,8 +196,29 @@ runs:
       run: |
         set -euo pipefail
         export KUBECONFIG="${{ inputs.kubeconfig_path }}"
-        echo "Waiting for node(s) to be Ready (timeout=${{ inputs.timeout_node_ready_seconds }}s)"
-        kubectl wait --for=condition=Ready nodes --all --timeout=${{ inputs.timeout_node_ready_seconds }}s
+        echo "Waiting for node registration (timeout=${{ inputs.timeout_node_ready_seconds }}s)"
+        END=$((SECONDS + ${{ inputs.timeout_node_ready_seconds }}))
+        until [ "$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; do
+          if [ $SECONDS -ge $END ]; then
+            echo "Timed out waiting for node registration"
+            echo "=== k3s service status ==="; sudo systemctl status k3s || true
+            echo "=== recent k3s logs ==="; sudo journalctl -u k3s --no-pager -n 200 || true
+            echo "=== nodes (if any) ==="; kubectl get nodes -o wide || true
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "Node registered; waiting for Ready condition (timeout=${{ inputs.timeout_node_ready_seconds }}s)"
+        if ! kubectl wait --for=condition=Ready nodes --all --timeout=${{ inputs.timeout_node_ready_seconds }}s; then
+          echo "Failed waiting for node Ready"
+          echo "=== nodes ==="; kubectl get nodes -o wide || true
+          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+          if [ -n "$NODE_NAME" ]; then
+            echo "=== describe node $NODE_NAME ==="; kubectl describe node "$NODE_NAME" || true
+          fi
+          echo "=== recent k3s logs ==="; sudo journalctl -u k3s --no-pager -n 200 || true
+          exit 1
+        fi
 
     - name: Capture node name
       id: capture-node
