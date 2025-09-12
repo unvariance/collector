@@ -353,7 +353,12 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             let st = self.state.lock().unwrap();
             match st.pods.get(pod_uid) {
                 Some(ps) => matches!(ps.group_state, ResctrlGroupState::Failed),
-                None => return Err(resctrl::Error::Io { path: PathBuf::from("<pod>"), source: io::Error::from_raw_os_error(libc::ENOENT) }),
+                None => {
+                    return Err(resctrl::Error::Io {
+                        path: PathBuf::from("<pod>"),
+                        source: io::Error::from_raw_os_error(libc::ENOENT),
+                    })
+                }
             }
         };
 
@@ -382,9 +387,14 @@ impl<P: FsProvider> ResctrlPlugin<P> {
                     }
                 }
                 // Pod disappeared concurrently
-                Err(resctrl::Error::Io { path: std::path::PathBuf::from("<pod>"), source: std::io::Error::from_raw_os_error(libc::ENOENT) })
+                Err(resctrl::Error::Io {
+                    path: std::path::PathBuf::from("<pod>"),
+                    source: std::io::Error::from_raw_os_error(libc::ENOENT),
+                })
             }
-            Err(resctrl::Error::Capacity { .. }) => Err(resctrl::Error::Capacity { source: std::io::Error::from_raw_os_error(libc::ENOSPC) }),
+            Err(resctrl::Error::Capacity { .. }) => Err(resctrl::Error::Capacity {
+                source: std::io::Error::from_raw_os_error(libc::ENOSPC),
+            }),
             Err(e) => Err(e),
         }
     }
@@ -404,14 +414,20 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             let cst = st
                 .containers
                 .get(container_id)
-                .ok_or_else(|| resctrl::Error::Io { path: PathBuf::from("<container>"), source: io::Error::from_raw_os_error(libc::ENOENT) })?;
+                .ok_or_else(|| resctrl::Error::Io {
+                    path: PathBuf::from("<container>"),
+                    source: io::Error::from_raw_os_error(libc::ENOENT),
+                })?;
             if cst.state == ContainerSyncState::NoPod {
                 return Ok(ContainerSyncState::NoPod);
             }
             let ps = st
                 .pods
                 .get(&cst.pod_uid)
-                .ok_or_else(|| resctrl::Error::Io { path: PathBuf::from("<pod>"), source: io::Error::from_raw_os_error(libc::ENOENT) })?;
+                .ok_or_else(|| resctrl::Error::Io {
+                    path: PathBuf::from("<pod>"),
+                    source: io::Error::from_raw_os_error(libc::ENOENT),
+                })?;
             let gp = match &ps.group_state {
                 ResctrlGroupState::Exists(p) => p.clone(),
                 _ => return Ok(cst.state),
@@ -427,22 +443,34 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
         // Perform reconcile outside the lock
         let pid_source = self.pid_source.clone();
-        let pid_resolver = move || -> resctrl::Result<Vec<i32>> { pid_source.pids_for_path(&cgroup_path) };
-        let res = self.resctrl.reconcile_group(&group_path, pid_resolver, passes)?;
-        let new_state = if res.missing == 0 { ContainerSyncState::Reconciled } else { ContainerSyncState::Partial };
+        let pid_resolver =
+            move || -> resctrl::Result<Vec<i32>> { pid_source.pids_for_path(&cgroup_path) };
+        let res = self
+            .resctrl
+            .reconcile_group(&group_path, pid_resolver, passes)?;
+        let new_state = if res.missing == 0 {
+            ContainerSyncState::Reconciled
+        } else {
+            ContainerSyncState::Partial
+        };
 
         // Re-acquire lock and update counters/state conditionally
         let mut st = self.state.lock().unwrap();
         // Track whether we improved state
         let mut did_reconcile = false;
         let ret_state = if let Some(cst) = st.containers.get_mut(container_id) {
-            if cst.state == ContainerSyncState::Partial && new_state == ContainerSyncState::Reconciled {
+            if cst.state == ContainerSyncState::Partial
+                && new_state == ContainerSyncState::Reconciled
+            {
                 cst.state = ContainerSyncState::Reconciled;
                 did_reconcile = true;
             }
             cst.state
         } else {
-            return Err(resctrl::Error::Io { path: std::path::PathBuf::from("<container>"), source: std::io::Error::from_raw_os_error(libc::ENOENT) });
+            return Err(resctrl::Error::Io {
+                path: std::path::PathBuf::from("<container>"),
+                source: std::io::Error::from_raw_os_error(libc::ENOENT),
+            });
         };
 
         if did_reconcile {
@@ -466,12 +494,24 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             let pods = st
                 .pods
                 .iter()
-                .filter_map(|(uid, ps)| if matches!(ps.group_state, ResctrlGroupState::Failed) { Some(uid.clone()) } else { None })
+                .filter_map(|(uid, ps)| {
+                    if matches!(ps.group_state, ResctrlGroupState::Failed) {
+                        Some(uid.clone())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             let containers = st
                 .containers
                 .iter()
-                .filter_map(|(cid, cs)| if cs.state == ContainerSyncState::Partial { Some(cid.clone()) } else { None })
+                .filter_map(|(cid, cs)| {
+                    if cs.state == ContainerSyncState::Partial {
+                        Some(cid.clone())
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             (pods, containers)
         };
@@ -1067,25 +1107,54 @@ mod tests {
 
         let mock_pid_src = MockCgroupPidSource::new();
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
-        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src.clone()));
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            Arc::new(mock_pid_src.clone()),
+        );
 
         // Configure ENOSPC for the pod's group dir
         let group_path = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
         fs.set_nospace_dir(&group_path);
 
         // Define pod and container
-        let pod = nri::api::PodSandbox { id: "sb1".into(), uid: "u1".into(), ..Default::default() };
-        let linux = nri::api::LinuxContainer { cgroups_path: "/cg/runtime:cri-containerd:c1".into(), ..Default::default() };
-        let container = nri::api::Container { id: "c1".into(), pod_sandbox_id: pod.id.clone(), linux: protobuf::MessageField::some(linux), ..Default::default() };
+        let pod = nri::api::PodSandbox {
+            id: "sb1".into(),
+            uid: "u1".into(),
+            ..Default::default()
+        };
+        let linux = nri::api::LinuxContainer {
+            cgroups_path: "/cg/runtime:cri-containerd:c1".into(),
+            ..Default::default()
+        };
+        let container = nri::api::Container {
+            id: "c1".into(),
+            pod_sandbox_id: pod.id.clone(),
+            linux: protobuf::MessageField::some(linux),
+            ..Default::default()
+        };
 
-        let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
+        let ctx = TtrpcContext {
+            mh: ttrpc::MessageHeader::default(),
+            metadata: std::collections::HashMap::new(),
+            timeout_nano: 5_000,
+        };
 
         // Send RUN_POD_SANDBOX; expect Failed event
-        let state_req = StateChangeEvent { event: Event::RUN_POD_SANDBOX.into(), pod: protobuf::MessageField::some(pod.clone()), container: protobuf::MessageField::none(), special_fields: SpecialFields::default() };
+        let state_req = StateChangeEvent {
+            event: Event::RUN_POD_SANDBOX.into(),
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::none(),
+            special_fields: SpecialFields::default(),
+        };
         let _ = plugin.state_change(&ctx, state_req).await.unwrap();
 
         // Receive Failed AddOrUpdate (0/0)
-        let ev = timeout(Duration::from_millis(100), rx.recv()).await.expect("event").expect("ev");
+        let ev = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event")
+            .expect("ev");
         match ev {
             PodResctrlEvent::AddOrUpdate(a) => {
                 assert_eq!(a.pod_uid, "u1");
@@ -1097,10 +1166,19 @@ mod tests {
         }
 
         // Add a container while pod Failed → expect counts 1/0
-        let create_req = CreateContainerRequest { pod: protobuf::MessageField::some(pod.clone()), container: protobuf::MessageField::some(container.clone()), special_fields: SpecialFields::default() };
-        let _ = Plugin::create_container(&plugin, &ctx, create_req).await.unwrap();
+        let create_req = CreateContainerRequest {
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::some(container.clone()),
+            special_fields: SpecialFields::default(),
+        };
+        let _ = Plugin::create_container(&plugin, &ctx, create_req)
+            .await
+            .unwrap();
         // Expect update with counts 1/0
-        let ev = timeout(Duration::from_millis(100), rx.recv()).await.expect("event").expect("ev");
+        let ev = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event")
+            .expect("ev");
         match ev {
             PodResctrlEvent::AddOrUpdate(a) => {
                 assert_eq!(a.total_containers, 1);
@@ -1112,14 +1190,29 @@ mod tests {
 
         // First retry: still ENOSPC → expect Error::Capacity and no event
         let err = plugin.retry_group_creation("u1").unwrap_err();
-        match err { resctrl::Error::Capacity { .. } => {}, _ => panic!("expected capacity error") }
-        assert!(timeout(Duration::from_millis(50), rx.recv()).await.ok().is_none(), "no duplicate events expected");
+        match err {
+            resctrl::Error::Capacity { .. } => {}
+            _ => panic!("expected capacity error"),
+        }
+        assert!(
+            timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .ok()
+                .is_none(),
+            "no duplicate events expected"
+        );
 
         // Clear ENOSPC and retry again → should transition to Exists and emit event with counts 1/0
         fs.clear_nospace_dir(&group_path);
         let st = plugin.retry_group_creation("u1").expect("retry ok");
-        match st { ResctrlGroupState::Exists(p) => assert!(p.ends_with("/sys/fs/resctrl/pod_u1")), _ => panic!("expected Exists") }
-        let ev = timeout(Duration::from_millis(100), rx.recv()).await.expect("event").expect("ev");
+        match st {
+            ResctrlGroupState::Exists(p) => assert!(p.ends_with("/sys/fs/resctrl/pod_u1")),
+            _ => panic!("expected Exists"),
+        }
+        let ev = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event")
+            .expect("ev");
         match ev {
             PodResctrlEvent::AddOrUpdate(a) => {
                 assert!(matches!(a.group_state, ResctrlGroupState::Exists(_)));
@@ -1142,12 +1235,20 @@ mod tests {
 
         let rc = Resctrl::with_provider(
             fs.clone(),
-            resctrl::Config { auto_mount: false, ..Default::default() },
+            resctrl::Config {
+                auto_mount: false,
+                ..Default::default()
+            },
         );
 
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
         let mut mock_pid_src = MockCgroupPidSource::new();
-        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src.clone()));
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            Arc::new(mock_pid_src.clone()),
+        );
 
         // Pre-create group dir and tasks → create_group will see EEXIST and succeed
         let gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
@@ -1155,9 +1256,21 @@ mod tests {
         fs.add_file(&gp.join("tasks"), "");
 
         // Define pod and container
-        let pod = nri::api::PodSandbox { id: "sb1".into(), uid: "u1".into(), ..Default::default() };
-        let linux = nri::api::LinuxContainer { cgroups_path: "/cg/x:cri-containerd:c1".into(), ..Default::default() };
-        let container = nri::api::Container { id: "c1".into(), pod_sandbox_id: pod.id.clone(), linux: protobuf::MessageField::some(linux), ..Default::default() };
+        let pod = nri::api::PodSandbox {
+            id: "sb1".into(),
+            uid: "u1".into(),
+            ..Default::default()
+        };
+        let linux = nri::api::LinuxContainer {
+            cgroups_path: "/cg/x:cri-containerd:c1".into(),
+            ..Default::default()
+        };
+        let container = nri::api::Container {
+            id: "c1".into(),
+            pod_sandbox_id: pod.id.clone(),
+            linux: protobuf::MessageField::some(linux),
+            ..Default::default()
+        };
         let full_cg = nri::compute_full_cgroup_path(&container, Some(&pod));
 
         // Initially PIDs unassignable (ESRCH)
@@ -1166,11 +1279,26 @@ mod tests {
         fs.set_missing_pid(102);
 
         // Run pod + add container → expect counts 1/0
-        let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
-        let state_req = StateChangeEvent { event: Event::RUN_POD_SANDBOX.into(), pod: protobuf::MessageField::some(pod.clone()), container: protobuf::MessageField::none(), special_fields: SpecialFields::default() };
+        let ctx = TtrpcContext {
+            mh: ttrpc::MessageHeader::default(),
+            metadata: std::collections::HashMap::new(),
+            timeout_nano: 5_000,
+        };
+        let state_req = StateChangeEvent {
+            event: Event::RUN_POD_SANDBOX.into(),
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::none(),
+            special_fields: SpecialFields::default(),
+        };
         let _ = plugin.state_change(&ctx, state_req).await.unwrap();
-        let create_req = CreateContainerRequest { pod: protobuf::MessageField::some(pod.clone()), container: protobuf::MessageField::some(container.clone()), special_fields: SpecialFields::default() };
-        let _ = Plugin::create_container(&plugin, &ctx, create_req).await.unwrap();
+        let create_req = CreateContainerRequest {
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::some(container.clone()),
+            special_fields: SpecialFields::default(),
+        };
+        let _ = Plugin::create_container(&plugin, &ctx, create_req)
+            .await
+            .unwrap();
 
         // Drain two events (pod created Exists and container accounted)
         let _ = timeout(Duration::from_millis(100), rx.recv()).await; // pod exists
@@ -1205,10 +1333,21 @@ mod tests {
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
-        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config { auto_mount: false, ..Default::default() });
+        let rc = Resctrl::with_provider(
+            fs.clone(),
+            resctrl::Config {
+                auto_mount: false,
+                ..Default::default()
+            },
+        );
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(32);
         let mut mock_pid_src = MockCgroupPidSource::new();
-        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src.clone()));
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            Arc::new(mock_pid_src.clone()),
+        );
 
         // uA: Failed pod due to ENOSPC
         let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
@@ -1219,20 +1358,72 @@ mod tests {
         fs.add_file(&u_b_gp.join("tasks"), "");
 
         // Define pods and container for uB
-        let pod_a = nri::api::PodSandbox { id: "sbA".into(), uid: "uA".into(), ..Default::default() };
-        let pod_b = nri::api::PodSandbox { id: "sbB".into(), uid: "uB".into(), ..Default::default() };
-        let linux_b = nri::api::LinuxContainer { cgroups_path: "/cg/b:cri-containerd:b1".into(), ..Default::default() };
-        let ctr_b = nri::api::Container { id: "b1".into(), pod_sandbox_id: pod_b.id.clone(), linux: protobuf::MessageField::some(linux_b), ..Default::default() };
+        let pod_a = nri::api::PodSandbox {
+            id: "sbA".into(),
+            uid: "uA".into(),
+            ..Default::default()
+        };
+        let pod_b = nri::api::PodSandbox {
+            id: "sbB".into(),
+            uid: "uB".into(),
+            ..Default::default()
+        };
+        let linux_b = nri::api::LinuxContainer {
+            cgroups_path: "/cg/b:cri-containerd:b1".into(),
+            ..Default::default()
+        };
+        let ctr_b = nri::api::Container {
+            id: "b1".into(),
+            pod_sandbox_id: pod_b.id.clone(),
+            linux: protobuf::MessageField::some(linux_b),
+            ..Default::default()
+        };
         let cg_b = nri::compute_full_cgroup_path(&ctr_b, Some(&pod_b));
         mock_pid_src.set_pids(cg_b.clone(), vec![222, 223]);
         fs.set_missing_pid(222);
         fs.set_missing_pid(223);
 
         // Feed state
-        let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
-        let _ = plugin.state_change(&ctx, StateChangeEvent { event: Event::RUN_POD_SANDBOX.into(), pod: protobuf::MessageField::some(pod_a.clone()), container: protobuf::MessageField::none(), special_fields: SpecialFields::default() }).await.unwrap();
-        let _ = plugin.state_change(&ctx, StateChangeEvent { event: Event::RUN_POD_SANDBOX.into(), pod: protobuf::MessageField::some(pod_b.clone()), container: protobuf::MessageField::none(), special_fields: SpecialFields::default() }).await.unwrap();
-        let _ = Plugin::create_container(&plugin, &ctx, CreateContainerRequest { pod: protobuf::MessageField::some(pod_b.clone()), container: protobuf::MessageField::some(ctr_b.clone()), special_fields: SpecialFields::default() }).await.unwrap();
+        let ctx = TtrpcContext {
+            mh: ttrpc::MessageHeader::default(),
+            metadata: std::collections::HashMap::new(),
+            timeout_nano: 5_000,
+        };
+        let _ = plugin
+            .state_change(
+                &ctx,
+                StateChangeEvent {
+                    event: Event::RUN_POD_SANDBOX.into(),
+                    pod: protobuf::MessageField::some(pod_a.clone()),
+                    container: protobuf::MessageField::none(),
+                    special_fields: SpecialFields::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let _ = plugin
+            .state_change(
+                &ctx,
+                StateChangeEvent {
+                    event: Event::RUN_POD_SANDBOX.into(),
+                    pod: protobuf::MessageField::some(pod_b.clone()),
+                    container: protobuf::MessageField::none(),
+                    special_fields: SpecialFields::default(),
+                },
+            )
+            .await
+            .unwrap();
+        let _ = Plugin::create_container(
+            &plugin,
+            &ctx,
+            CreateContainerRequest {
+                pod: protobuf::MessageField::some(pod_b.clone()),
+                container: protobuf::MessageField::some(ctr_b.clone()),
+                special_fields: SpecialFields::default(),
+            },
+        )
+        .await
+        .unwrap();
 
         // Drain initial events
         let _ = timeout(Duration::from_millis(100), rx.recv()).await; // uA failed
@@ -1248,7 +1439,11 @@ mod tests {
         plugin.retry_all_once().expect("retry all ok");
         // mkdir called exactly once for uA during this pass
         let after = fs.mkdir_count(&u_a_gp);
-        assert_eq!(after.saturating_sub(before), 1, "expected single create_dir attempt in this pass");
+        assert_eq!(
+            after.saturating_sub(before),
+            1,
+            "expected single create_dir attempt in this pass"
+        );
 
         // Validate internal state improved for uB
         {
