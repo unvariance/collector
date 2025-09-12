@@ -721,31 +721,23 @@ jobs:
           kind delete cluster --name ${CLUSTER} || true
 
       # K3s target setup
-      - name: Install K3s
+      - name: Setup k3s (pinned)
+        if: ${{ matrix.target == 'k3s' }}
+        uses: ./.github/actions/setup-k3s
+        with:
+          k3s_version: v1.31.5+k3s1
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+
+      - name: Copy kubeconfig for non-root use
         if: ${{ matrix.target == 'k3s' }}
         run: |
-          # Install K3s pinned to a pre-containerd-2.0 build (1.31.5 -> containerd 1.7)
-          curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION="v1.31.5+k3s1" sh -s -
-          echo "Installed K3s version:" && k3s --version || true
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
-
-      - name: Wait for K3s
-        if: ${{ matrix.target == 'k3s' }}
-        run: |
-          export KUBECONFIG="$HOME/.kube/config"
-          echo "Waiting for at least one node to appear..."
-          for i in {1..120}; do
-            COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l | tr -d ' ')
-            if [ "${COUNT}" -ge 1 ]; then
-              kubectl get nodes
-              break
-            fi
-            sleep 5
-          done
-          echo "Waiting for nodes to be Ready..."
-          kubectl wait --for=condition=Ready node --all --timeout=300s
 
       - name: Run nri-init on host (K3s, binary mode)
         if: ${{ matrix.target == 'k3s' && matrix.runner == 'binary' }}

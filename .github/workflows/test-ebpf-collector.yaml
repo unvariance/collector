@@ -569,29 +569,14 @@ jobs:
       - name: Make collector executable
         run: chmod +x ./collector
 
-      - name: Install K3s (recent version with NRI enabled by default)
-        run: |
-          curl -sfL https://get.k3s.io | sh
-          systemctl status k3s || true
-
-      - name: Wait for Kubernetes API
-        run: |
-          echo "Waiting for Kubernetes API..."
-          until kubectl get nodes &>/dev/null; do
-            sleep 1
-            echo "Still waiting..."
-          done
-          echo "Kubernetes API is available!"
-
-      - name: Wait for nodes
-        run: |
-          echo "Waiting for at least one node to be registered..."
-          until [ $(kubectl get nodes --no-headers | wc -l) -gt 0 ]; do
-            sleep 1
-            echo "Still waiting for node registration..."
-          done
-          echo "Node(s) registered, waiting for Ready status..."
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      - name: Setup k3s cluster
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          preflight_inotify: true
+          disable_packaged_addons: true
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
 
       - name: Ensure NRI socket exists
         run: |

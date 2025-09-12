@@ -62,73 +62,15 @@ jobs:
         run: |
           mkdir -p $HOME
 
-      - name: Install K3s Cluster
-        run: |
-          # Installs K3s (a lightweight Kubernetes distribution) on the system
-          curl -sfL https://get.k3s.io | sh
-
-      - name: Status of K3s Installation
-        run: |
-          systemctl status k3s  
-      
-      - name: Wait for Kubernetes API
-        run: |
-          echo "Waiting for Kubernetes API..."
-          until kubectl get nodes &>/dev/null; do
-            sleep 1
-            echo "Still waiting..."
-          done
-          echo "Kubernetes API is available!"
-
-      - name: Wait for nodes
-        run: |
-          echo "Waiting for at least one node to be registered..."
-          until [ $(kubectl get nodes --no-headers | wc -l) -gt 0 ]; do
-            sleep 1
-            echo "Still waiting for node registration..."
-          done
-          echo "Node(s) registered, waiting for Ready status..."
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s      
-
-      - name: (k8s) Wait for kube-system pods
-        run: |
-          echo "Waiting for at least one kube-system pod to be registered..."
-          until [ $(kubectl get pods --namespace kube-system --no-headers | wc -l) -gt 0 ]; do
-            sleep 1
-            echo "Still waiting for kube-system pod registration..."
-          done
-          echo "Kube-system pod(s) registered, waiting for Ready status..."
-          for i in {1..10}; do
-            echo "Attempt $i of 10: Waiting for kube-system pods (10s timeout)..."
-            if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout=10s; then
-              echo "All kube-system pods are ready!"
-              break
-            elif [ $i -eq 10 ]; then
-              echo "Final attempt failed. Gathering diagnostic information..."
-              
-              echo "=== KUBE-SYSTEM PODS STATUS ==="
-              kubectl get pods --namespace kube-system -o wide
-              
-              echo "=== KUBE-SYSTEM PODS DESCRIPTIONS ==="
-              kubectl get pods --namespace kube-system --no-headers | awk '{print $1}' | while read pod; do
-                echo "--- Describing pod: $pod ---"
-                kubectl describe pod "$pod" --namespace kube-system
-                echo
-              done
-              
-              echo "=== NODE DESCRIPTION ==="
-              NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-              kubectl describe node "$NODE_NAME"
-              
-              echo "=== CLUSTER EVENTS ==="
-              kubectl get events --all-namespaces --sort-by='.lastTimestamp'
-              
-              echo "Exiting with error."
-              exit 1
-            else
-              echo "Attempt $i failed. Retrying..."
-            fi
-          done
+      - name: Setup k3s cluster
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          wait_kube_system: true
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+          timeout_kube_system_each_seconds: 10
+          max_retries_kube_system_ready: 10
 
       - name: Get Default objects in kube-system
         run: | 

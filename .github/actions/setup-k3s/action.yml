@@ -1,0 +1,240 @@
+name: "Setup k3s"
+description: "Install and validate a local k3s cluster with optional kubelet tuning"
+author: "Memory Collector Team"
+
+inputs:
+  k3s_version:
+    description: "K3s version to install (e.g., v1.31.5+k3s1)"
+    required: false
+    default: ""
+  kubeconfig_path:
+    description: "Path to kubeconfig"
+    required: false
+    default: "/etc/rancher/k3s/k3s.yaml"
+  preflight_inotify:
+    description: "Increase inotify limits before install"
+    required: false
+    default: "true"
+  kubelet_max_pods:
+    description: "Optional kubelet maxPods. If set, write kubelet config and ensure k3s uses it"
+    required: false
+    default: ""
+  extra_k3s_server_args:
+    description: "Extra args appended to k3s server"
+    required: false
+    default: ""
+  disable_packaged_addons:
+    description: "Disable packaged addons (traefik, servicelb)"
+    required: false
+    default: "true"
+  wait_kube_system:
+    description: "Also wait for kube-system pods"
+    required: false
+    default: "false"
+  timeout_api_server_ready_seconds:
+    description: "Timeout in seconds to wait for API server"
+    required: false
+    default: "300"
+  timeout_node_ready_seconds:
+    description: "Timeout in seconds to wait for nodes to be Ready"
+    required: false
+    default: "300"
+  timeout_kube_system_each_seconds:
+    description: "Per-attempt timeout for kube-system readiness"
+    required: false
+    default: "10"
+  max_retries_kube_system_ready:
+    description: "Max retries for kube-system readiness"
+    required: false
+    default: "10"
+
+outputs:
+  kubeconfig:
+    description: "Path to kubeconfig used"
+    value: ${{ steps.set-outputs.outputs.kubeconfig }}
+  node_name:
+    description: "First node name"
+    value: ${{ steps.capture-node.outputs.node_name }}
+  kubelet_max_pods_effective:
+    description: "Allocatable pods count on first node (if available)"
+    value: ${{ steps.set-outputs.outputs.kubelet_max_pods_effective }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Preflight inotify limits
+      if: ${{ inputs.preflight_inotify == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Raising inotify limits (if possible)"
+        sudo sysctl -w fs.inotify.max_user_watches=524288 || true
+        sudo sysctl -w fs.inotify.max_user_instances=512 || true
+        sysctl fs.inotify.max_user_watches || true
+        sysctl fs.inotify.max_user_instances || true
+
+    - name: Install k3s
+      shell: bash
+      env:
+        INSTALL_K3S_VERSION: ${{ inputs.k3s_version }}
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+
+        DISABLE_ARGS=""
+        if [ "${{ inputs.disable_packaged_addons }}" = "true" ]; then
+          # disable packaged addons by default
+          DISABLE_ARGS="--disable=traefik --disable=servicelb"
+        fi
+
+        EXTRA_ARGS="${{ inputs.extra_k3s_server_args }}"
+        # Build INSTALL_K3S_EXEC
+        INSTALL_EXEC="server ${DISABLE_ARGS} ${EXTRA_ARGS}"
+
+        echo "Installing k3s ..."
+        if [ -n "${INSTALL_K3S_VERSION}" ]; then
+          echo "Pinning k3s version: ${INSTALL_K3S_VERSION}"
+        fi
+        # shellcheck disable=SC2086
+        curl -sfL https://get.k3s.io | sudo INSTALL_K3S_VERSION="${INSTALL_K3S_VERSION}" INSTALL_K3S_EXEC="${INSTALL_EXEC}" sh -s -
+
+        echo "k3s service status:"
+        sudo systemctl status k3s || true
+
+    - name: Optional kubelet maxPods tuning
+      if: ${{ inputs.kubelet_max_pods != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        CFG_DIR=/etc/rancher/k3s
+        CFG_FILE=${CFG_DIR}/kubelet.config
+        UNIT=/etc/systemd/system/k3s.service
+        NEED_RESTART=0
+
+        echo "Configuring kubelet maxPods=${{ inputs.kubelet_max_pods }}"
+        sudo mkdir -p "$CFG_DIR"
+        NEW_CFG=$(cat <<EOF
+        apiVersion: kubelet.config.k8s.io/v1beta1
+        kind: KubeletConfiguration
+        maxPods: ${{ inputs.kubelet_max_pods }}
+        EOF
+        )
+        if [ -f "$CFG_FILE" ]; then
+          if ! diff -q <(echo "$NEW_CFG") "$CFG_FILE" >/dev/null 2>&1; then
+            echo "$NEW_CFG" | sudo tee "$CFG_FILE" >/dev/null
+            NEED_RESTART=1
+          else
+            echo "kubelet.config already up-to-date"
+          fi
+        else
+          echo "$NEW_CFG" | sudo tee "$CFG_FILE" >/dev/null
+          NEED_RESTART=1
+        fi
+
+        # Ensure systemd unit passes the kubelet config arg
+        if [ -f "$UNIT" ]; then
+          if ! grep -q -- "--kubelet-arg=config=$CFG_FILE" "$UNIT"; then
+            echo "Patching $UNIT to include --kubelet-arg=config=$CFG_FILE"
+            # Common k3s unit has a line '    server \' – handle that first
+            if grep -qE '^\s{4}server \\' "$UNIT"; then
+              sudo sed -i "s|^\s\{4\}server \\\\$|    server --kubelet-arg=config=$CFG_FILE \\\\|" "$UNIT"
+            else
+              # Fallback: inject after ' server ' on the ExecStart line
+              sudo sed -i "/^ExecStart=/ s| server | server --kubelet-arg=config=$CFG_FILE |" "$UNIT"
+            fi
+            NEED_RESTART=1
+          else
+            echo "systemd unit already contains kubelet config arg"
+          fi
+        else
+          echo "Warning: $UNIT not found; skipping unit patch"
+        fi
+
+        if [ "$NEED_RESTART" -eq 1 ]; then
+          echo "Reloading and restarting k3s to apply kubelet config"
+          sudo systemctl daemon-reload || true
+          sudo systemctl restart k3s || true
+          # give k3s a few seconds to come back
+          sleep 5
+        else
+          echo "No changes required; skipping restart"
+        fi
+
+    - name: Wait for API server
+      id: wait-api
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        echo "Waiting for Kubernetes API (timeout=${{ inputs.timeout_api_server_ready_seconds }}s)"
+        END=$((SECONDS + ${{ inputs.timeout_api_server_ready_seconds }}))
+        until kubectl get nodes >/dev/null 2>&1; do
+          if [ $SECONDS -ge $END ]; then
+            echo "Timed out waiting for API server"
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "API server is available"
+
+    - name: Wait for node Ready
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        echo "Waiting for node(s) to be Ready (timeout=${{ inputs.timeout_node_ready_seconds }}s)"
+        kubectl wait --for=condition=Ready nodes --all --timeout=${{ inputs.timeout_node_ready_seconds }}s
+
+    - name: Capture node name
+      id: capture-node
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+        echo "node_name=${NODE_NAME}" >> "$GITHUB_OUTPUT"
+        echo "First node: ${NODE_NAME}"
+
+    - name: Optional wait for kube-system pods
+      if: ${{ inputs.wait_kube_system == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        echo "Waiting for kube-system pods..."
+        RETRIES=${{ inputs.max_retries_kube_system_ready }}
+        TIMEOUT=${{ inputs.timeout_kube_system_each_seconds }}
+        for i in $(seq 1 "$RETRIES"); do
+          echo "Attempt $i/$RETRIES (timeout ${TIMEOUT}s)"
+          if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout="${TIMEOUT}s"; then
+            echo "kube-system pods Ready"
+            break
+          elif [ "$i" -eq "$RETRIES" ]; then
+            echo "Final attempt failed. Gathering diagnostics..."
+            echo "=== kube-system pods ==="; kubectl get pods -n kube-system -o wide || true
+            echo "=== kube-system describe ==="; kubectl get pods -n kube-system -o name | xargs -r -n1 kubectl describe -n kube-system || true
+            NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$NODE_NAME" ]; then
+              echo "=== node describe $NODE_NAME ==="; kubectl describe node "$NODE_NAME" || true
+            fi
+            echo "=== events (recent) ==="; kubectl get events --all-namespaces --sort-by=.lastTimestamp | tail -n 200 || true
+            exit 1
+          else
+            echo "Attempt $i failed; retrying shortly..."
+          fi
+        done
+
+    - name: Set outputs
+      id: set-outputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        echo "kubeconfig=${KUBECONFIG}" >> "$GITHUB_OUTPUT"
+        # Attempt to capture allocatable pods as an approximation of effective maxPods
+        PODS=$(kubectl get nodes -o jsonpath='{.items[0].status.allocatable.pods}' 2>/dev/null || true)
+        if [ -n "$PODS" ]; then
+          echo "kubelet_max_pods_effective=$PODS" >> "$GITHUB_OUTPUT"
+        fi
+

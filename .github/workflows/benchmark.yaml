@@ -109,75 +109,18 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
-      - name: (k8s) Increase inotify limits
-        run: |
-          # Increase inotify limits to prevent fsnotify watcher errors
-          sudo sysctl -w fs.inotify.max_user_watches=524288
-          sudo sysctl -w fs.inotify.max_user_instances=512
-          
-          # Verify the settings
-          echo "Current inotify limits:"
-          sysctl fs.inotify.max_user_watches
-          sysctl fs.inotify.max_user_instances
-
-      - name: (k8s) Install K3s Cluster
-        run: |
-          # Installs K3s (a lightweight Kubernetes distribution) on the system
-          curl -sfL https://get.k3s.io | sh
-
-      - name: (k8s) Status of K3s Installation
-        run: |
-          systemctl status k3s  
-
-      - name: (k8s) Configure Kubelet Max Pods
-        run: |
-          # Create kubelet configuration directory
-          sudo mkdir -p /etc/rancher/k3s
-          
-          # Create kubelet configuration file to increase max pods to 400
-          sudo tee /etc/rancher/k3s/kubelet.config > /dev/null <<EOF
-          apiVersion: kubelet.config.k8s.io/v1beta1
-          kind: KubeletConfiguration
-          maxPods: 400
-          EOF
-          
-          echo "Created kubelet configuration file:"
-          cat /etc/rancher/k3s/kubelet.config
-
-      - name: (k8s) Update K3S Service Configuration
-        run: |
-          # Backup original service file
-          sudo cp /etc/systemd/system/k3s.service /etc/systemd/system/k3s.service.backup
-          
-          # Update the service file to include kubelet config
-          # The service file has 'server \' on its own line, so we need to replace that specific line
-          sudo sed -i 's|^    server \\$|    server --kubelet-arg=config=/etc/rancher/k3s/kubelet.config \\|' /etc/systemd/system/k3s.service
-          
-          echo "Updated K3S service configuration:"
-          cat /etc/systemd/system/k3s.service
-
-      - name: (k8s) Reload and Restart K3S
-        run: |
-          # Reload systemctl daemon to pick up service changes
-          sudo systemctl daemon-reload
-          
-          # Restart K3S to apply the new configuration
-          sudo systemctl restart k3s
-          
-          # Wait a moment for the service to start
-          sleep 5
-          
-          # Check service status
-          systemctl status k3s
-      
-      - name: (k8s) Wait for Kubernetes API
-        run: |
-          echo "Waiting for Kubernetes API..."
-          until kubectl get nodes &>/dev/null; do
-            sleep 1
-            echo "Still waiting..."
-          done
-          echo "Kubernetes API is available!"
+      - name: (k8s) Setup k3s cluster
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          preflight_inotify: true
+          kubelet_max_pods: 400
+          disable_packaged_addons: true
+          wait_kube_system: true
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+          timeout_kube_system_each_seconds: 10
+          max_retries_kube_system_ready: 10
 
       - name: (k8s) Install Helm
         run: |
@@ -202,69 +145,7 @@ jobs:
           echo "Updating helm dependencies..."
           helm dep update
 
-      - name: (k8s) Wait for nodes
-        run: |
-          echo "Waiting for at least one node to be registered..."
-          until [ $(kubectl get nodes --no-headers | wc -l) -gt 0 ]; do
-            sleep 1
-            echo "Still waiting for node registration..."
-          done
-          echo "Node(s) registered, waiting for Ready status..."
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s      
-
-      - name: (k8s) Verify Node Configuration
-        run: |
-          echo "Verifying node configuration with increased max pods..."
-          kubectl get nodes -o wide
-          
-          # Get the node name and describe it to verify max pods configuration
-          NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-          echo "Describing node: $NODE_NAME"
-          kubectl describe node $NODE_NAME
-          
-          # Specifically check for the allocatable pods count
-          echo "Checking allocatable pods count..."
-          kubectl describe node $NODE_NAME | grep -A 10 "Allocatable:" | grep pods || echo "Could not find pods allocation info"
-
-      - name: (k8s) Wait for kube-system pods
-        run: |
-          echo "Waiting for at least one kube-system pod to be registered..."
-          until [ $(kubectl get pods --namespace kube-system --no-headers | wc -l) -gt 0 ]; do
-            sleep 1
-            echo "Still waiting for kube-system pod registration..."
-          done
-          echo "Kube-system pod(s) registered, waiting for Ready status..."
-          for i in {1..10}; do
-            echo "Attempt $i of 10: Waiting for kube-system pods (10s timeout)..."
-            if kubectl wait --namespace kube-system --for=condition=Ready pods --field-selector=status.phase!=Succeeded --timeout=10s; then
-              echo "All kube-system pods are ready!"
-              break
-            elif [ $i -eq 10 ]; then
-              echo "Final attempt failed. Gathering diagnostic information..."
-              
-              echo "=== KUBE-SYSTEM PODS STATUS ==="
-              kubectl get pods --namespace kube-system -o wide
-              
-              echo "=== KUBE-SYSTEM PODS DESCRIPTIONS ==="
-              kubectl get pods --namespace kube-system --no-headers | awk '{print $1}' | while read pod; do
-                echo "--- Describing pod: $pod ---"
-                kubectl describe pod "$pod" --namespace kube-system
-                echo
-              done
-              
-              echo "=== NODE DESCRIPTION ==="
-              NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
-              kubectl describe node "$NODE_NAME"
-              
-              echo "=== CLUSTER EVENTS ==="
-              kubectl get events --all-namespaces --sort-by='.lastTimestamp'
-              
-              echo "Exiting with error."
-              exit 1
-            else
-              echo "Attempt $i failed. Retrying..."
-            fi
-          done
+      
 
       #### Install KEDA Operator
       - name: (k8s) Install KEDA Operator
