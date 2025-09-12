@@ -19,8 +19,10 @@ on:
   push:
     branches:
       - main
+      - '**'      
     paths:
       - 'charts/collector/**'
+      - '.github/actions/setup-k3s/**'
       - '.github/workflows/test-helm-chart.yaml'
 
 permissions:

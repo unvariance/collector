@@ -2,7 +2,14 @@ name: test-nri-init
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+      - '**'      
+    paths:
+      - 'crates/nri-init/**'
+      - 'Dockerfile.nri-init'
+      - '.github/actions/setup-k3s/**'
+      - '.github/workflows/test-nri-init.yaml'
   workflow_dispatch:
 
 jobs:

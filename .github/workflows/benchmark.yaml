@@ -43,6 +43,7 @@ on:
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml
+      - '.github/actions/setup-k3s/**'
 
 permissions:
   id-token: write # Required for requesting the JWT

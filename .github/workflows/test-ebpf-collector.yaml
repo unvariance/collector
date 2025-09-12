@@ -19,6 +19,7 @@ on:
     paths:
       - crates/**
       - Cargo.toml
+      - '.github/actions/setup-k3s/**'
       - .github/workflows/test-ebpf-collector.yaml
 
 permissions:
