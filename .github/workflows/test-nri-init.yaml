@@ -316,57 +316,70 @@ jobs:
             docker exec $CONTAINER_NAME ls -la /var/run/nri/ 2>/dev/null || echo "NRI directory doesn't exist"
             exit 1
           fi
-      - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
-        env:
-          IMAGE: ${{ needs.build-test-image.outputs.image }}
-        run: |
-          echo "=== Deploying collector with NRI configuration disabled ==="
-          REPO="${IMAGE%:*}"
-          TAG="${IMAGE##*:}"
-          CONTAINER_NAME="kind-nri-preconfigured-control-plane"
-          # Load the image into KIND nodes to avoid GHCR auth issues
-          docker pull "$IMAGE"
-          kind load docker-image "$IMAGE" --name "kind-nri-preconfigured"
-          helm install test-collector charts/collector \
-            -f charts/collector/ci/nri-disabled-values.yaml \
-            --set image.repository=ghcr.io/${{ github.repository }}/collector \
-            --set image.tag=latest \
-            --set nri.init.image.repository="$REPO" \
-            --set nri.init.image.tag="$TAG" \
-            --set-string nri.init.command[0]="/usr/local/bin/nri-init" \
-            --wait --timeout 2m
-          # Wait for pod to be created and ready
-          echo "Waiting for collector pod to be ready..."
-          if ! kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=collector --timeout=180s; then
-            echo "✗ Collector pod did not reach Ready within timeout; dumping diagnostics"
-            kubectl get pods -A || true
-            kubectl get pods -l app.kubernetes.io/name=collector -o wide || true
-            POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$POD" ]; then
-              echo "--- Describe pod $POD ---"
-              kubectl describe pod "$POD" || true
-              echo "--- Init (nri-init) logs ---"
-              kubectl logs "$POD" -c nri-init --tail=500 || true
-              echo "--- Main container logs ---"
-              kubectl logs "$POD" --tail=200 || true
+        - name: Deploy collector with NRI disabled to verify it detects pre-configured NRI
+          env:
+            IMAGE: ${{ needs.build-test-image.outputs.image }}
+          run: |
+            echo "=== Deploying collector with NRI configuration disabled ==="
+            REPO="${IMAGE%:*}"
+            TAG="${IMAGE##*:}"
+            CONTAINER_NAME="kind-nri-preconfigured-control-plane"
+            # Load the image into KIND nodes to avoid GHCR auth issues
+            docker pull "$IMAGE"
+            kind load docker-image "$IMAGE" --name "kind-nri-preconfigured"
+            # Install chart without waiting for Ready, since GH runners may prevent the
+            # main collector container from becoming Ready. We only need the init to run.
+            helm install test-collector charts/collector \
+              -f charts/collector/ci/nri-disabled-values.yaml \
+              --set image.repository=ghcr.io/${{ github.repository }}/collector \
+              --set image.tag=latest \
+              --set nri.init.image.repository="$REPO" \
+              --set nri.init.image.tag="$TAG" \
+              --set-string nri.init.command[0]="/usr/local/bin/nri-init"
+            # Wait for the pod to either become Ready or clearly fail, then evaluate init result
+            echo "Waiting for collector pod to be created..."
+            for i in {1..60}; do
+              POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+              if [ -n "$POD" ]; then
+                echo "Found pod: $POD"
+                break
+              fi
+              sleep 2
+            done
+            if [ -z "$POD" ]; then
+              echo "✗ Collector pod was not created"
+              kubectl get pods -A || true
+              exit 1
             fi
-            echo "--- Recent events ---"
-            kubectl get events --sort-by=.lastTimestamp | tail -n 100 || true
-            exit 1
-          fi
-          # Get pod name
-          POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
-          echo "=== NRI Init Container Logs ==="
-          kubectl logs $POD -c nri-init
-          # Check if init container detected pre-existing NRI (socket present)
-          if kubectl logs $POD -c nri-init | grep -q "NRI socket found at"; then
-            echo "✓ Init container detected pre-configured NRI"
-          else
-            echo "✗ Init container did not detect pre-configured NRI"
-            kubectl logs $POD -c nri-init || true
-            exit 1
-          fi
-          helm uninstall test-collector
+            echo "Waiting for pod to be Ready or fail (ignoring collector failures)..."
+            for i in {1..180}; do
+              READY=$(kubectl get pod "$POD" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+              WAITING_REASON=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="collector")].state.waiting.reason}' 2>/dev/null || echo "")
+              TERM_REASON=$(kubectl get pod "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="collector")].state.terminated.reason}' 2>/dev/null || echo "")
+              PHASE=$(kubectl get pod "$POD" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+              # Ready -> proceed; CrashLoopBackOff/Err* or Terminated/Failed -> proceed as well
+              if [ "$READY" = "True" ] || [ "$PHASE" = "Failed" ] || [ "$WAITING_REASON" = "CrashLoopBackOff" ] || [ -n "$TERM_REASON" ]; then
+                echo "Pod condition reached (Ready=$READY, phase=$PHASE, waiting=$WAITING_REASON, terminated=$TERM_REASON)"
+                break
+              fi
+              sleep 2
+            done
+            # Get pod name
+            POD=$(kubectl get pod -l app.kubernetes.io/name=collector -o jsonpath='{.items[0].metadata.name}')
+            echo "=== NRI Init Container Logs ==="
+            kubectl logs $POD -c nri-init
+            # Check if init container detected pre-existing NRI (socket present)
+            if kubectl logs $POD -c nri-init | grep -q "NRI socket found at"; then
+              echo "✓ Init container detected pre-configured NRI"
+            else
+              echo "✗ Init container did not detect pre-configured NRI"
+              kubectl logs $POD -c nri-init || true
+              exit 1
+            fi
+            # Explicitly ignore collector container failures on GH runners
+            echo "=== Main container logs (ignored for pass/fail) ==="
+            kubectl logs "$POD" --tail=200 || true
+            helm uninstall test-collector
 
   build-test-image:
     name: Build and push nri-init test image
