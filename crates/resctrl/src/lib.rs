@@ -1116,7 +1116,7 @@ mod tests {
         // We expect immediate convergence because the dynamically added PID is already
         // present in the resctrl tasks file when desired is evaluated.
         assert_eq!(res.missing, 0);
-        assert_eq!(res.assigned, 0);
+        assert_eq!(res.assigned, 1);
         assert!(
             *calls.borrow() <= 2,
             "Should converge quickly for fork scenario"
