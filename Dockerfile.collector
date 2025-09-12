@@ -1,5 +1,7 @@
-# Stage 1: Build the Rust collector
-FROM rust:1.86-slim-bookworm AS builder
+############################
+# Base build image with deps
+############################
+FROM rust:1.86-slim-bookworm AS chef-base
 
 # Install required dependencies for eBPF and development
 RUN apt-get update && apt-get install -y \
@@ -11,50 +13,34 @@ RUN apt-get update && apt-get install -y \
     && rustup component add rustfmt \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
+# Install cargo-chef
+RUN cargo install cargo-chef --locked
+
 WORKDIR /app
 
-# Copy only the files needed for dependency resolution first
-COPY Cargo.toml ./
-COPY crates/collector/Cargo.toml ./crates/collector/
-COPY crates/perf_events/Cargo.toml ./crates/perf_events/
-COPY crates/timeslot/Cargo.toml ./crates/timeslot/
-COPY crates/bpf/Cargo.toml ./crates/bpf/
-COPY crates/nri/Cargo.toml ./crates/nri/
-COPY crates/trace-analysis/Cargo.toml ./crates/trace-analysis/
-COPY crates/nri-init/Cargo.toml ./crates/nri-init/
-# Create dummy source files to build dependencies
-RUN mkdir -p crates/collector/src \
-    crates/perf_events/src \
-    crates/timeslot/src \
-    crates/bpf/src \
-    crates/nri/src \
-    crates/trace-analysis/src \
-    crates/nri-init/src \
-    && touch crates/collector/src/lib.rs \
-    && touch crates/perf_events/src/lib.rs \
-    && touch crates/timeslot/src/lib.rs \
-    && touch crates/bpf/src/lib.rs \
-    && touch crates/nri/src/lib.rs \
-    && touch crates/trace-analysis/src/lib.rs \
-    && touch crates/nri-init/src/lib.rs \
-    && echo "fn main() { println!(\"Hello, world!\"); }" > crates/collector/src/main.rs
+############################
+# Planner stage (cargo-chef)
+############################
+FROM chef-base AS chef
 
-# Build dependencies only (this will be cached)
-RUN cargo build --release --bin collector
+# Copy the project files needed to compute dependency graph
+# Copying the whole workspace ensures build.rs and included files are considered
+COPY . .
+
+# Prepare the recipe for caching dependencies
+RUN cargo chef prepare --recipe-path recipe.json
+
+############################
+# Builder stage
+############################
+FROM chef-base AS builder
+
+# Copy over the recipe from the planner stage and build dependencies only
+COPY --from=chef /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
 
 # Now copy the actual source code
-COPY crates ./crates/
-
-# Ensure source files are recompiled
-RUN     touch crates/collector/src/lib.rs \
-    && touch crates/perf_events/src/lib.rs \
-    && touch crates/timeslot/src/lib.rs \
-    && touch crates/bpf/src/lib.rs \
-    && touch crates/nri/src/lib.rs \
-    && touch crates/trace-analysis/src/lib.rs \
-    && touch crates/nri-init/src/lib.rs \
-    && touch crates/collector/src/main.rs
+COPY . .
 
 # Build the actual application
 RUN cargo build --release --bin collector
