@@ -58,6 +58,13 @@ jobs:
     env:
       HOME: /root
     steps:
+      - name: Checkout .github folder
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+          sparse-checkout-cone: true
       - name: Create HOME directory
         run: |
           mkdir -p $HOME
