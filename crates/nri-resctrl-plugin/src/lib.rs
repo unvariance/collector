@@ -296,7 +296,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
         // Create a closure that reads PIDs fresh each time
         let pid_source = self.pid_source.clone();
-        let full = nri::compute_full_cgroup_path(&container, Some(&pod));
+        let full = nri::compute_full_cgroup_path(container, Some(pod));
         let pid_resolver = move || -> Result<Vec<i32>, resctrl::Error> {
             pid_source.pids_for_path(&full)
         };
