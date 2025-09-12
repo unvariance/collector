@@ -31,10 +31,21 @@ RUN apt-get update && apt-get install -y \
     r-base \
     && rm -rf /var/lib/apt/lists/*
 
-    RUN ln -s /usr/bin/clang-19 /usr/bin/clang
+RUN ln -s /usr/bin/clang-19 /usr/bin/clang
 
 # Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Install NVM, Node.js (LTS), and Codex CLI
+ENV NVM_VERSION=v0.39.7
+ENV NVM_DIR=/root/.nvm
+RUN /bin/bash -lc 'set -e; \
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/${NVM_VERSION}/install.sh | bash; \
+    . "$NVM_DIR/nvm.sh"; \
+    nvm install --lts; \
+    nvm alias default lts/*; \
+    npm install -g @openai/codex || true'
+
 
 # Set the working directory
 WORKDIR /workspace

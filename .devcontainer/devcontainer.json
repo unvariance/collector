@@ -3,6 +3,9 @@
     "dockerFile": "Containerfile",
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+    "mounts": [
+        "type=bind,source=${localEnv:HOME}/.codex,target=/root/.codex,consistency=cached"
+    ],
     "customizations": {
         "vscode": {
             "extensions": [
