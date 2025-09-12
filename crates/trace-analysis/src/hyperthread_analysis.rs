@@ -272,7 +272,7 @@ mod tests {
                     .fields()
                     .iter()
                     .cloned()
-                    .chain(analysis.new_columns_schema().into_iter())
+                    .chain(analysis.new_columns_schema())
                     .collect::<Vec<_>>(),
             )),
             output_columns,
@@ -328,7 +328,7 @@ mod tests {
                     .fields()
                     .iter()
                     .cloned()
-                    .chain(analysis.new_columns_schema().into_iter())
+                    .chain(analysis.new_columns_schema())
                     .collect::<Vec<_>>(),
             )),
             output_columns,
@@ -410,7 +410,7 @@ mod tests {
                     .fields()
                     .iter()
                     .cloned()
-                    .chain(analysis.new_columns_schema().into_iter())
+                    .chain(analysis.new_columns_schema())
                     .collect::<Vec<_>>(),
             )),
             output_columns,

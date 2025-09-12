@@ -15,11 +15,11 @@ pub struct MonotonicityAnalysis {
 
 impl MonotonicityAnalysis {
     pub fn new(csv_output_path: PathBuf) -> Result<Self> {
-        let file = File::create(&csv_output_path)?;
+        let file = File::create(csv_output_path)?;
         let mut csv_writer = csv::Writer::from_writer(file);
 
         // Write CSV header
-        csv_writer.write_record(&[
+        csv_writer.write_record([
             "row_number",
             "event_type",
             "first_timestamp",
@@ -51,20 +51,21 @@ impl Analysis for MonotonicityAnalysis {
         let first_timestamp_current = if num_rows > 0 {
             timestamp_col.value(0).to_string()
         } else {
-            "".to_string()
+            String::new()
         };
         let last_timestamp_prev = self
             .last_timestamp
             .map(|ts| ts.to_string())
-            .unwrap_or_else(|| "".to_string());
+            .unwrap_or_default();
 
-        self.csv_writer.write_record(&[
-            &self.total_row_count.to_string(),
-            "new_record_batch",
-            &last_timestamp_prev,
-            &first_timestamp_current,
-            "",
-        ])?;
+        let record = [
+            self.total_row_count.to_string(),
+            "new_record_batch".to_string(),
+            last_timestamp_prev,
+            first_timestamp_current,
+            String::new(),
+        ];
+        self.csv_writer.write_record(&record)?;
 
         // Process each row in the batch
         for i in 0..num_rows {
@@ -76,13 +77,14 @@ impl Analysis for MonotonicityAnalysis {
                     // Found a break in monotonicity
                     let difference = current_timestamp - last_ts; // This will be negative
 
-                    self.csv_writer.write_record(&[
-                        &self.total_row_count.to_string(),
-                        "break_in_monotonicity",
-                        &last_ts.to_string(),
-                        &current_timestamp.to_string(),
-                        &difference.to_string(),
-                    ])?;
+                    let record = [
+                        self.total_row_count.to_string(),
+                        "break_in_monotonicity".to_string(),
+                        last_ts.to_string(),
+                        current_timestamp.to_string(),
+                        difference.to_string(),
+                    ];
+                    self.csv_writer.write_record(&record)?;
                 }
             }
 

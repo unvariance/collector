@@ -380,7 +380,7 @@ mod tests {
 
         // Check size
         let size = ring.peek_size().unwrap();
-        let expected_size = ((test_data.len() + 7) / 8) * 8;
+        let expected_size = 8 * (test_data.len().div_ceil(8));
         assert_eq!(size, expected_size);
 
         // Check type
@@ -432,8 +432,8 @@ mod tests {
         // Create test data that will wrap around the buffer
         let data_size = page_size as usize - size_of::<PerfEventHeader>() - 10;
         let mut test_data = vec![0u8; data_size];
-        for i in 0..data_size {
-            test_data[i] = (i % 256) as u8;
+        for (i, b) in test_data.iter_mut().enumerate() {
+            *b = (i % 256) as u8;
         }
 
         ring.start_write_batch();
@@ -452,9 +452,7 @@ mod tests {
         // Read first chunk
         let mut read_buf = vec![0u8; data_size];
         ring.peek_copy(&mut read_buf, 0).unwrap();
-        for i in 0..data_size {
-            assert_eq!(read_buf[i], test_data[i]);
-        }
+        assert_eq!(&read_buf[..], &test_data[..]);
         ring.pop().unwrap();
 
         ring.finish_read_batch();
@@ -469,16 +467,12 @@ mod tests {
 
         // Read second chunk
         ring.peek_copy(&mut read_buf, 0).unwrap();
-        for i in 0..data_size {
-            assert_eq!(read_buf[i], test_data[i]);
-        }
+        assert_eq!(&read_buf[..], &test_data[..]);
         ring.pop().unwrap();
 
         // Read third chunk
         ring.peek_copy(&mut read_buf, 0).unwrap();
-        for i in 0..data_size {
-            assert_eq!(read_buf[i], test_data[i]);
-        }
+        assert_eq!(&read_buf[..], &test_data[..]);
         ring.pop().unwrap();
 
         ring.finish_read_batch();

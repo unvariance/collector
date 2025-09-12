@@ -74,9 +74,9 @@ pub fn run(opts: Options) -> Result<NriOutcome> {
             EnvKind::K3s { .. } => {
                 configured = if let Some(ref dir) = opts.k3s_template_dir {
                     k3s::configure_k3s_templates_in(dir, opts.dry_run)
-                        .map_err(|e| NriError::Io(e))?
+                        .map_err(NriError::Io)?
                 } else {
-                    k3s::configure_k3s_templates(opts.dry_run).map_err(|e| NriError::Io(e))?
+                    k3s::configure_k3s_templates(opts.dry_run).map_err(NriError::Io)?
                 };
             }
             EnvKind::Containerd => {

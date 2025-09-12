@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module)]
+
 use anyhow::{anyhow, Context, Result};
 use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{set_print, OpenObject, PrintLevel};
@@ -24,6 +26,7 @@ mod bpf {
 }
 
 #[cfg(test)]
+#[allow(unused_imports)]
 mod test_bpf {
     include!("bpf/cgroup_inode_test.skel.rs");
 }

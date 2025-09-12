@@ -17,7 +17,9 @@ fn configure_without_restart() {
     };
     let out = nri_init::run(opts).expect("run ok");
     assert!(matches!(out.env, nri_init::EnvKind::Containerd));
-    assert!(out.configured || !out.configured); // placeholder assertion
+    // With restart disabled, we should never mark as restarted
+    assert!(!out.restarted);
+    assert!(!out.restart_verified);
 }
 
 #[ignore]

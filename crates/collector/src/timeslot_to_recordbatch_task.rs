@@ -123,7 +123,7 @@ impl TimeslotToRecordBatchTask {
                     let batch = timeslot_to_batch(timeslot, self.schema.clone())?;
 
                     // Send the batch to the output channel
-                    if let Err(_) = self.batch_sender.send(batch).await {
+                    if self.batch_sender.send(batch).await.is_err() {
                         // Receiver dropped, pipeline shutting down
                         log::debug!("Batch receiver dropped, shutting down conversion task");
                         break;

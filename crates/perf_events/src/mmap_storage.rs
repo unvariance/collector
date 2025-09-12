@@ -1,4 +1,4 @@
-#![cfg(target_os = "linux")]
+#![allow(clippy::field_reassign_with_default)]
 
 use std::fs::File;
 use std::io;
@@ -40,7 +40,7 @@ impl MmapStorage {
         attr.size = std::mem::size_of::<sys::bindings::perf_event_attr>() as u32;
         attr.type_ = sys::bindings::PERF_TYPE_SOFTWARE;
         attr.config = sys::bindings::PERF_COUNT_SW_BPF_OUTPUT as u64;
-        attr.sample_type = sys::bindings::PERF_SAMPLE_RAW as u64;
+        attr.sample_type = sys::bindings::PERF_SAMPLE_RAW;
 
         // Configure watermark behavior
         if n_watermark_bytes > 0 {
@@ -165,7 +165,7 @@ mod tests {
         // Test with wake up after 4096 bytes
         if let Err(e) = MmapStorage::new(0, 2, 4096) {
             println!("Skipping watermark test (4096 bytes) due to error: {}", e);
-            return;
+            // function ends here
         }
     }
 }

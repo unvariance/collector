@@ -1,14 +1,13 @@
-//! Examples showing how to use the NRI client and server
+//! Examples showing how to use the NRI plugin API
 
 use anyhow::Result;
 use async_trait::async_trait;
-use std::sync::Arc;
 
 use crate::api::{
-    ConfigureRequest, ConfigureResponse, Empty, UpdateContainerRequest, UpdateContainerResponse,
+    ConfigureRequest, ConfigureResponse, UpdateContainerRequest, UpdateContainerResponse,
     UpdatePodSandboxRequest, UpdatePodSandboxResponse,
 };
-use crate::api_ttrpc::{Plugin, Runtime};
+use crate::api_ttrpc::Plugin;
 use ttrpc::r#async::TtrpcContext; // Using the async context for our examples
 
 /// Example of an NRI plugin implementation
@@ -21,12 +20,13 @@ impl Plugin for ExamplePlugin {
         _ctx: &TtrpcContext,
         req: ConfigureRequest,
     ) -> ttrpc::Result<ConfigureResponse> {
-        println!("Received Configure request from runtime: {:?}", req.runtime);
+        println!(
+            "Received Configure request from runtime: {} {}",
+            req.runtime_name, req.runtime_version
+        );
 
-        // Create a response
-        let mut response = ConfigureResponse::new();
-
-        Ok(response)
+        // Subscribe to no events by default in this simple example
+        Ok(ConfigureResponse::default())
     }
 
     async fn update_container(
@@ -37,13 +37,13 @@ impl Plugin for ExamplePlugin {
         println!("Container update request received");
 
         // Print some information about the container if available
-        if let Some(container) = &req.container {
+        if let Some(container) = req.container.as_ref() {
             println!("  Container ID: {}", container.id);
             println!("  Container name: {}", container.name);
-            println!("  Pod ID: {}", container.pod_id);
+            println!("  Pod ID: {}", container.pod_sandbox_id);
         }
 
-        Ok(UpdateContainerResponse::new())
+        Ok(UpdateContainerResponse::default())
     }
 
     async fn update_pod_sandbox(
@@ -54,62 +54,33 @@ impl Plugin for ExamplePlugin {
         println!("Pod update request received");
 
         // Print some information about the pod if available
-        if let Some(pod) = &req.pod_sandbox {
+        if let Some(pod) = req.pod.as_ref() {
             println!("  Pod ID: {}", pod.id);
             println!("  Pod name: {}", pod.name);
             println!("  Pod namespace: {}", pod.namespace);
         }
 
-        Ok(UpdatePodSandboxResponse::new())
+        Ok(UpdatePodSandboxResponse::default())
     }
 }
 
-/// Example of an NRI runtime implementation
-pub struct ExampleRuntime;
-
-#[async_trait]
-impl Runtime for ExampleRuntime {
-    // Runtime manages the container runtimes and NRI plugins don't typically implement this
-}
-
-/// Example showing how to create and start a plugin server
+/// Example showing how to create and start a plugin using the high-level NRI helper
 pub async fn example_plugin_server() -> Result<()> {
-    use crate::server::create_async_plugin_server;
+    // Connect to the NRI runtime socket
+    let socket_path = "/var/run/nri/nri.sock";
+    let stream = tokio::net::UnixStream::connect(socket_path).await?;
 
-    let socket_path = "/tmp/nri-plugin.sock";
-    let service = ExamplePlugin {};
+    // Create your plugin implementation
+    let plugin = ExamplePlugin {};
 
-    let server = create_async_plugin_server(socket_path, service)?;
+    // Start the plugin server and get an NRI handle
+    let (nri, _join) = crate::NRI::new(stream, plugin, "example-plugin", "10").await?;
 
-    // Start the server
-    server.start()?;
+    // Register with the runtime
+    nri.register().await?;
 
-    println!("NRI plugin server started on {}", socket_path);
+    println!("Example plugin registered on {}", socket_path);
 
-    // In a real application, you would keep the server running
-    std::thread::sleep(std::time::Duration::from_secs(3600));
-
-    Ok(())
-}
-
-/// Example showing how to create and connect a runtime client to talk to plugins
-pub async fn example_runtime_client() -> Result<()> {
-    use crate::client::create_runtime_client;
-
-    let socket_path = "/tmp/nri-plugin.sock";
-    let client = create_runtime_client(socket_path)?;
-
-    let ctx = ttrpc::context::Context::default();
-
-    // Create a RegisterPlugin request
-    let mut request = crate::api::RegisterPluginRequest::new();
-    request.plugin_name = "example-plugin".to_string();
-    request.plugin_idx = "0".to_string();
-
-    // Call the service
-    let response = client.register_plugin(&ctx, &request).await?;
-
-    println!("Got response from plugin registration");
-
+    // In a real application, you would keep running until shutdown
     Ok(())
 }

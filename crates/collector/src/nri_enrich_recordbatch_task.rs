@@ -398,13 +398,13 @@ mod tests {
             annotations: HashMap::new(),
         };
 
-        task.process_metadata_message(MetadataMessage::Add("abc".into(), meta.clone()));
+        task.process_metadata_message(MetadataMessage::Add("abc".into(), Box::new(meta.clone())));
         assert_eq!(task.container_to_inode.get("abc").copied(), Some(inode));
-        assert!(task.inode_to_metadata.get(&inode).is_some());
+        assert!(task.inode_to_metadata.contains_key(&inode));
 
         task.process_metadata_message(MetadataMessage::Remove("abc".into()));
-        assert!(task.container_to_inode.get("abc").is_none());
-        assert!(task.inode_to_metadata.get(&inode).is_none());
+        assert!(!task.container_to_inode.contains_key("abc"));
+        assert!(!task.inode_to_metadata.contains_key(&inode));
     }
 
     #[test]

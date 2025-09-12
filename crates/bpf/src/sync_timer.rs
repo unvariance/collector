@@ -365,8 +365,10 @@ fn initialize_timer_on_core(
     context_in[6] = 0;
     context_in[7] = 0;
 
-    let mut input = libbpf_rs::ProgramInput::default();
-    input.context_in = Some(&mut context_in);
+    let input = libbpf_rs::ProgramInput {
+        context_in: Some(&mut context_in),
+        ..Default::default()
+    };
 
     // Run the initialization program on this core
     let output = timer_init_prog

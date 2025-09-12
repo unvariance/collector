@@ -193,14 +193,16 @@ impl Reader {
 
     /// Manages the heap entry for a ring
     /// For PERF_RECORD_SAMPLE records, the record is the size injected by the kernel (4 bytes),
-    /// then message type (4 bytes), then timestamp(8 bytes).
+    /// then message type (4 bytes), then timestamp (8 bytes).
     ///
     /// The ring must not be in the heap.
     ///
     /// A timestamp of 0 is assigned in the following cases:
+    ///
     /// - Non-sample records (e.g., PERF_RECORD_LOST)
     /// - Malformed sample records (less than 16 bytes including the size field)
     /// - Failed timestamp reads
+    ///
     /// This ensures such records are processed as soon as possible.
     fn maintain_heap_entry(&mut self, idx: usize) -> Result<(), ReaderError> {
         // If the ring is empty, remove its entry if it's in the heap
@@ -343,7 +345,7 @@ mod tests {
             let size = ring.peek_size().unwrap();
 
             // Calculate expected size (aligned to 8 bytes)
-            let expected_size = ((expected_ring_data[i].len() + 4 + 7) / 8) * 8;
+            let expected_size = 8 * ((expected_ring_data[i].len() + 4).div_ceil(8));
             assert_eq!(
                 size, expected_size,
                 "Expected size {}, got {}",

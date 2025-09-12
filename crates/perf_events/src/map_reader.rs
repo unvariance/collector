@@ -58,14 +58,14 @@ impl PerfMapReader {
     ///
     /// # Arguments
     ///
-    /// * `map` - The eBPF map to connect to (should be a PERF_EVENT_ARRAY map)
-    /// * `buffer_pages` - The size of each per-CPU buffer in pages
-    /// * `watermark_bytes` - The number of bytes that must be written before waking up userspace.
-    ///                       A value of 0 means wake up on every event.
+    /// - `map`: The eBPF map to connect to (should be a PERF_EVENT_ARRAY map)
+    /// - `buffer_pages`: The size of each per-CPU buffer in pages
+    /// - `watermark_bytes`: The number of bytes that must be written before waking up userspace.
+    ///   A value of 0 means wake up on every event.
     ///
     /// # Returns
     ///
-    /// * `Result<PerfMapReader, PerfMapError>` - The configured reader on success
+    /// Returns `Result<PerfMapReader, PerfMapError>`: The configured reader on success
     pub fn new(
         map: &mut MapMut,
         buffer_pages: u32,

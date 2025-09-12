@@ -5,7 +5,6 @@ use log::error;
 use tokio::sync::mpsc;
 
 use bpf::{msg_type, BpfLoader, PerfMeasurementMsg};
-use plain;
 
 use crate::bpf_task_tracker::BpfTaskTracker;
 use crate::bpf_timeslot_tracker::BpfTimeslotTracker;
@@ -94,7 +93,7 @@ impl BpfPerfToTimeslot {
 
         // Try to send the completed timeslot to the writer
         if let Some(ref sender) = self.timeslot_tx {
-            if let Err(_) = sender.try_send(completed_timeslot) {
+            if sender.try_send(completed_timeslot).is_err() {
                 // Increment error count instead of printing immediately
                 self.error_counter += 1;
 
@@ -118,8 +117,6 @@ impl BpfPerfToTimeslot {
     /// Shutdown the processor and close the timeslot channel
     pub fn shutdown(&mut self) {
         // Extract and drop the sender to close the channel
-        if let Some(sender) = self.timeslot_tx.take() {
-            drop(sender);
-        }
+        self.timeslot_tx.take();
     }
 }

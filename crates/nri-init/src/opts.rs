@@ -128,12 +128,10 @@ pub fn from_env_and_args() -> Options {
     }
 
     // Auto-discover nsenter typical path inside k8s host mount
-    if opts.nsenter.is_none() {
-        if std::path::Path::new("/host/proc/1/ns/mnt").exists() {
-            opts.nsenter = Some(Nsenter {
-                path: "nsenter".to_string(),
-            });
-        }
+    if opts.nsenter.is_none() && std::path::Path::new("/host/proc/1/ns/mnt").exists() {
+        opts.nsenter = Some(Nsenter {
+            path: "nsenter".to_string(),
+        });
     }
 
     opts

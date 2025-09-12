@@ -35,12 +35,15 @@ pub struct Stats {
 }
 
 /// Dispatcher handles message distribution to subscribers based on message type
+type Subscriber = Box<dyn FnMut(usize, &[u8])>;
+type SubscribersMap = HashMap<u32, Vec<Subscriber>>;
+
 pub struct Dispatcher {
     /// Callbacks for specific message types (message_type => vec of callbacks)
-    sample_subscribers: HashMap<u32, Vec<Box<dyn FnMut(usize, &[u8])>>>,
+    sample_subscribers: SubscribersMap,
 
     /// Callbacks for lost sample events
-    lost_subscribers: Vec<Box<dyn FnMut(usize, &[u8])>>,
+    lost_subscribers: Vec<Subscriber>,
 
     /// Statistics counters
     stats: Stats,

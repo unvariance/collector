@@ -168,7 +168,7 @@ pub fn open_events(
     let n_cpu = map
         .info()
         .map(|info| info.info.max_entries as i32)
-        .map_err(|e| PerfEventError::MapInfoError(e))?;
+        .map_err(PerfEventError::MapInfoError)?;
 
     // Open perf events for each CPU and get file descriptors
     let fds = open_perf_events(n_cpu, attr)?;
@@ -237,30 +237,23 @@ pub fn open_perf_counter(
     map: &mut MapMut,
     counter_type: HardwareCounter,
 ) -> Result<(), PerfEventError> {
-    // Create and configure perf event attributes
-    let mut attr = sys::bindings::perf_event_attr::default();
-    attr.size = std::mem::size_of::<sys::bindings::perf_event_attr>() as u32;
-
-    // Set common attributes
-    attr.type_ = sys::bindings::PERF_TYPE_HARDWARE;
-    attr.read_format = (sys::bindings::PERF_FORMAT_TOTAL_TIME_ENABLED
-        | sys::bindings::PERF_FORMAT_TOTAL_TIME_RUNNING) as u64;
-
     // Set counter-specific configuration
-    match counter_type {
-        HardwareCounter::Cycles => {
-            attr.config = sys::bindings::PERF_COUNT_HW_CPU_CYCLES as u64;
-        }
-        HardwareCounter::Instructions => {
-            attr.config = sys::bindings::PERF_COUNT_HW_INSTRUCTIONS as u64;
-        }
-        HardwareCounter::LLCMisses => {
-            attr.config = sys::bindings::PERF_COUNT_HW_CACHE_MISSES as u64;
-        }
-        HardwareCounter::CacheReferences => {
-            attr.config = sys::bindings::PERF_COUNT_HW_CACHE_REFERENCES as u64;
-        }
-    }
+    let config = match counter_type {
+        HardwareCounter::Cycles => sys::bindings::PERF_COUNT_HW_CPU_CYCLES as u64,
+        HardwareCounter::Instructions => sys::bindings::PERF_COUNT_HW_INSTRUCTIONS as u64,
+        HardwareCounter::LLCMisses => sys::bindings::PERF_COUNT_HW_CACHE_MISSES as u64,
+        HardwareCounter::CacheReferences => sys::bindings::PERF_COUNT_HW_CACHE_REFERENCES as u64,
+    };
+
+    // Create and configure perf event attributes
+    let mut attr = perf_event_open_sys::bindings::perf_event_attr {
+        size: std::mem::size_of::<sys::bindings::perf_event_attr>() as u32,
+        type_: sys::bindings::PERF_TYPE_HARDWARE,
+        read_format: (sys::bindings::PERF_FORMAT_TOTAL_TIME_ENABLED
+            | sys::bindings::PERF_FORMAT_TOTAL_TIME_RUNNING) as u64,
+        config,
+        ..Default::default()
+    };
 
     // Open the events
     open_events(map, &mut attr)
@@ -281,7 +274,7 @@ pub fn start_events(map: &MapMut) -> Result<(), PerfEventError> {
     let n_cpu = map
         .info()
         .map(|info| info.info.max_entries as i32)
-        .map_err(|e| PerfEventError::MapInfoError(e))?;
+        .map_err(PerfEventError::MapInfoError)?;
 
     // Iterate through each CPU's file descriptor and enable the perf event
     for cpu in 0..n_cpu {

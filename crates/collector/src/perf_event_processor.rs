@@ -73,15 +73,13 @@ impl PerfEventProcessor {
             }
         };
 
-        let processor = Rc::new(RefCell::new(Self {
+        Rc::new(RefCell::new(Self {
             _timeslot_tracker: timeslot_tracker,
-            error_handler: error_handler,
+            error_handler,
             _task_tracker: task_tracker,
             _perf_to_timeslot: perf_to_timeslot,
             _perf_to_trace: perf_to_trace,
-        }));
-
-        processor
+        }))
     }
 
     /// Take the receiver from the error handler for running the error reporting task

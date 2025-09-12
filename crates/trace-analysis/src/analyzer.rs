@@ -53,7 +53,7 @@ impl Analyzer {
             .map(|rg| rg.num_rows() as usize)
             .sum();
 
-        let mut arrow_reader = builder
+        let arrow_reader = builder
             .with_batch_size(READER_BATCH_SIZE)
             .build()
             .with_context(|| "Failed to build Arrow reader")?;
@@ -82,7 +82,7 @@ impl Analyzer {
         let mut progress_bar = pbar(Some(total_rows));
 
         // Process record batches
-        while let Some(batch) = arrow_reader.next() {
+        for batch in arrow_reader {
             let batch = batch.with_context(|| "Failed to read record batch")?;
             let augmented_batch =
                 self.process_record_batch(&batch, &mut analysis, &output_schema)?;

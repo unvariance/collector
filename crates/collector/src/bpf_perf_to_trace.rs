@@ -11,7 +11,6 @@ use log::error;
 use tokio::sync::mpsc;
 
 use bpf::{msg_type, BpfLoader, PerfMeasurementMsg};
-use plain;
 
 use crate::bpf_task_tracker::BpfTaskTracker;
 use crate::bpf_timeslot_tracker::BpfTimeslotTracker;
@@ -168,10 +167,8 @@ impl BpfPerfToTrace {
         // Check if we should flush
         let should_flush = self.current_rows >= self.capacity;
 
-        if should_flush {
-            if let Err(e) = self.flush_batch() {
-                error!("Failed to flush trace batch: {}", e);
-            }
+        if should_flush && self.flush_batch().is_err() {
+            error!("Failed to flush trace batch: flush error");
         }
     }
 
@@ -202,7 +199,7 @@ impl BpfPerfToTrace {
 
         // Send the batch
         if let Some(ref sender) = self.batch_tx {
-            if let Err(_) = sender.try_send(batch) {
+            if sender.try_send(batch).is_err() {
                 error!("Failed to send trace batch: channel full or closed");
             }
         }
@@ -228,23 +225,19 @@ impl BpfPerfToTrace {
     /// Handle new timeslot events - triggers time-based flush check
     fn on_new_timeslot(&mut self, _old_timeslot: u64, _new_timeslot: u64) {
         // Check if we should flush based on time elapsed
-        if self.last_flush.elapsed().as_secs() >= 1 {
-            if let Err(e) = self.flush_batch() {
-                error!("Failed to flush trace batch on timeslot: {}", e);
-            }
+        if self.last_flush.elapsed().as_secs() >= 1 && self.flush_batch().is_err() {
+            error!("Failed to flush trace batch on timeslot");
         }
     }
 
     /// Shutdown the processor and close the batch channel
     pub fn shutdown(&mut self) {
         // Flush any remaining data
-        if let Err(e) = self.flush_batch() {
-            error!("Failed to flush final trace batch during shutdown: {}", e);
+        if self.flush_batch().is_err() {
+            error!("Failed to flush final trace batch during shutdown");
         }
 
         // Extract and drop the sender to close the channel
-        if let Some(sender) = self.batch_tx.take() {
-            drop(sender);
-        }
+        self.batch_tx.take();
     }
 }

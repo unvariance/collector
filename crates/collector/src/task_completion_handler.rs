@@ -172,7 +172,7 @@ mod tests {
     async fn test_task_name_variations() {
         testing_logger::setup();
 
-        let test_cases = vec![
+        let test_cases = [
             ("simple_task", "simple_task completed successfully"),
             (
                 "complex-task-name",

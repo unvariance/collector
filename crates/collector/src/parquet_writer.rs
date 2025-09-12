@@ -397,11 +397,11 @@ mod tests {
 
         // Create parquet reader
         let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
-        let mut reader = reader_builder.build().unwrap();
+        let reader = reader_builder.build().unwrap();
 
         // Read all batches
         let mut all_batches = Vec::new();
-        while let Some(batch) = reader.next() {
+        for batch in reader {
             all_batches.push(batch.unwrap());
         }
 
@@ -452,8 +452,8 @@ mod tests {
             .as_any()
             .downcast_ref::<BooleanArray>()
             .unwrap();
-        assert_eq!(active_array.value(0), true);
-        assert_eq!(active_array.value(1), false);
+        assert!(active_array.value(0));
+        assert!(!active_array.value(1));
     }
 
     #[tokio::test]
@@ -484,7 +484,8 @@ mod tests {
         // Create 100 rows per batch to match original test data volume
         for i in 0..100 {
             id_builder.append_value(i);
-            name_builder.append_value(&format!("user_{}", i));
+            let name = format!("user_{}", i);
+            name_builder.append_value(&name);
             value_builder.append_value(i as f64 * 1.5);
             active_builder.append_value(i % 2 == 0);
         }

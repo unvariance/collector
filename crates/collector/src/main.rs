@@ -2,7 +2,6 @@ use anyhow::Result;
 use arrow_array::RecordBatch;
 use bpf::BpfLoader;
 use clap::Parser;
-use env_logger;
 use log::{debug, error, info};
 use object_store::ObjectStore;
 use std::sync::Arc;
@@ -155,7 +154,7 @@ fn create_object_storage(storage_type: &str) -> Result<Arc<dyn ObjectStore>> {
             let s3 = object_store::aws::AmazonS3Builder::from_env().build()?;
             Ok(Arc::new(s3))
         }
-        "local" | _ => {
+        _ => {
             debug!("Creating local filesystem object store");
             let local = object_store::local::LocalFileSystem::new();
             Ok(Arc::new(local))

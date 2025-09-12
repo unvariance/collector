@@ -7,7 +7,6 @@ use tokio::sync::mpsc;
 use tokio::time;
 
 use bpf::{msg_type, BpfLoader, TimerMigrationMsg};
-use plain;
 
 /// Event types that can be sent to the error reporting channel
 #[derive(Debug)]
@@ -128,7 +127,7 @@ Exiting to prevent incorrect performance measurements."#,
             if tokio::runtime::Handle::try_current().is_ok() {
                 let sender = sender.clone();
                 tokio::spawn(async move {
-                    if let Err(_) = sender.send(event).await {
+                    if sender.send(event).await.is_err() {
                         // Channel is closed, fall back to direct logging
                         error!(
                             "Lost events notification on ring {} (error channel closed)",
@@ -138,7 +137,7 @@ Exiting to prevent incorrect performance measurements."#,
                 });
             } else {
                 // Not in a Tokio runtime — it's safe to block.
-                if let Err(_) = sender.blocking_send(event) {
+                if sender.blocking_send(event).is_err() {
                     // Channel is closed, fall back to direct logging
                     error!(
                         "Lost events notification on ring {} (error channel closed)",
