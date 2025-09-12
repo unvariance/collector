@@ -125,7 +125,10 @@ impl MetadataPlugin {
             let metadata = self.extract_metadata(container, pod);
 
             debug!("Adding container metadata: {:?}", metadata);
-            self.send_message(MetadataMessage::Add(container.id.clone(), Box::new(metadata)));
+            self.send_message(MetadataMessage::Add(
+                container.id.clone(),
+                Box::new(metadata),
+            ));
         }
     }
 }
@@ -186,7 +189,10 @@ impl Plugin for MetadataPlugin {
 
         debug!("Container created: {}", container.id);
         let metadata = self.extract_metadata(container, pod);
-        self.send_message(MetadataMessage::Add(container.id.clone(), Box::new(metadata)));
+        self.send_message(MetadataMessage::Add(
+            container.id.clone(),
+            Box::new(metadata),
+        ));
 
         // We don't request any container adjustments
         Ok(CreateContainerResponse::default())
@@ -204,7 +210,10 @@ impl Plugin for MetadataPlugin {
 
         debug!("Container updated: {}", container.id);
         let metadata = self.extract_metadata(container, pod);
-        self.send_message(MetadataMessage::Add(container.id.clone(), Box::new(metadata)));
+        self.send_message(MetadataMessage::Add(
+            container.id.clone(),
+            Box::new(metadata),
+        ));
 
         // We don't request any container updates
         Ok(UpdateContainerResponse::default())
@@ -315,7 +324,10 @@ mod tests {
             assert_eq!(metadata.pid, Some(1234));
 
             // Test sending a message per iteration
-            plugin.send_message(MetadataMessage::Add(container.id.clone(), Box::new(metadata)));
+            plugin.send_message(MetadataMessage::Add(
+                container.id.clone(),
+                Box::new(metadata),
+            ));
 
             // Verify message was received
             let message = rx.recv().await.unwrap();

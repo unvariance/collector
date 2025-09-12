@@ -250,7 +250,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             );
             return;
         }
-        
+
         if !st.pods.contains_key(&pod_uid) {
             // No pod yet: mark container as NoPod and return
             error!(
@@ -265,7 +265,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
                 },
             );
             return;
-        } 
+        }
 
         // Pod exists; fetch group path state
         let gp = st.pods.get(&pod_uid).and_then(|p| match &p.group_state {
@@ -282,7 +282,10 @@ impl<P: FsProvider> ResctrlPlugin<P> {
                     state: ContainerSyncState::Partial,
                 },
             );
-            let ps = st.pods.get_mut(&pod_uid).expect("we already checked contains_key and we are holding the lock");
+            let ps = st
+                .pods
+                .get_mut(&pod_uid)
+                .expect("we already checked contains_key and we are holding the lock");
             ps.total_containers += 1;
             self.emit_pod_add_or_update(&pod_uid, ps);
             return;
@@ -297,9 +300,8 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         // Create a closure that reads PIDs fresh each time
         let pid_source = self.pid_source.clone();
         let full = nri::compute_full_cgroup_path(container, Some(pod));
-        let pid_resolver = move || -> Result<Vec<i32>, resctrl::Error> {
-            pid_source.pids_for_path(&full)
-        };
+        let pid_resolver =
+            move || -> Result<Vec<i32>, resctrl::Error> { pid_source.pids_for_path(&full) };
 
         // Reconcile this container's PIDs into the pod group
         let passes = self.cfg.max_reconcile_passes;
@@ -772,7 +774,12 @@ mod tests {
         use crate::pid_source::test_support::MockCgroupPidSource;
         let mock_pid_src = MockCgroupPidSource::new();
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(8);
-        let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src));
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            Arc::new(mock_pid_src),
+        );
 
         // Define a pod sandbox
         let pod = nri::api::PodSandbox {
@@ -782,7 +789,11 @@ mod tests {
         };
 
         // Send RUN_POD_SANDBOX via state_change
-        let ctx = TtrpcContext { mh: ttrpc::MessageHeader::default(), metadata: std::collections::HashMap::new(), timeout_nano: 5_000 };
+        let ctx = TtrpcContext {
+            mh: ttrpc::MessageHeader::default(),
+            metadata: std::collections::HashMap::new(),
+            timeout_nano: 5_000,
+        };
         let state_req = StateChangeEvent {
             event: Event::RUN_POD_SANDBOX.into(),
             pod: protobuf::MessageField::some(pod.clone()),
@@ -805,7 +816,9 @@ mod tests {
             } else {
                 panic!("Expected AddOrUpdate event, got nothing");
             }
-        }).await.expect("Should receive event within timeout");
+        })
+        .await
+        .expect("Should receive event within timeout");
 
         // Verify the directory for the resctrl group was created
         assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u789")));
@@ -830,7 +843,9 @@ mod tests {
             } else {
                 panic!("Expected Removed event, got nothing");
             }
-        }).await.expect("Should receive removal event within timeout");
+        })
+        .await
+        .expect("Should receive removal event within timeout");
 
         assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u789")));
     }

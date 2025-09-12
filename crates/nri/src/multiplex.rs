@@ -134,9 +134,8 @@ pub struct Mux {
 
 /// MuxSocket represents a logical connection within the multiplexer.
 // Reduce type complexity for clippy by aliasing the nested future type
-type ReservePermitFuture = Pin<
-    Box<dyn Future<Output = std::result::Result<(), mpsc::error::SendError<()>>> + Send>,
->;
+type ReservePermitFuture =
+    Pin<Box<dyn Future<Output = std::result::Result<(), mpsc::error::SendError<()>>> + Send>>;
 type PendingPermit = Option<Mutex<ReservePermitFuture>>;
 
 pub struct MuxSocket {
@@ -634,9 +633,9 @@ impl AsyncWrite for MuxSocket {
         let future = self.close();
         futures::pin_mut!(future);
 
-        future
-            .poll_unpin(cx)
-            .map(|result| result.map_err(|e| io::Error::other(format!("Failed to close connection: {}", e))))
+        future.poll_unpin(cx).map(|result| {
+            result.map_err(|e| io::Error::other(format!("Failed to close connection: {}", e)))
+        })
     }
 }
 
@@ -851,16 +850,10 @@ mod tests {
 
         // Verify data was received
         let mut buf = [0u8; 1024];
-        let n = server_conn1
-            .read(&mut buf)
-            .await
-            .map_err(MuxError::Read)?;
+        let n = server_conn1.read(&mut buf).await.map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg1);
 
-        let n = server_conn2
-            .read(&mut buf)
-            .await
-            .map_err(MuxError::Read)?;
+        let n = server_conn2.read(&mut buf).await.map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg2);
 
         // Close one connection
@@ -877,10 +870,7 @@ mod tests {
             .await
             .map_err(MuxError::Write)?;
 
-        let n = server_conn2
-            .read(&mut buf)
-            .await
-            .map_err(MuxError::Read)?;
+        let n = server_conn2.read(&mut buf).await.map_err(MuxError::Read)?;
         assert_eq!(&buf[..n], msg3);
 
         // Verify connection was removed from map
@@ -923,10 +913,7 @@ mod tests {
         let mut buf = [0u8; 1024];
 
         while received.len() < message_size {
-            let n = server_conn
-                .read(&mut buf)
-                .await
-                .map_err(MuxError::Read)?;
+            let n = server_conn.read(&mut buf).await.map_err(MuxError::Read)?;
             if n == 0 {
                 break;
             }
@@ -949,10 +936,7 @@ mod tests {
         // Read with small buffer
         received.clear();
         while received.len() < message_size {
-            let n = server_conn
-                .read(&mut buf)
-                .await
-                .map_err(MuxError::Read)?;
+            let n = server_conn.read(&mut buf).await.map_err(MuxError::Read)?;
             if n == 0 {
                 break;
             }
@@ -1014,10 +998,7 @@ mod tests {
 
                 // Read response
                 let mut buf = [0u8; 1024];
-                let n = client_conn
-                    .read(&mut buf)
-                    .await
-                    .map_err(MuxError::Read)?;
+                let n = client_conn.read(&mut buf).await.map_err(MuxError::Read)?;
                 let response = String::from_utf8_lossy(&buf[..n]);
 
                 assert_eq!(response, format!("response from server {}", i));
@@ -1035,10 +1016,7 @@ mod tests {
 
                 // Read message
                 let mut buf = [0u8; 1024];
-                let n = server_conn
-                    .read(&mut buf)
-                    .await
-                    .map_err(MuxError::Read)?;
+                let n = server_conn.read(&mut buf).await.map_err(MuxError::Read)?;
                 let msg = String::from_utf8_lossy(&buf[..n]);
 
                 assert_eq!(msg, format!("message from client {}", i));
@@ -1112,10 +1090,7 @@ mod tests {
 
             // Read the message
             let mut buf = [0u8; 1024];
-            let n = server_conn
-                .read(&mut buf)
-                .await
-                .map_err(MuxError::Read)?;
+            let n = server_conn.read(&mut buf).await.map_err(MuxError::Read)?;
             let received = String::from_utf8_lossy(&buf[..n]);
 
             // Verify the message
