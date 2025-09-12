@@ -92,7 +92,7 @@ struct PodState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum ContainerSyncState {
+pub(crate) enum ContainerSyncState {
     #[default]
     NoPod,
     Partial,
@@ -391,7 +391,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
     /// Retry reconciling a single container if its pod group exists.
     /// Emits AddOrUpdate only if reconciled count is incremented.
-    pub fn retry_container_reconcile(
+    pub(crate) fn retry_container_reconcile(
         &self,
         container_id: &str,
     ) -> resctrl::Result<ContainerSyncState> {
@@ -404,8 +404,7 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             let cst = st
                 .containers
                 .get(container_id)
-                .ok_or_else(|| resctrl::Error::Io { path: PathBuf::from("<container>"), source: io::Error::from_raw_os_error(libc::ENOENT) })?
-                .clone();
+                .ok_or_else(|| resctrl::Error::Io { path: PathBuf::from("<container>"), source: io::Error::from_raw_os_error(libc::ENOENT) })?;
             if cst.state == ContainerSyncState::NoPod {
                 return Ok(ContainerSyncState::NoPod);
             }
@@ -436,16 +435,15 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         let mut st = self.state.lock().unwrap();
         // Track whether we improved state
         let mut did_reconcile = false;
-        let mut ret_state = new_state;
-        if let Some(cst) = st.containers.get_mut(container_id) {
+        let ret_state = if let Some(cst) = st.containers.get_mut(container_id) {
             if cst.state == ContainerSyncState::Partial && new_state == ContainerSyncState::Reconciled {
                 cst.state = ContainerSyncState::Reconciled;
                 did_reconcile = true;
             }
-            ret_state = cst.state;
+            cst.state
         } else {
             return Err(resctrl::Error::Io { path: std::path::PathBuf::from("<container>"), source: std::io::Error::from_raw_os_error(libc::ENOENT) });
-        }
+        };
 
         if did_reconcile {
             if let Some(ps) = st.pods.get_mut(&pod_uid) {
@@ -1067,7 +1065,7 @@ mod tests {
             },
         );
 
-        let mut mock_pid_src = MockCgroupPidSource::new();
+        let mock_pid_src = MockCgroupPidSource::new();
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
         let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src.clone()));
 
@@ -1213,12 +1211,12 @@ mod tests {
         let plugin = ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, Arc::new(mock_pid_src.clone()));
 
         // uA: Failed pod due to ENOSPC
-        let uA_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
-        fs.set_nospace_dir(&uA_gp);
+        let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
+        fs.set_nospace_dir(&u_a_gp);
         // uB: Existing group and one Partial container
-        let uB_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uB");
-        fs.add_dir(&uB_gp);
-        fs.add_file(&uB_gp.join("tasks"), "");
+        let u_b_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uB");
+        fs.add_dir(&u_b_gp);
+        fs.add_file(&u_b_gp.join("tasks"), "");
 
         // Define pods and container for uB
         let pod_a = nri::api::PodSandbox { id: "sbA".into(), uid: "uA".into(), ..Default::default() };
@@ -1246,10 +1244,10 @@ mod tests {
         fs.clear_missing_pid(223);
 
         // Run retry_all_once: should attempt uA once and stop on capacity, then reconcile uB
-        let before = fs.mkdir_count(&uA_gp);
-        let _ = plugin.retry_all_once().expect("retry all ok");
+        let before = fs.mkdir_count(&u_a_gp);
+        plugin.retry_all_once().expect("retry all ok");
         // mkdir called exactly once for uA during this pass
-        let after = fs.mkdir_count(&uA_gp);
+        let after = fs.mkdir_count(&u_a_gp);
         assert_eq!(after.saturating_sub(before), 1, "expected single create_dir attempt in this pass");
 
         // Validate internal state improved for uB
