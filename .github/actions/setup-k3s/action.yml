@@ -88,8 +88,10 @@ runs:
         fi
 
         EXTRA_ARGS="${{ inputs.extra_k3s_server_args }}"
+        # Ensure kubeconfig is written at desired path and world-readable for non-root kubectl access
+        WRITE_ARGS="--write-kubeconfig='${{ inputs.kubeconfig_path }}' --write-kubeconfig-mode 644"
         # Build INSTALL_K3S_EXEC
-        INSTALL_EXEC="server ${DISABLE_ARGS} ${EXTRA_ARGS}"
+        INSTALL_EXEC="server ${DISABLE_ARGS} ${EXTRA_ARGS} ${WRITE_ARGS}"
 
         echo "Installing k3s ..."
         if [ -n "${INSTALL_K3S_VERSION}" ]; then
@@ -100,6 +102,12 @@ runs:
 
         echo "k3s service status:"
         sudo systemctl status k3s || true
+
+        # Best-effort: if kubeconfig exists but isn't readable, relax permissions
+        if [ -f "${KUBECONFIG}" ] && ! [ -r "${KUBECONFIG}" ]; then
+          echo "Making kubeconfig readable: ${KUBECONFIG}"
+          sudo chmod a+r "${KUBECONFIG}" || true
+        fi
 
     - name: Optional kubelet maxPods tuning
       if: ${{ inputs.kubelet_max_pods != '' }}
@@ -167,6 +175,11 @@ runs:
       run: |
         set -euo pipefail
         export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        # If kubeconfig not readable yet (e.g., race with service startup), try to adjust
+        if [ -f "${KUBECONFIG}" ] && ! [ -r "${KUBECONFIG}" ]; then
+          echo "Kubeconfig exists but not readable; attempting chmod a+r"
+          sudo chmod a+r "${KUBECONFIG}" || true
+        fi
         echo "Waiting for Kubernetes API (timeout=${{ inputs.timeout_api_server_ready_seconds }}s)"
         END=$((SECONDS + ${{ inputs.timeout_api_server_ready_seconds }}))
         until kubectl get nodes >/dev/null 2>&1; do
@@ -237,4 +250,3 @@ runs:
         if [ -n "$PODS" ]; then
           echo "kubelet_max_pods_effective=$PODS" >> "$GITHUB_OUTPUT"
         fi
-
