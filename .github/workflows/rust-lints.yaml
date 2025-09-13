@@ -1,6 +1,13 @@
 name: rust-lints
 
 on:
+  workflow_dispatch:  # Manual trigger for testing
+  pull_request_target:
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust-lints.yaml'
   push:
     # Run on any branch push, filtered to Rust workspace changes
     paths:

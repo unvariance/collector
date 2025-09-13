@@ -16,10 +16,14 @@ on:
         required: false
         default: 'latest'
         type: string
+  pull_request_target:
+    paths:
+      - 'charts/collector/**'
+      - '.github/actions/setup-k3s/**'
+      - '.github/workflows/test-helm-chart.yaml'
   push:
     branches:
       - main
-      - '**'      
     paths:
       - 'charts/collector/**'
       - '.github/actions/setup-k3s/**'

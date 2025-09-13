@@ -36,10 +36,10 @@ on:
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml
+      - '.github/actions/setup-k3s/**'
   push:
     branches:
       - main
-      - '**'
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml

@@ -1,11 +1,18 @@
 name: test-nri-init
 
 on:
+  pull_request_target:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/nri-init/**'
+      - 'Dockerfile.nri-init'
+      - '.github/actions/setup-k3s/**'
+      - '.github/workflows/test-nri-init.yaml'
   push:
     branches:
       - main
-      - '**'      
     paths:
+      - 'Cargo.toml'
       - 'crates/nri-init/**'
       - 'Dockerfile.nri-init'
       - '.github/actions/setup-k3s/**'

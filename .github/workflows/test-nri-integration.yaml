@@ -1,10 +1,16 @@
 name: test-nri-integration
 on: 
   workflow_dispatch:  # Manual trigger for testing
+  pull_request_target:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/nri/**'
+      - '.github/workflows/test-nri-integration.yaml'
   push:
     branches:
       - main
     paths:
+      - 'Cargo.toml'
       - 'crates/nri/**'
       - '.github/workflows/test-nri-integration.yaml'
 

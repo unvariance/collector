@@ -13,9 +13,15 @@ on:
         required: false
         default: 'ubuntu-24.04'
         type: string
+  pull_request_target:
+    paths:
+      - 'crates/resctrl/**'
+      - 'crates/nri-resctrl-plugin/**'
+      - '.github/workflows/test-resctrl.yaml'
+      - 'Cargo.toml'
   push:
     branches:
-      - '**'
+      - 'main'
     paths:
       - 'crates/resctrl/**'
       - 'crates/nri-resctrl-plugin/**'
