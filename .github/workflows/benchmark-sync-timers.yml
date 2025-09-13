@@ -67,7 +67,7 @@ jobs:
           mkdir -p output
           mv sync_timer_benchmark output/
           cp benchmark_sync_timer.sh output/
-          cp ../../module/benchmark_sync_timer_stress.sh output/
+          cp benchmark_sync_timer_stress.sh output/
 
       - name: Upload benchmark binary
         uses: actions/upload-artifact@v4
