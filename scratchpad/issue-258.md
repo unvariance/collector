@@ -71,8 +71,8 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
   - Idempotency: calling `cleanup_all()` twice removes the same initial set once; second call yields `removed=0` and unchanged other counters.
 
 - nri-resctrl-plugin tests:
-  - Startup cleanup, ensure_mounted, and logging (single test): pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Call `synchronize()` with empty state. Assert `ensure_mounted(cfg.auto_mount)` was called prior to cleanup; assert all matching directories are removed; capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` emitted.
-  - Coexistence with active pods: include a pod in `synchronize()`; verify cleanup ran first (stale removed) and pod handling proceeds normally (group created for the pod and Add/Update event emitted once).
+  - Startup cleanup + coexistence + logging (single test): pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Include a pod in the `synchronize()` call. Assert cleanup ran first (stale removed) and pod handling proceeds normally (group created for the pod and one Add/Update event emitted). Capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` is emitted for cleanup-only actions (i.e., only the pod’s normal event is present).
+  - Mount responsibility: a separate test verifying the plugin calls `ensure_mounted(cfg.auto_mount)` before cleanup. If a dedicated test for `auto_mount=false` behavior is missing elsewhere, add one here and note it as a filled test gap (outside this sub-issue’s core logic).
   - Config pass-through: a unit test asserting that `ResctrlPlugin::new()` passes `group_prefix` and `auto_mount` intact to `resctrl::Config` (e.g., by creating a group and checking the path uses the configured prefix; and by toggling `auto_mount` and ensuring `ensure_mounted` behavior matches the flag).
 
 ### End-to-End Test (Integration)
