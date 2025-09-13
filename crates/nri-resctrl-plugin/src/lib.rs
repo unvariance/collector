@@ -358,9 +358,6 @@ impl<P: FsProvider> ResctrlPlugin<P> {
     /// Try to create a resctrl group for a pod if currently Failed.
     /// Emits AddOrUpdate only on state transition.
     pub fn retry_group_creation(&self, pod_uid: &str) -> Result<ResctrlGroupState, PluginError> {
-        use std::io;
-        use std::path::PathBuf;
-
         // Snapshot decision under lock. If pod missing → PodNotFound.
         // If state is not Failed, return current state immediately to avoid unlock/relock races.
         {
@@ -415,11 +412,8 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         &self,
         container_id: &str,
     ) -> Result<ContainerSyncState, PluginError> {
-        use std::io;
-        use std::path::PathBuf;
-
         // Snapshot under lock: group path, cgroup path, passes, current state
-        let (group_path, cgroup_path, pod_uid, current_state, passes) = {
+        let (group_path, cgroup_path, pod_uid, _current_state, passes) = {
             let st = self.state.lock().unwrap();
             let container_state = st
                 .containers
@@ -653,23 +647,31 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                     let mut st = self.state.lock().unwrap();
 
                     // Get group path before removing pod state
-                    let group_path = st.pods.get(&pod_uid).and_then(|pod_state| match &pod_state.group_state {
-                        ResctrlGroupState::Exists(path) => Some(path.clone()),
-                        _ => None,
-                    });
+                    let group_path =
+                        st.pods
+                            .get(&pod_uid)
+                            .and_then(|pod_state| match &pod_state.group_state {
+                                ResctrlGroupState::Exists(path) => Some(path.clone()),
+                                _ => None,
+                            });
 
                     // Remove all containers for this pod
                     st.containers.retain(|_, c| c.pod_uid != pod_uid);
                     // Remove pod state
                     st.pods.remove(&pod_uid);
                     // Emit removal event under lock to preserve ordering
-                    self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved { pod_uid: pod_uid.clone() }));
+                    self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved {
+                        pod_uid: pod_uid.clone(),
+                    }));
                     drop(st);
 
                     // Delete resctrl group if it exists
                     if let Some(group_path) = group_path {
                         if let Err(e) = self.resctrl.delete_group(&group_path) {
-                            warn!("resctrl-plugin: failed to delete group {}: {}", group_path, e);
+                            warn!(
+                                "resctrl-plugin: failed to delete group {}: {}",
+                                group_path, e
+                            );
                         }
                     }
                 }
@@ -683,10 +685,12 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                     let old_state = st.containers.remove(&container.id).map(|c| c.state);
                     if let Some(pod_state) = st.pods.get_mut(&pod_uid) {
                         if matches!(old_state, Some(s) if s != ContainerSyncState::NoPod) {
-                            pod_state.total_containers = pod_state.total_containers.saturating_sub(1);
+                            pod_state.total_containers =
+                                pod_state.total_containers.saturating_sub(1);
                         }
                         if matches!(old_state, Some(ContainerSyncState::Reconciled)) {
-                            pod_state.reconciled_containers = pod_state.reconciled_containers.saturating_sub(1);
+                            pod_state.reconciled_containers =
+                                pod_state.reconciled_containers.saturating_sub(1);
                         }
                         // Emit under lock to preserve ordering
                         self.emit_pod_add_or_update(&pod_uid, pod_state);
