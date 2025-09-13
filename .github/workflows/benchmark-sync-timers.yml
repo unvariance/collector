@@ -175,7 +175,7 @@ jobs:
         uses: docker://rocker/tidyverse:latest
         with:
           entrypoint: sh
-          args: -c "cd /github/workspace/ && mkdir -p plots && Rscript ./module/visualize_benchmark.R -i 'results/benchmark_results.csv' -p 'plots/benchmark_${{ inputs.benchmark-duration }}_${{ inputs.instance-type }}_'"
+          args: -c "cd /github/workspace/ && mkdir -p plots && Rscript ./scripts/visualize_sync_timer_benchmark.R -i 'results/benchmark_results.csv' -p 'plots/benchmark_${{ inputs.benchmark-duration }}_${{ inputs.instance-type }}_'"
 
       - name: Upload benchmark plots
         uses: actions/upload-artifact@v4
