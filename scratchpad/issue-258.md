@@ -58,7 +58,8 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
 - nri-resctrl-plugin
   - On `configure()` store plugin config. On the subsequent `synchronize()` call: if `cfg.cleanup_on_start` is true, call `resctrl.ensure_mounted(cfg.auto_mount)` and then `resctrl.cleanup_all()`; log the full `CleanupReport` at info; proceed with pod handling.
   - Do not maintain a per-plugin guard flag; rely on NRI’s single `synchronize()` per `configure()`.
-  - Unit-test using DI (`with_resctrl`, `with_pid_source`).
+  - Ensure `ResctrlPlugin::new()` respects the provided `ResctrlPluginConfig` without overriding values; it must pass `group_prefix` and `auto_mount` through to the internal `resctrl::Config` unchanged.
+  - Unit-test using DI (`with_resctrl`, `with_pid_source`). For E2E, use `ResctrlPlugin::new()` so we exercise the real constructor and configuration flow.
 
 ## Detailed Test Plan
 
@@ -69,9 +70,47 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
   - Idempotency: calling `cleanup_all()` twice removes the same initial set once; second call yields `removed=0` and unchanged other counters.
 
 - nri-resctrl-plugin tests:
-  - Startup cleanup and logging: pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Call `synchronize()` with empty state. Assert all matching directories are removed; verify a log record at info with the four counters (stub or capture logger where possible). Assert no `PodResctrlEvent` emitted.
+  - Startup cleanup and logging: pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Call `synchronize()` with empty state. Assert all matching directories are removed; capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` emitted.
   - Mount responsibility: add or update a test verifying the plugin calls `ensure_mounted(cfg.auto_mount)` before cleanup. If a dedicated test for `auto_mount=false` behavior is missing elsewhere, add one here and note it is a gap we’re filling (outside this sub-issue’s core logic).
   - Coexistence with active pods: include a pod in `synchronize()`; verify cleanup ran first (stale removed) and pod handling proceeds normally (group created for the pod and Add/Update event emitted once).
+  - Config pass-through: a unit test asserting that `ResctrlPlugin::new()` passes `group_prefix` and `auto_mount` intact to `resctrl::Config` (e.g., by creating a group and checking the path uses the configured prefix; and by toggling `auto_mount` and ensuring `ensure_mounted` behavior matches the flag).
+
+### End-to-End Test (Integration)
+
+Goal: exercise the full cleanup flow against a real resctrl mount using `RealFs`, validating both root and root `mon_groups` traversal. This complements the unit tests (which use a mock FS) and proves behavior in a live environment.
+
+- Location: `crates/nri-resctrl-plugin/tests/integration_cleanup.rs` (new file alongside the existing `integration_test.rs`). This keeps E2E focused on the plugin, while still allowing us to prebuild and ship the test binary from the builder.
+- Guard: run only when `RESCTRL_E2E=1` is set, on Linux, and when the test process has permissions to mount and modify `/sys/fs/resctrl`. Otherwise, skip.
+- Pre-conditions:
+  - Ensure resctrl is mounted by calling `Resctrl::ensure_mounted(true)` prior to starting the plugin (and the plugin will also call `ensure_mounted(auto_mount)`). Do not shell out.
+- Setup:
+  - Choose a unique prefix that cannot conflict with other E2E tests: `test_e2e_`.
+  - Create root-level directories: `/sys/fs/resctrl/test_e2e_a`, `/sys/fs/resctrl/test_e2e_b`, plus a non-prefix directory `/sys/fs/resctrl/np_e2e_c` (if it doesn’t already exist). Do not touch `info`.
+  - Ensure `/sys/fs/resctrl/mon_groups` exists; create `/sys/fs/resctrl/mon_groups/test_e2e_m1` and `/sys/fs/resctrl/mon_groups/np_e2e_m2`.
+- Execute:
+  - Start a plugin instance using `ResctrlPlugin::new(...)` with `group_prefix = "test_e2e_"`, `cleanup_on_start = true`, and `auto_mount = true`.
+  - Call `configure()` (dummy values are fine), then call `synchronize()` with an empty set of pods and containers.
+- Verify:
+  - Root: `test_e2e_a` and `test_e2e_b` are removed; `np_e2e_c` is intact; `info` untouched.
+  - mon_groups: `test_e2e_m1` is removed; `np_e2e_m2` intact.
+  - No `PodResctrlEvent` was emitted during cleanup.
+  - Do not capture logs in E2E; rely on filesystem verification only. Log assertions are covered in unit tests.
+- Teardown:
+  - Remove any remaining test artifacts under `/sys/fs/resctrl/mon_groups` and root that match `test_e2e_`.
+  - Do not unmount resctrl from the test; leave system state intact.
+
+### CI Integration
+
+- Builder job (GitHub-hosted):
+  - Build the plugin cleanup E2E test binary without running it:
+    - `cargo test -p nri-resctrl-plugin --test integration_cleanup --release --no-run`
+  - Collect the test binary (e.g., `integration_cleanup-*`), rename to `nri-resctrl-plugin-e2e`, and upload as an artifact.
+- Hardware job (resctrl-capable runner):
+  - Download the `nri-resctrl-plugin-e2e` artifact and run it with:
+    - `RESCTRL_E2E=1 ./nri-resctrl-plugin-e2e --nocapture`
+  - This keeps Cargo off the runner while exercising the plugin against a real resctrl mount.
+
+Note: normal nri-resctrl-plugin unit tests remain on a mock FS; this end-to-end test uses `RealFs` and a real kernel resctrl mount.
 
 ## Risks and Mitigations
 - Accidental deletion: mitigated by strict prefix filter, limited traversal (root + root/mon_groups only), and tests covering mixed entries.
