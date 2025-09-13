@@ -17,6 +17,7 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
   - Mounted FS assumption: `cleanup_all` assumes resctrl is mounted. It returns errors if access fails. It does not call `ensure_mounted()`.
   - Error handling: best-effort removal. Failures to list root or `mon_groups` surface as errors; per-entry deletion errors increment counters as above while continuing the sweep. The method returns the `CleanupReport`.
 - `crates/nri-resctrl-plugin`
+  - At `synchronize()`, read `cleanup_on_start` and `auto_mount` from the existing `ResctrlPluginConfig` available on `self`; do not change `configure()` behavior and do not persist any extra state.
   - If `cleanup_on_start` is true, call `ensure_mounted(auto_mount)` first, then invoke `cleanup_all()` before processing `synchronize()`.
   - Rely on NRI calling `synchronize()` once per `configure()` and avoid adding a plugin-level guard flag.
   - Log the `CleanupReport` at info level (all counters). Do not emit `PodResctrlEvent` for cleanup-only actions.
@@ -49,14 +50,14 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
   - Update mock/test FS to support directory listing consistent with `read_child_dirs`.
   - Implement `Resctrl::cleanup_all(&self)`:
     - Assume mounted. Do not call `ensure_mounted()`.
+    - Factor common logic into a helper that performs “list child dirs → filter by prefix → remove and update counters” for a given base path. Reuse this helper for both the resctrl root and the root `mon_groups` directory to avoid duplication.
     - Using `read_child_dirs`, list immediate child directories under the configured root. Count non-matching directories to `non_prefix_groups`. For those matching `group_prefix`, attempt `remove_dir` and update `removed`, `removal_race` (ENOENT), or `removal_failures` counters.
-    - Also look for `<root>/mon_groups`: if present, list its immediate child directories and repeat the same filtering and removal logic, updating the same counters.
+    - Also look for `<root>/mon_groups`: if present, list its immediate child directories and invoke the same helper, updating the same counters.
     - Return `Ok(CleanupReport)` with the four counters.
   - Keep sanitization minimal: strict prefix match only; UID parsing/sanitization remains the responsibility of group creation.
   - Refactor mounting: change `ensure_mounted(auto_mount: bool) -> Result<()>` and remove `auto_mount` from `Config`. Update crate docs to emphasize caller responsibility for mounting.
 
 - nri-resctrl-plugin
-  - On `configure()` store plugin config. On the subsequent `synchronize()` call: if `cfg.cleanup_on_start` is true, call `resctrl.ensure_mounted(cfg.auto_mount)` and then `resctrl.cleanup_all()`; log the full `CleanupReport` at info; proceed with pod handling.
   - Do not maintain a per-plugin guard flag; rely on NRI’s single `synchronize()` per `configure()`.
   - Ensure `ResctrlPlugin::new()` respects the provided `ResctrlPluginConfig` without overriding values; it must pass `group_prefix` and `auto_mount` through to the internal `resctrl::Config` unchanged.
   - Unit-test using DI (`with_resctrl`, `with_pid_source`). For E2E, use `ResctrlPlugin::new()` so we exercise the real constructor and configuration flow.
@@ -66,12 +67,11 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
 - resctrl crate unit tests (using mock `FsProvider`):
   - Mixed entries at root and mon_groups: under `/sys/fs/resctrl` create `pod_a`, `pod_b`, `info` (dir), `other` (dir); under `/sys/fs/resctrl/mon_groups` create `pod_m1`, `np_m2`. Verify that only `pod_*` are removed across both locations; others remain. Assert all `CleanupReport` counters: `removed=3`, `non_prefix_groups=2`, `removal_failures=0`, `removal_race=0`.
   - Permission denied on one directory: make removal of `pod_b` return `EACCES`; assert `removal_failures=1`, `removed=2`.
-  - Removal race: after listing, delete `pod_a` from the mock before `remove_dir`; assert `removal_race=1` and `removed`/`removal_failures` counters accordingly.
+  - Removal race: introduce a minimal scripted test FS for this unit test which allows `remove_dir` to return `ENOENT` for a specific directory name (or inject a post-listing hook). Use it to simulate the directory disappearing between list and remove; assert `removal_race=1` and adjust `removed`/`removal_failures` counters accordingly.
   - Idempotency: calling `cleanup_all()` twice removes the same initial set once; second call yields `removed=0` and unchanged other counters.
 
 - nri-resctrl-plugin tests:
-  - Startup cleanup and logging: pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Call `synchronize()` with empty state. Assert all matching directories are removed; capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` emitted.
-  - Mount responsibility: add or update a test verifying the plugin calls `ensure_mounted(cfg.auto_mount)` before cleanup. If a dedicated test for `auto_mount=false` behavior is missing elsewhere, add one here and note it is a gap we’re filling (outside this sub-issue’s core logic).
+  - Startup cleanup, ensure_mounted, and logging (single test): pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Call `synchronize()` with empty state. Assert `ensure_mounted(cfg.auto_mount)` was called prior to cleanup; assert all matching directories are removed; capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` emitted.
   - Coexistence with active pods: include a pod in `synchronize()`; verify cleanup ran first (stale removed) and pod handling proceeds normally (group created for the pod and Add/Update event emitted once).
   - Config pass-through: a unit test asserting that `ResctrlPlugin::new()` passes `group_prefix` and `auto_mount` intact to `resctrl::Config` (e.g., by creating a group and checking the path uses the configured prefix; and by toggling `auto_mount` and ensuring `ensure_mounted` behavior matches the flag).
 
@@ -79,7 +79,7 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
 
 Goal: exercise the full cleanup flow against a real resctrl mount using `RealFs`, validating both root and root `mon_groups` traversal. This complements the unit tests (which use a mock FS) and proves behavior in a live environment.
 
-- Location: `crates/nri-resctrl-plugin/tests/integration_cleanup.rs` (new file alongside the existing `integration_test.rs`). This keeps E2E focused on the plugin, while still allowing us to prebuild and ship the test binary from the builder.
+- Location: add a new test case to the existing `crates/nri-resctrl-plugin/tests/integration_test.rs` (reuse existing helpers and setup to avoid duplication).
 - Guard: run only when `RESCTRL_E2E=1` is set, on Linux, and when the test process has permissions to mount and modify `/sys/fs/resctrl`. Otherwise, skip.
 - Pre-conditions:
   - Ensure resctrl is mounted by calling `Resctrl::ensure_mounted(true)` prior to starting the plugin (and the plugin will also call `ensure_mounted(auto_mount)`). Do not shell out.
@@ -102,9 +102,9 @@ Goal: exercise the full cleanup flow against a real resctrl mount using `RealFs`
 ### CI Integration
 
 - Builder job (GitHub-hosted):
-  - Build the plugin cleanup E2E test binary without running it:
-    - `cargo test -p nri-resctrl-plugin --test integration_cleanup --release --no-run`
-  - Collect the test binary (e.g., `integration_cleanup-*`), rename to `nri-resctrl-plugin-e2e`, and upload as an artifact.
+  - Build the plugin integration tests binary without running them:
+    - `cargo test -p nri-resctrl-plugin --tests --release --no-run`
+  - Collect the integration test binary (e.g., `integration_test-*`), rename to `nri-resctrl-plugin-e2e`, and upload as an artifact.
 - Hardware job (resctrl-capable runner):
   - Download the `nri-resctrl-plugin-e2e` artifact and run it with:
     - `RESCTRL_E2E=1 ./nri-resctrl-plugin-e2e --nocapture`
