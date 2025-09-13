@@ -1315,6 +1315,14 @@ mod tests {
         // Retry just this container → expect transition to Reconciled and one event with counts 1/1
         let st = plugin.retry_container_reconcile("c1").expect("retry ok");
         assert_eq!(st, ContainerSyncState::Reconciled);
+
+        // Verify resctrl tasks now include the desired PIDs (101, 102)
+        let pids = plugin
+            .resctrl
+            .list_group_tasks(gp.to_str().unwrap())
+            .expect("list tasks");
+        assert!(pids.contains(&101) && pids.contains(&102));
+
         // Validate internal state updated and counts improved
         {
             let inner = plugin.state.lock().unwrap();
@@ -1326,6 +1334,15 @@ mod tests {
         }
         // Re-run should not change counts further
         let _ = plugin.retry_container_reconcile("c1").expect("ok");
+
+        // Ensure no further events are emitted after the second reconcile
+        assert!(
+            timeout(Duration::from_millis(50), rx.recv())
+                .await
+                .ok()
+                .is_none(),
+            "no extra event expected after second reconcile"
+        );
     }
 
     #[tokio::test]
