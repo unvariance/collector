@@ -141,10 +141,11 @@ fn write_timer_migration_sysctl(value: u8) -> Result<(), SyncTimerError> {
 /// # Example
 ///
 /// ```rust,no_run
-/// use bpf::{BpfLoader, sync_timer::SyncTimerError};
+/// use bpf::BpfLoader;
 /// use log::{error, info};
 ///
-/// let mut loader = BpfLoader::new(false)?;
+/// // Create loader with number of perf ring pages
+/// let mut loader = BpfLoader::new(256).expect("Failed to create BpfLoader");
 ///
 /// match loader.start_sync_timer() {
 ///     Ok(()) => info!("Sync timer initialized successfully"),
