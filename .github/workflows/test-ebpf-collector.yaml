@@ -13,11 +13,10 @@ on:
       - Cargo.toml
       - '.github/actions/setup-k3s/**'
       - .github/workflows/test-ebpf-collector.yaml
-    paths-ignore:
-      - 'crates/nri-init/**'
-      - 'crates/nri-resctrl-plugin/**'
-      - 'crates/resctrl/**'
-      - 'crates/trace-analysis/**'
+      - '!crates/nri-init/**'
+      - '!crates/nri-resctrl-plugin/**'
+      - '!crates/resctrl/**'
+      - '!crates/trace-analysis/**'
   push:
     branches:
       - main
@@ -26,11 +25,10 @@ on:
       - Cargo.toml
       - '.github/actions/setup-k3s/**'
       - .github/workflows/test-ebpf-collector.yaml
-    paths-ignore:
-      - 'crates/nri-init/**'
-      - 'crates/nri-resctrl-plugin/**'
-      - 'crates/resctrl/**'
-      - 'crates/trace-analysis/**'
+      - '!crates/nri-init/**'
+      - '!crates/nri-resctrl-plugin/**'
+      - '!crates/resctrl/**'
+      - '!crates/trace-analysis/**'
 
 permissions:
   id-token: write # Required for requesting the JWT
