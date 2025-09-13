@@ -4,8 +4,13 @@
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
     "mounts": [
-        "type=bind,source=${localEnv:HOME}/.codex,target=/root/.codex,consistency=cached"
+        "type=bind,source=${localEnv:HOME}/.codex,target=/root/.codex,consistency=cached",
+        "source=${localEnv:HOME}/.config/gh,target=/root/.config/gh,type=bind,consistency=cached"
     ],
+    "features": {
+        // to get credentials for GitHub CLI, authenticate on the host with `gh auth login --insecure-storage`
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    }, 
     "customizations": {
         "vscode": {
             "extensions": [
