@@ -1109,13 +1109,13 @@ mod tests {
             },
         );
 
-        let mock_pid_src = MockCgroupPidSource::new();
+        let mock_pid_src = Arc::new(MockCgroupPidSource::new());
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
         let plugin = ResctrlPlugin::with_pid_source(
             ResctrlPluginConfig::default(),
             rc,
             tx,
-            Arc::new(mock_pid_src.clone()),
+            mock_pid_src.clone(),
         );
 
         // Configure ENOSPC for the pod's group dir
@@ -1245,21 +1245,10 @@ mod tests {
             },
         );
 
-        let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
-        let mut mock_pid_src = MockCgroupPidSource::new();
-        let plugin = ResctrlPlugin::with_pid_source(
-            ResctrlPluginConfig::default(),
-            rc,
-            tx,
-            Arc::new(mock_pid_src.clone()),
-        );
-
-        // Pre-create group dir and tasks → create_group will see EEXIST and succeed
         let gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
         fs.add_dir(&gp);
         fs.add_file(&gp.join("tasks"), "");
 
-        // Define pod and container
         let pod = nri::api::PodSandbox {
             id: "sb1".into(),
             uid: "u1".into(),
@@ -1277,8 +1266,19 @@ mod tests {
         };
         let full_cg = nri::compute_full_cgroup_path(&container, Some(&pod));
 
+        let mut mock_pid_src = Arc::new(MockCgroupPidSource::new());
+        Arc::get_mut(&mut mock_pid_src)
+            .unwrap()
+            .set_pids(full_cg.clone(), vec![101, 102]);
+
+        let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            mock_pid_src.clone(),
+        );
         // Initially PIDs unassignable (ESRCH)
-        mock_pid_src.set_pids(full_cg.clone(), vec![101, 102]);
         fs.set_missing_pid(101);
         fs.set_missing_pid(102);
 
@@ -1315,6 +1315,18 @@ mod tests {
         // Retry just this container → expect transition to Reconciled and one event with counts 1/1
         let st = plugin.retry_container_reconcile("c1").expect("retry ok");
         assert_eq!(st, ContainerSyncState::Reconciled);
+        // Drain the event emitted for the transition to Reconciled (counts 1/1)
+        let ev = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("event")
+            .expect("ev");
+        match ev {
+            PodResctrlEvent::AddOrUpdate(a) => {
+                assert_eq!(a.total_containers, 1);
+                assert_eq!(a.reconciled_containers, 1);
+            }
+            _ => panic!("unexpected event"),
+        }
 
         // Verify resctrl tasks now include the desired PIDs (101, 102)
         let pids = plugin
@@ -1362,23 +1374,6 @@ mod tests {
             },
         );
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(32);
-        let mut mock_pid_src = MockCgroupPidSource::new();
-        let plugin = ResctrlPlugin::with_pid_source(
-            ResctrlPluginConfig::default(),
-            rc,
-            tx,
-            Arc::new(mock_pid_src.clone()),
-        );
-
-        // uA: Failed pod due to ENOSPC
-        let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
-        fs.set_nospace_dir(&u_a_gp);
-        // uB: Existing group and one Partial container
-        let u_b_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uB");
-        fs.add_dir(&u_b_gp);
-        fs.add_file(&u_b_gp.join("tasks"), "");
-
-        // Define pods and container for uB
         let pod_a = nri::api::PodSandbox {
             id: "sbA".into(),
             uid: "uA".into(),
@@ -1399,8 +1394,27 @@ mod tests {
             linux: protobuf::MessageField::some(linux_b),
             ..Default::default()
         };
+
+        let mut mock_pid_src = Arc::new(MockCgroupPidSource::new());
         let cg_b = nri::compute_full_cgroup_path(&ctr_b, Some(&pod_b));
-        mock_pid_src.set_pids(cg_b.clone(), vec![222, 223]);
+        Arc::get_mut(&mut mock_pid_src)
+            .unwrap()
+            .set_pids(cg_b.clone(), vec![222, 223]);
+
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            mock_pid_src.clone(),
+        );
+
+        // uA: Failed pod due to ENOSPC
+        let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
+        fs.set_nospace_dir(&u_a_gp);
+        // uB: Existing group and one Partial container
+        let u_b_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uB");
+        fs.add_dir(&u_b_gp);
+        fs.add_file(&u_b_gp.join("tasks"), "");
         fs.set_missing_pid(222);
         fs.set_missing_pid(223);
 
@@ -1447,9 +1461,26 @@ mod tests {
         .unwrap();
 
         // Drain initial events
-        let _ = timeout(Duration::from_millis(100), rx.recv()).await; // uA failed
-        let _ = timeout(Duration::from_millis(100), rx.recv()).await; // uB exists
-        let _ = timeout(Duration::from_millis(100), rx.recv()).await; // uB counts 1/0
+        let _ = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("no-timeout")
+            .expect("received event"); // uA failed
+        let _ = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("no-timeout")
+            .expect("received event"); // uB exists
+        let ev = timeout(Duration::from_millis(100), rx.recv())
+            .await
+            .expect("no-timeout")
+            .expect("received event"); // uB counts 1/0
+        match ev {
+            PodResctrlEvent::AddOrUpdate(a) => {
+                assert_eq!(a.pod_uid, "uB");
+                assert_eq!(a.total_containers, 1);
+                assert_eq!(a.reconciled_containers, 0);
+            }
+            _ => panic!("unexpected event"),
+        }
 
         // Make current PIDs assignable now
         fs.clear_missing_pid(222);
