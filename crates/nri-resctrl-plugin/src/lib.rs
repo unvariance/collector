@@ -145,6 +145,33 @@ impl ResctrlPlugin<RealFs> {
     }
 }
 
+// Plugin-specific error to distinguish benign races from resctrl errors
+#[allow(dead_code)]
+#[derive(Debug)]
+pub enum PluginError {
+    PodNotFound,
+    ContainerNotFound,
+    Resctrl(resctrl::Error),
+}
+
+impl From<resctrl::Error> for PluginError {
+    fn from(e: resctrl::Error) -> Self {
+        Self::Resctrl(e)
+    }
+}
+
+impl std::fmt::Display for PluginError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PodNotFound => write!(f, "pod not found"),
+            Self::ContainerNotFound => write!(f, "container not found"),
+            Self::Resctrl(e) => write!(f, "resctrl error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for PluginError {}
+
 impl<P: FsProvider> ResctrlPlugin<P> {
     /// Create a new plugin with a custom resctrl handle (DI for tests).
     /// The caller provides the event sender channel.
@@ -344,29 +371,23 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
     /// Try to create a resctrl group for a pod if currently Failed.
     /// Emits AddOrUpdate only on state transition.
-    pub fn retry_group_creation(&self, pod_uid: &str) -> resctrl::Result<ResctrlGroupState> {
+    pub fn retry_group_creation(&self, pod_uid: &str) -> Result<ResctrlGroupState, PluginError> {
         use std::io;
         use std::path::PathBuf;
 
-        // Snapshot decision under lock
-        let should_try = {
+        // Snapshot decision under lock. If pod missing → PodNotFound.
+        // If state is not Failed, return current state immediately to avoid unlock/relock races.
+        {
             let st = self.state.lock().unwrap();
             match st.pods.get(pod_uid) {
-                Some(ps) => matches!(ps.group_state, ResctrlGroupState::Failed),
-                None => {
-                    return Err(resctrl::Error::Io {
-                        path: PathBuf::from("<pod>"),
-                        source: io::Error::from_raw_os_error(libc::ENOENT),
-                    })
-                }
+                Some(pod_state) => match &pod_state.group_state {
+                    ResctrlGroupState::Failed => { /* continue and try create */ }
+                    ResctrlGroupState::Exists(path) => {
+                        return Ok(ResctrlGroupState::Exists(path.clone()))
+                    }
+                },
+                None => return Err(PluginError::PodNotFound),
             }
-        };
-
-        if !should_try {
-            // Either does not exist or already Exists; return current state
-            let st = self.state.lock().unwrap();
-            let current = st.pods.get(pod_uid).unwrap().group_state.clone();
-            return Ok(current);
         }
 
         // Drop lock while performing filesystem operation
@@ -374,28 +395,31 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         match res {
             Ok(path) => {
                 let mut st = self.state.lock().unwrap();
-                // Re-check and update if still Failed
-                if let Some(ps) = st.pods.get_mut(pod_uid) {
-                    if matches!(ps.group_state, ResctrlGroupState::Failed) {
-                        ps.group_state = ResctrlGroupState::Exists(path.clone());
-                        let snapshot = ps.clone();
+                // Re-check and update under lock using exhaustive match
+                match st.pods.get_mut(pod_uid) {
+                    Some(pod_state) => match &pod_state.group_state {
+                        ResctrlGroupState::Failed => {
+                            pod_state.group_state = ResctrlGroupState::Exists(path.clone());
+                            // Emit under lock to preserve ordering
+                            self.emit_pod_add_or_update(pod_uid, pod_state);
+                            Ok(ResctrlGroupState::Exists(path))
+                        }
+                        ResctrlGroupState::Exists(p) => Ok(ResctrlGroupState::Exists(p.clone())),
+                    },
+                    None => {
+                        // Pod disappeared concurrently; best-effort cleanup not under lock
                         drop(st);
-                        self.emit_pod_add_or_update(pod_uid, &snapshot);
-                        return Ok(ResctrlGroupState::Exists(path));
-                    } else if let ResctrlGroupState::Exists(p) = &ps.group_state {
-                        return Ok(ResctrlGroupState::Exists(p.clone()));
+                        if let Err(e) = self.resctrl.delete_group(&path) {
+                            warn!(
+                                "resctrl-plugin: created group for removed pod {}; cleanup failed: {}",
+                                pod_uid, e
+                            );
+                        }
+                        Err(PluginError::PodNotFound)
                     }
                 }
-                // Pod disappeared concurrently
-                Err(resctrl::Error::Io {
-                    path: std::path::PathBuf::from("<pod>"),
-                    source: std::io::Error::from_raw_os_error(libc::ENOENT),
-                })
             }
-            Err(resctrl::Error::Capacity { .. }) => Err(resctrl::Error::Capacity {
-                source: std::io::Error::from_raw_os_error(libc::ENOSPC),
-            }),
-            Err(e) => Err(e),
+            Err(e) => Err(PluginError::from(e)),
         }
     }
 
@@ -404,39 +428,33 @@ impl<P: FsProvider> ResctrlPlugin<P> {
     pub(crate) fn retry_container_reconcile(
         &self,
         container_id: &str,
-    ) -> resctrl::Result<ContainerSyncState> {
+    ) -> Result<ContainerSyncState, PluginError> {
         use std::io;
         use std::path::PathBuf;
 
         // Snapshot under lock: group path, cgroup path, passes, current state
-        let (group_path, cgroup_path, pod_uid, _current_state, passes) = {
+        let (group_path, cgroup_path, pod_uid, current_state, passes) = {
             let st = self.state.lock().unwrap();
-            let cst = st
+            let container_state = st
                 .containers
                 .get(container_id)
-                .ok_or_else(|| resctrl::Error::Io {
-                    path: PathBuf::from("<container>"),
-                    source: io::Error::from_raw_os_error(libc::ENOENT),
-                })?;
-            if cst.state == ContainerSyncState::NoPod {
+                .ok_or(PluginError::ContainerNotFound)?;
+            if container_state.state == ContainerSyncState::NoPod {
                 return Ok(ContainerSyncState::NoPod);
             }
-            let ps = st
+            let pod_state = st
                 .pods
-                .get(&cst.pod_uid)
-                .ok_or_else(|| resctrl::Error::Io {
-                    path: PathBuf::from("<pod>"),
-                    source: io::Error::from_raw_os_error(libc::ENOENT),
-                })?;
-            let gp = match &ps.group_state {
+                .get(&container_state.pod_uid)
+                .ok_or(PluginError::PodNotFound)?;
+            let group_path = match &pod_state.group_state {
                 ResctrlGroupState::Exists(p) => p.clone(),
-                _ => return Ok(cst.state),
+                _ => return Ok(container_state.state),
             };
             (
-                gp,
-                cst.cgroup_path.clone(),
-                cst.pod_uid.clone(),
-                cst.state,
+                group_path,
+                container_state.cgroup_path.clone(),
+                container_state.pod_uid.clone(),
+                container_state.state,
                 self.cfg.max_reconcile_passes,
             )
         };
@@ -447,47 +465,41 @@ impl<P: FsProvider> ResctrlPlugin<P> {
             move || -> resctrl::Result<Vec<i32>> { pid_source.pids_for_path(&cgroup_path) };
         let res = self
             .resctrl
-            .reconcile_group(&group_path, pid_resolver, passes)?;
+            .reconcile_group(&group_path, pid_resolver, passes)
+            .map_err(PluginError::from)?;
         let new_state = if res.missing == 0 {
             ContainerSyncState::Reconciled
         } else {
             ContainerSyncState::Partial
         };
 
-        // Re-acquire lock and update counters/state conditionally
+        // Re-acquire lock and update counters/state conditionally.
+        // Ensure both container and pod are present before applying any change.
         let mut st = self.state.lock().unwrap();
-        // Track whether we improved state
-        let mut did_reconcile = false;
-        let ret_state = if let Some(cst) = st.containers.get_mut(container_id) {
-            if cst.state == ContainerSyncState::Partial
-                && new_state == ContainerSyncState::Reconciled
-            {
-                cst.state = ContainerSyncState::Reconciled;
-                did_reconcile = true;
-            }
-            cst.state
-        } else {
-            return Err(resctrl::Error::Io {
-                path: std::path::PathBuf::from("<container>"),
-                source: std::io::Error::from_raw_os_error(libc::ENOENT),
-            });
-        };
+        let container_entry = st
+            .containers
+            .get_mut(container_id)
+            .ok_or(PluginError::ContainerNotFound)?;
+        let pod_entry = st
+            .pods
+            .get_mut(&pod_uid)
+            .ok_or(PluginError::PodNotFound)?;
 
-        if did_reconcile {
-            if let Some(ps) = st.pods.get_mut(&pod_uid) {
-                ps.reconciled_containers += 1;
-                let snapshot = ps.clone();
-                drop(st);
-                self.emit_pod_add_or_update(&pod_uid, &snapshot);
-                return Ok(ContainerSyncState::Reconciled);
-            }
+        if container_entry.state == ContainerSyncState::Partial
+            && new_state == ContainerSyncState::Reconciled
+        {
+            container_entry.state = ContainerSyncState::Reconciled;
+            pod_entry.reconciled_containers += 1;
+            // Emit under lock to preserve ordering
+            self.emit_pod_add_or_update(&pod_uid, pod_entry);
+            return Ok(ContainerSyncState::Reconciled);
         }
-        Ok(ret_state)
+        Ok(container_entry.state)
     }
 
     /// Retry once across all pods/containers.
     /// Stops group-creation retries on first Capacity error in this pass.
-    pub fn retry_all_once(&self) -> resctrl::Result<()> {
+    pub fn retry_all_once(&self) -> Result<(), PluginError> {
         // Snapshot lists under lock
         let (failed_pods, partial_containers): (Vec<String>, Vec<String>) = {
             let st = self.state.lock().unwrap();
@@ -519,7 +531,8 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         // Retry group creation until first capacity error
         for uid in failed_pods {
             match self.retry_group_creation(&uid) {
-                Err(resctrl::Error::Capacity { .. }) => break,
+                Err(PluginError::Resctrl(resctrl::Error::Capacity { .. })) => break,
+                Err(PluginError::PodNotFound) => continue,
                 Err(e) => return Err(e),
                 Ok(_) => {}
             }
@@ -527,7 +540,11 @@ impl<P: FsProvider> ResctrlPlugin<P> {
 
         // Retry container reconcile for partial containers
         for cid in partial_containers {
-            let _ = self.retry_container_reconcile(&cid)?;
+            match self.retry_container_reconcile(&cid) {
+                Ok(_) => {}
+                Err(PluginError::ContainerNotFound) | Err(PluginError::PodNotFound) => continue,
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
@@ -649,7 +666,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                     let mut st = self.state.lock().unwrap();
 
                     // Get group path before removing pod state
-                    let group_path = st.pods.get(&pod_uid).and_then(|ps| match &ps.group_state {
+                    let group_path = st.pods.get(&pod_uid).and_then(|pod_state| match &pod_state.group_state {
                         ResctrlGroupState::Exists(path) => Some(path.clone()),
                         _ => None,
                     });
@@ -658,17 +675,16 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
                     st.containers.retain(|_, c| c.pod_uid != pod_uid);
                     // Remove pod state
                     st.pods.remove(&pod_uid);
+                    // Emit removal event under lock to preserve ordering
+                    self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved { pod_uid: pod_uid.clone() }));
                     drop(st);
 
                     // Delete resctrl group if it exists
-                    if let Some(gp) = group_path {
-                        if let Err(e) = self.resctrl.delete_group(&gp) {
-                            warn!("resctrl-plugin: failed to delete group {}: {}", gp, e);
+                    if let Some(group_path) = group_path {
+                        if let Err(e) = self.resctrl.delete_group(&group_path) {
+                            warn!("resctrl-plugin: failed to delete group {}: {}", group_path, e);
                         }
                     }
-
-                    // Emit removal event
-                    self.emit_event(PodResctrlEvent::Removed(PodResctrlRemoved { pod_uid }));
                 }
             }
             Ok(Event::REMOVE_CONTAINER) => {
@@ -678,18 +694,15 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
 
                     // Adjust counts based on the removed container's previous state
                     let old_state = st.containers.remove(&container.id).map(|c| c.state);
-                    if let Some(ps) = st.pods.get_mut(&pod_uid) {
+                    if let Some(pod_state) = st.pods.get_mut(&pod_uid) {
                         if matches!(old_state, Some(s) if s != ContainerSyncState::NoPod) {
-                            ps.total_containers = ps.total_containers.saturating_sub(1);
+                            pod_state.total_containers = pod_state.total_containers.saturating_sub(1);
                         }
                         if matches!(old_state, Some(ContainerSyncState::Reconciled)) {
-                            ps.reconciled_containers = ps.reconciled_containers.saturating_sub(1);
+                            pod_state.reconciled_containers = pod_state.reconciled_containers.saturating_sub(1);
                         }
-                        let snapshot = ps.clone();
-                        drop(st);
-                        self.emit_pod_add_or_update(&pod_uid, &snapshot);
-                    } else {
-                        drop(st);
+                        // Emit under lock to preserve ordering
+                        self.emit_pod_add_or_update(&pod_uid, pod_state);
                     }
                 }
             }
@@ -1191,8 +1204,8 @@ mod tests {
         // First retry: still ENOSPC → expect Error::Capacity and no event
         let err = plugin.retry_group_creation("u1").unwrap_err();
         match err {
-            resctrl::Error::Capacity { .. } => {}
-            _ => panic!("expected capacity error"),
+            PluginError::Resctrl(resctrl::Error::Capacity { .. }) => {}
+            other => panic!("expected capacity error, got: {:?}", other),
         }
         assert!(
             timeout(Duration::from_millis(50), rx.recv())
