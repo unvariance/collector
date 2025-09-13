@@ -2146,6 +2146,7 @@ dependencies = [
  "protobuf",
  "resctrl",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "ttrpc",
  "uuid",

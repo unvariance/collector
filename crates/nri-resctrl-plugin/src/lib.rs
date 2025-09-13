@@ -1,6 +1,7 @@
 mod pid_source;
 
 use std::collections::HashMap;
+use std::ops::DerefMut as _;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
@@ -147,30 +148,15 @@ impl ResctrlPlugin<RealFs> {
 
 // Plugin-specific error to distinguish benign races from resctrl errors
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum PluginError {
+    #[error("pod not found")]
     PodNotFound,
+    #[error("container not found")]
     ContainerNotFound,
-    Resctrl(resctrl::Error),
+    #[error(transparent)]
+    Resctrl(#[from] resctrl::Error),
 }
-
-impl From<resctrl::Error> for PluginError {
-    fn from(e: resctrl::Error) -> Self {
-        Self::Resctrl(e)
-    }
-}
-
-impl std::fmt::Display for PluginError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::PodNotFound => write!(f, "pod not found"),
-            Self::ContainerNotFound => write!(f, "container not found"),
-            Self::Resctrl(e) => write!(f, "resctrl error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for PluginError {}
 
 impl<P: FsProvider> ResctrlPlugin<P> {
     /// Create a new plugin with a custom resctrl handle (DI for tests).
@@ -476,16 +462,17 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         // Re-acquire lock and update counters/state conditionally.
         // Ensure both container and pod are present before applying any change.
         let mut st = self.state.lock().unwrap();
-        let container_entry = st
+        let st_mut = st.deref_mut();
+        let container_entry = st_mut
             .containers
             .get_mut(container_id)
             .ok_or(PluginError::ContainerNotFound)?;
-        let pod_entry = st
+        let pod_entry = st_mut
             .pods
             .get_mut(&pod_uid)
             .ok_or(PluginError::PodNotFound)?;
 
-        if container_entry.state == ContainerSyncState::Partial
+        if matches!(&container_entry.state, ContainerSyncState::Partial)
             && new_state == ContainerSyncState::Reconciled
         {
             container_entry.state = ContainerSyncState::Reconciled;
