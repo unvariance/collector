@@ -73,7 +73,7 @@ Add a startup cleanup that removes only our previously-created resctrl groups un
 - nri-resctrl-plugin tests:
   - Startup cleanup + coexistence + logging (single test): pre-populate root and `mon_groups` as above. Create plugin with `cleanup_on_start=true`. Include a pod in the `synchronize()` call. Assert cleanup ran first (stale removed) and pod handling proceeds normally (group created for the pod and one Add/Update event emitted). Capture logs and verify an info-level entry with the four counters is present. Assert no `PodResctrlEvent` is emitted for cleanup-only actions (i.e., only the pod’s normal event is present).
   - Mount responsibility: a separate test verifying the plugin calls `ensure_mounted(cfg.auto_mount)` before cleanup. If a dedicated test for `auto_mount=false` behavior is missing elsewhere, add one here and note it as a filled test gap (outside this sub-issue’s core logic).
-  - Config pass-through: a unit test asserting that `ResctrlPlugin::new()` passes `group_prefix` and `auto_mount` intact to `resctrl::Config` (e.g., by creating a group and checking the path uses the configured prefix; and by toggling `auto_mount` and ensuring `ensure_mounted` behavior matches the flag).
+  - Config pass-through: construct the plugin with non-default `group_prefix` and `auto_mount`, then inspect the resulting internal config via a public accessor or DI hook to assert the values are passed through unchanged. Keep this test pure (no filesystem actions).
 
 ### End-to-End Test (Integration)
 
