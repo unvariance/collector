@@ -45,6 +45,20 @@ jobs:
           # From cilium/ebpf instructions, to find asm/types.h
           sudo ln -sf /usr/include/asm-generic/ /usr/include/asm
 
+      - name: Provide vmlinux.h for eBPF builds
+        run: |
+          set -euxo pipefail
+          # Fetch pre-generated vmlinux.h headers (contains include/x86/vmlinux.h)
+          git clone --depth 1 https://github.com/libbpf/vmlinux.h.git /tmp/vmlinux.h
+          # Symlink vmlinux.h into any source directories that include it
+          # This ensures clang finds it with default include search rules
+          mapfile -t DIRS < <(grep -RIl --exclude-dir=target '#include \"vmlinux.h\"' || true)
+          if [ ${#DIRS[@]} -gt 0 ]; then
+            for d in $(printf '%s\n' "${DIRS[@]}" | xargs -r -n1 dirname | sort -u); do
+              ln -sf /tmp/vmlinux.h/include/x86/vmlinux.h "$d/vmlinux.h"
+            done
+          fi
+
       - name: Build benchmark
         run: |
           cd cmd/sync_timer_benchmark
