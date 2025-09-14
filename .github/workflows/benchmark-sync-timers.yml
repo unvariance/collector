@@ -43,10 +43,19 @@ jobs:
           packages: build-essential golang-go llvm clang libbpf-dev git vim curl kmod unzip
           version: 1.0
 
-      - name: Install kernel headers and finalize includes
+      - name: Compute kernel headers package
+        id: kernel
         run: |
-          # Install kernel headers (dynamic package cannot be cached reliably)
-          sudo apt-get install -y linux-headers-$(uname -r)
+          echo "headers=linux-headers-$(uname -r)" >> $GITHUB_OUTPUT
+
+      - name: Cache kernel headers
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: ${{ steps.kernel.outputs.headers }}
+          version: 1.0
+
+      - name: Finalize kernel includes
+        run: |
           # From cilium/ebpf instructions, to find asm/types.h
           sudo ln -sf /usr/include/asm-generic/ /usr/include/asm
 

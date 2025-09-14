@@ -190,12 +190,19 @@ jobs:
           packages: sysstat linux-tools-common linux-tools-generic bzip2 podman
           version: 1.0
 
-      - name: (install) Install kernel-specific perf
+      - name: (install) Compute kernel package names
+        id: kernel
         run: |
-          # Install only the kernel-specific linux-tools (others are cached above)
-          sudo apt-get install -y linux-tools-`uname -r`
+          echo "tools=linux-tools-$(uname -r)" >> $GITHUB_OUTPUT
 
-          # Verify installations
+      - name: (install) Cache kernel-specific perf
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: ${{ steps.kernel.outputs.tools }}
+          version: 1.0
+
+      - name: (install) Verify perf and podman
+        run: |
           perf_version=$(perf --version 2>&1)
           echo "Installed perf: $perf_version"
           podman_version=$(podman --version 2>&1)
