@@ -420,8 +420,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build nri-init
-        run: cargo build -p nri-init --locked --verbose
       - name: Run unit tests
         run: cargo test -p nri-init --lib --verbose
 
@@ -431,8 +429,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build nri-init
-        run: cargo build -p nri-init --locked --verbose
       - name: Run simulated integration tests
         run: cargo test -p nri-init --test integration_sim --verbose
 
@@ -442,8 +438,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build nri-init
-        run: cargo build -p nri-init --release --verbose
       - name: K3s tests
         run: cargo test -p nri-init --test k3s -- --ignored --test-threads=1
       - name: Containerd tests
