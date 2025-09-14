@@ -37,7 +37,7 @@ permissions:
 jobs:
   build-collector:
     name: Build collector image and binary (reusable)
-    uses: yonch/collector/.github/workflows/build-component-artifacts.yaml@ci/modularize-workflows
+    uses: ./.github/workflows/build-component-artifacts.yaml
     permissions:
       contents: read
       packages: read
