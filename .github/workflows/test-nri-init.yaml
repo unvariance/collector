@@ -142,6 +142,14 @@ jobs:
         with:
           node_image: kindest/node:v${{ matrix.k8s_version }}.0
           cluster_name: test-cluster-${{ matrix.k8s_version }}
+      - name: Download nri-init image artifact and load into Docker
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-init-image
+          path: .
+      - name: Load image into Docker
+        run: |
+          docker load -i image.tar
       - name: Install Helm chart with NRI disabled
         env:
           IMAGE: ${{ needs.build-test-image.outputs.image }}
@@ -149,7 +157,6 @@ jobs:
           # Prepare test image for KIND cluster and set chart image overrides
           REPO="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
-          docker pull "$IMAGE"
           kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-disabled-values.yaml \
@@ -206,7 +213,6 @@ jobs:
         run: |
           REPO="${IMAGE%:*}"
           TAG="${IMAGE##*:}"
-          docker pull "$IMAGE"
           kind load docker-image "$IMAGE" --name test-cluster-${{ matrix.k8s_version }}
           helm install test-collector charts/collector \
             -f charts/collector/ci/nri-configure-only-values.yaml \
@@ -307,6 +313,14 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      - name: Download nri-init image artifact and load into Docker
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-init-image
+          path: .
+      - name: Load image into Docker
+        run: |
+          docker load -i image.tar
       - name: Create kind cluster (KIND v0.30)
         uses: helm/kind-action@v1
         with:
@@ -332,8 +346,7 @@ jobs:
             REPO="${IMAGE%:*}"
             TAG="${IMAGE##*:}"
             CONTAINER_NAME="kind-nri-preconfigured-control-plane"
-            # Load the image into KIND nodes to avoid GHCR auth issues
-            docker pull "$IMAGE"
+            # Load the image into KIND nodes
             kind load docker-image "$IMAGE" --name "kind-nri-preconfigured"
             # Install chart without waiting for Ready, since GH runners may prevent the
             # main collector container from becoming Ready. We only need the init to run.
@@ -390,41 +403,16 @@ jobs:
             helm uninstall test-collector
 
   build-test-image:
-    name: Build and push nri-init test image
-    runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.meta.outputs.image }}
-    permissions:
-      packages: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Log in to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-      - name: Build and push image
-        id: meta
-        env:
-          # Use the main nri-init repository with a test tag to avoid a separate repo
-          IMAGE: ghcr.io/${{ github.repository_owner }}/nri-init:test-${{ github.run_id }}
-        run: |
-          docker build -f Dockerfile.nri-init -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
-      - name: Extract nri-init binary from image
-        env:
-          IMAGE: ${{ steps.meta.outputs.image }}
-        run: |
-          set -x
-          cid=$(docker create "$IMAGE")
-          docker cp "$cid":/usr/local/bin/nri-init ./nri-init
-          docker rm -v "$cid"
-          file ./nri-init || true
-          ldd ./nri-init || true
-      - name: Upload nri-init artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: nri-init-bin
-          path: ./nri-init
+    name: Build nri-init image and binary (reusable)
+    uses: yonch/collector/.github/workflows/build-component-artifacts.yaml@ci/modularize-workflows
+    with:
+      runner: ubuntu-latest
+      component: nri-init
+      push: false
+      image-repository: ghcr.io/${{ github.repository_owner }}/nri-init
+      image-tag: test-${{ github.run_id }}
+      upload-image-artifact: true
+      upload-binary-artifact: true
 
   unit:
     runs-on: ubuntu-latest
@@ -511,7 +499,7 @@ jobs:
         if: ${{ matrix.runner == 'binary' }}
         uses: actions/download-artifact@v4
         with:
-          name: nri-init-bin
+          name: nri-init-binary
           path: ./bin
       - name: Make nri-init executable
         if: ${{ matrix.runner == 'binary' }}
@@ -560,14 +548,24 @@ jobs:
           kubectl cluster-info --context kind-${CLUSTER}
           kubectl get nodes
 
-      - name: Pull and load test image for KIND
+      - name: Download nri-init image artifact and load into Docker (KIND target)
+        if: ${{ matrix.target == 'kind' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-init-image
+          path: .
+      - name: Load image into Docker (KIND target)
+        if: ${{ matrix.target == 'kind' }}
+        run: |
+          docker load -i image.tar
+
+      - name: Load test image into KIND
         if: ${{ matrix.target == 'kind' }}
         env:
           IMAGE: ${{ needs.build-test-image.outputs.image }}
           CLUSTER: nri-rust-${{ matrix.scenario }}
         run: |
           set -x
-          docker pull "$IMAGE"
           kind load docker-image "$IMAGE" --name ${CLUSTER}
 
       - name: Run nri-init as privileged DaemonSet on KIND (container mode)
@@ -766,6 +764,19 @@ jobs:
           mkdir -p ~/.kube
           sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
           sudo chown $(id -u):$(id -g) ~/.kube/config
+
+      - name: Download nri-init image artifact (K3s)
+        if: ${{ matrix.target == 'k3s' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-init-image
+          path: .
+      - name: Import image into k3s containerd
+        if: ${{ matrix.target == 'k3s' }}
+        run: |
+          # Import the image archive into the k3s-managed containerd (k8s.io namespace)
+          sudo k3s ctr -n k8s.io images import image.tar
+          sudo k3s ctr -n k8s.io images ls | head -n 50 || true
 
       - name: Run nri-init on host (K3s, binary mode)
         if: ${{ matrix.target == 'k3s' && matrix.runner == 'binary' }}

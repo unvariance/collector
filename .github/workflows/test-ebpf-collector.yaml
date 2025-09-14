@@ -36,7 +36,17 @@ permissions:
 
 jobs:
   build-collector:
-    name: Build eBPF collector
+    name: Build collector image and binary (reusable)
+    uses: yonch/collector/.github/workflows/build-component-artifacts.yaml@ci/modularize-workflows
+    with:
+      runner: ubuntu-latest
+      component: collector
+      push: false
+      upload-image-artifact: true
+      upload-binary-artifact: true
+
+  bpf-cgroup-inode-test:
+    name: BPF cgroup inode assumptions
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -66,40 +76,17 @@ jobs:
 
       - name: Test cgroup inode assumptions
         run: |
-          # Build the test, but don't run it yet
           cargo test --package bpf --test cgroup_inode_test --no-run --verbose
           
           echo "Testing that the cgroup ID from BPF matches the inode number in the filesystem"
           echo "This is critical for container identification in the collector"
           
-          # Find the test binary
           TEST_BIN=$(find target/debug -name "cgroup_inode_test-*" -type f -executable | head -1)
-          
           if [ -z "$TEST_BIN" ]; then
-            echo "Could not find test binary. Checking for alternative locations..."
-            TEST_BIN=$(find . -name "cgroup_inode_test-*" -type f -executable | head -1)
-          fi
-          
-          if [ -z "$TEST_BIN" ]; then
-            echo "Error: Could not find test binary anywhere."
+            echo "Error: Could not find test binary."
             exit 1
           fi
-          
-          echo "Found test binary at: $TEST_BIN"
-          # Run the test as root
           sudo $TEST_BIN
-
-      - name: Build collector
-        run: |
-          cargo build
-          mkdir -p artifacts
-          cp target/debug/collector artifacts/
-
-      - name: Upload collector binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: collector-binary
-          path: artifacts/collector
 
   test-multi-kernel:
     name: Test on Multiple Kernels

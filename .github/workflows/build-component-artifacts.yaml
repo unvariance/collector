@@ -1,0 +1,189 @@
+name: build-component-artifacts
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: "GitHub runner label to build on (e.g., ubuntu-latest, ubuntu-24.04-arm)"
+        required: false
+        default: ubuntu-latest
+        type: string
+      component:
+        description: "Component to build (collector or nri-init)"
+        required: true
+        type: string
+      push:
+        description: "Push the built image to GHCR"
+        required: false
+        default: false
+        type: boolean
+      image-repository:
+        description: "Target image repository (defaults to ghcr.io/<owner>/<repo>/<component>)"
+        required: false
+        type: string
+      image-tag:
+        description: "Image tag to use when pushing (defaults to pr-<run_id>)"
+        required: false
+        type: string
+      upload-image-artifact:
+        description: "Upload image tar as artifact"
+        required: false
+        default: true
+        type: boolean
+      upload-binary-artifact:
+        description: "Upload extracted binary as artifact"
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      image:
+        description: "Built image reference (local tag)"
+        value: ${{ jobs.build.outputs.image }}
+      image_artifact:
+        description: "Name of the uploaded image artifact"
+        value: ${{ jobs.build.outputs.image_artifact }}
+      binary_artifact:
+        description: "Name of the uploaded binary artifact"
+        value: ${{ jobs.build.outputs.binary_artifact }}
+
+jobs:
+  build:
+    name: Build ${{ inputs.component }} image and binary
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.out.outputs.image }}
+      image_artifact: ${{ steps.names.outputs.image_artifact }}
+      binary_artifact: ${{ steps.names.outputs.binary_artifact }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute variables
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          comp="${{ inputs.component }}"
+          case "$comp" in
+            collector)
+              image_name="collector"
+              dockerfile="Dockerfile.collector"
+              binary_path="/usr/local/bin/collector"
+              ;;
+            nri-init)
+              image_name="nri-init"
+              dockerfile="Dockerfile.nri-init"
+              binary_path="/usr/local/bin/nri-init"
+              ;;
+            *)
+              echo "Unsupported component: $comp" >&2
+              exit 1
+              ;;
+          esac
+
+          short_sha=$(git rev-parse --short=7 ${{ github.sha }})
+          # Local-only tag to load and save
+          local_image="local/${image_name}:build-${short_sha}-${{ github.run_id }}"
+          echo "local_image=$local_image" >> "$GITHUB_OUTPUT"
+          echo "dockerfile=$dockerfile" >> "$GITHUB_OUTPUT"
+          echo "binary_path=$binary_path" >> "$GITHUB_OUTPUT"
+
+          # Publish target (if push=true)
+          if [ -n "${{ inputs.image-repository }}" ]; then
+            repo='${{ inputs.image-repository }}'
+          else
+            repo="ghcr.io/${{ github.repository }}/${image_name}"
+          fi
+          if [ -n "${{ inputs.image-tag }}" ]; then
+            tag='${{ inputs.image-tag }}'
+          else
+            tag="pr-${{ github.run_id }}"
+          fi
+          echo "publish_image=${repo}:${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: inputs.push == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (load locally)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.meta.outputs.dockerfile }}
+          tags: ${{ steps.meta.outputs.local_image }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Optionally push to GHCR
+        if: inputs.push == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker image inspect "${{ steps.meta.outputs.local_image }}" >/dev/null 2>&1
+          docker tag "${{ steps.meta.outputs.local_image }}" "${{ steps.meta.outputs.publish_image }}"
+          docker push "${{ steps.meta.outputs.publish_image }}"
+
+      - name: Compute artifact names
+        id: names
+        shell: bash
+        run: |
+          comp="${{ inputs.component }}"
+          image_artifact="${comp}-image"
+          binary_artifact="${comp}-binary"
+          echo "image_artifact=$image_artifact" >> "$GITHUB_OUTPUT"
+          echo "binary_artifact=$binary_artifact" >> "$GITHUB_OUTPUT"
+
+      - name: Select output image
+        id: out
+        shell: bash
+        run: |
+          # Prefer publish image when pushing, otherwise use local tag
+          image="${{ inputs.push && steps.meta.outputs.publish_image || steps.meta.outputs.local_image }}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Save image as tar
+        if: inputs.upload-image-artifact == true
+        shell: bash
+        run: |
+          docker image inspect "${{ steps.meta.outputs.local_image }}" >/dev/null 2>&1
+          docker save "${{ steps.meta.outputs.local_image }}" -o image.tar
+
+      - name: Upload image artifact
+        if: inputs.upload-image-artifact == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.image_artifact }}
+          path: image.tar
+          retention-days: 7
+
+      - name: Extract binary from image
+        if: inputs.upload-binary-artifact == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid=$(docker create "${{ steps.meta.outputs.local_image }}")
+          # Extract to ./<component> (flat file for easier reuse)
+          out="${{ inputs.component }}"
+          docker cp "$cid":"${{ steps.meta.outputs.binary_path }}" "$out"
+          docker rm -v "$cid" >/dev/null
+          chmod +x "$out"
+
+      - name: Upload binary artifact
+        if: inputs.upload-binary-artifact == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.binary_artifact }}
+          path: ${{ inputs.component }}
+          retention-days: 7
