@@ -42,7 +42,7 @@ jobs:
         run: |
           echo "headers=linux-headers-$(uname -r)" >> $GITHUB_OUTPUT
 
-      - name: Cache APT dependencies
+      - name: Install dependencies
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: build-essential golang-go llvm clang libbpf-dev git vim curl kmod unzip ${{ steps.kernel.outputs.headers }}
@@ -116,7 +116,7 @@ jobs:
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: ${{ inputs.benchmark-duration == '1' && 5 || inputs.benchmark-duration == '10' && 7 || inputs.benchmark-duration == '100' && 20 || 7 }}
     steps:
-      - name: Cache benchmark dependencies
+      - name: Install benchmark dependencies
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: stress-ng

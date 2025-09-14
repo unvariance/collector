@@ -646,7 +646,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: (install) Cache build tools
+      - name: (install) Install build tools
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: build-essential

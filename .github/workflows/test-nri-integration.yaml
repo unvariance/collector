@@ -140,7 +140,7 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Cache build dependencies (APT)
+      - name: Install build dependencies (APT)
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: clang libelf-dev build-essential pkg-config
