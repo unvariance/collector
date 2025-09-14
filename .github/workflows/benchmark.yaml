@@ -161,21 +161,15 @@ jobs:
           helm install $RELEASE_NAME opentelemetry-helm-charts/charts/opentelemetry-demo -f deploy/opentelemetry-demo/values.yaml
 
       #### Install dependencies
-      - name: (install) Install dependencies using apt
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: sysstat linux-tools-common linux-tools-generic bzip2 podman
-          version: 1.0
-
       - name: (install) Compute kernel package names
         id: kernel
         run: |
           echo "tools=linux-tools-$(uname -r)" >> $GITHUB_OUTPUT
 
-      - name: (install) Cache kernel-specific perf
+      - name: (install) Install dependencies using apt
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: ${{ steps.kernel.outputs.tools }}
+          packages: sysstat linux-tools-common linux-tools-generic bzip2 podman ${{ steps.kernel.outputs.tools }}
           version: 1.0
 
       - name: (install) Verify perf and podman

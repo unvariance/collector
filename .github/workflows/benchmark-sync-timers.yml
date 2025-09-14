@@ -37,21 +37,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Cache APT dependencies
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: build-essential golang-go llvm clang libbpf-dev git vim curl kmod unzip
-          version: 1.0
-
       - name: Compute kernel headers package
         id: kernel
         run: |
           echo "headers=linux-headers-$(uname -r)" >> $GITHUB_OUTPUT
 
-      - name: Cache kernel headers
+      - name: Cache APT dependencies
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: ${{ steps.kernel.outputs.headers }}
+          packages: build-essential golang-go llvm clang libbpf-dev git vim curl kmod unzip ${{ steps.kernel.outputs.headers }}
           version: 1.0
 
       - name: Finalize kernel includes
