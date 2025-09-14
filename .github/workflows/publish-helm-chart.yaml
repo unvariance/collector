@@ -1,4 +1,4 @@
-name: Publish Helm Chart
+name: publish-helm-chart
 run-name: Publish Helm Chart
 
 on:

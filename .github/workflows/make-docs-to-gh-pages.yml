@@ -1,4 +1,4 @@
-name: make docs to gh-pages branch
+name: make-docs-to-gh-pages
 on:
   push:
     branches:

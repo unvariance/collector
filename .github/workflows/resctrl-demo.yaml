@@ -1,4 +1,4 @@
-name: Resource Control Demo
+name: resctrl-demo
 on: 
   workflow_dispatch:  # Manual trigger for testing
     inputs:

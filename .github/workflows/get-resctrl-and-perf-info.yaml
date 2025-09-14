@@ -1,4 +1,4 @@
-name: Get Resctrl and Perf info
+name: get-resctrl-and-perf-info
 on: 
   workflow_dispatch:  # Manual trigger for testing
     inputs:
