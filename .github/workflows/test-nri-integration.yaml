@@ -130,19 +130,21 @@ jobs:
           kubectl get nodes -o wide
           kubectl get pods -A
 
-      - name: Install Rust and build tools
+      - name: Install Rust
         run: |
           echo "=== Installing Rust toolchain ==="
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           source ~/.cargo/env
           
-          echo "=== Installing build dependencies ==="
-          sudo apt-get update
-          sudo apt-get install -y clang libelf-dev build-essential pkg-config
-          
           echo "=== Rust version info ==="
           rustc --version
           cargo --version
+
+      - name: Cache build dependencies (APT)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev build-essential pkg-config
+          version: 1.0
 
       - name: Build NRI integration test
         run: |

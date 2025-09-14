@@ -43,10 +43,14 @@ jobs:
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     steps:
       - name: Install Dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: stress-ng trace-cmd bc
+          version: 1.0
+      
+      - name: Verify Dependencies
         run: |
-          echo "=== Installing Dependencies ==="
-          sudo apt-get update
-          sudo apt-get install -y stress-ng trace-cmd bc
+          echo "=== Verifying Dependencies ==="
           echo "stress-ng version: $(stress-ng --version)"
           echo "bc version: $(bc --version | head -1)"
           echo ""

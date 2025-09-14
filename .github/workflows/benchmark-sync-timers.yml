@@ -37,11 +37,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Cache APT dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: build-essential golang-go llvm clang libbpf-dev git vim curl kmod unzip
+          version: 1.0
+
+      - name: Install kernel headers and finalize includes
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential linux-headers-$(uname -r) \
-            golang-go llvm clang libbpf-dev git vim curl kmod unzip
+          # Install kernel headers (dynamic package cannot be cached reliably)
+          sudo apt-get install -y linux-headers-$(uname -r)
           # From cilium/ebpf instructions, to find asm/types.h
           sudo ln -sf /usr/include/asm-generic/ /usr/include/asm
 
@@ -130,10 +135,11 @@ jobs:
           # Update again with HTTPS now configure
           sudo apt-get update
 
-      - name: Install benchmark dependencies
-        run: |
-          sudo apt-get install -y \
-            stress-ng
+      - name: Cache benchmark dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: stress-ng
+          version: 1.0
 
       - name: Download benchmark binary
         uses: actions/download-artifact@v4

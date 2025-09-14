@@ -33,9 +33,10 @@ jobs:
           components: clippy, rustfmt
 
       - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang libelf-dev pkg-config zlib1g-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev pkg-config zlib1g-dev
+          version: 1.0
 
       - name: Cache cargo and target
         uses: Swatinem/rust-cache@v2

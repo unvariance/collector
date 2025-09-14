@@ -45,9 +45,10 @@ jobs:
           ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang libelf-dev unzip
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev unzip
+          version: 1.0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -413,14 +414,14 @@ jobs:
           sudo chmod +x /usr/local/bin/pqrs
           rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
 
+      - name: Cache Podman packages (APT)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: podman podman-docker
+          version: 1.0
+
       - name: Install Podman and Docker compatibility
         run: |
-          # Update package list
-          sudo apt-get update
-          
-          # Install Podman
-          sudo apt-get install -y podman podman-docker
-                    
           # Verify installation
           podman --version
           docker --version
@@ -605,9 +606,10 @@ jobs:
           fi
 
       - name: Install jq
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: jq
+          version: 1.0
 
       - name: Deploy test pod (${{ env.POD_NAME }})
         run: |

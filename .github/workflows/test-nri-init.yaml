@@ -69,9 +69,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Install prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: jq
+          version: 1.0
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
