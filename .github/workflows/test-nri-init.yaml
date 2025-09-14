@@ -405,12 +405,13 @@ jobs:
   build-test-image:
     name: Build nri-init image and binary (reusable)
     uses: yonch/collector/.github/workflows/build-component-artifacts.yaml@ci/modularize-workflows
+    permissions:
+      contents: read
+      packages: read
     with:
       runner: ubuntu-latest
       component: nri-init
       push: false
-      image-repository: ghcr.io/${{ github.repository_owner }}/nri-init
-      image-tag: test-${{ github.run_id }}
       upload-image-artifact: true
       upload-binary-artifact: true
 

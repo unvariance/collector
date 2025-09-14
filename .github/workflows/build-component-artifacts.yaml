@@ -51,9 +51,6 @@ jobs:
     name: Build ${{ inputs.component }} image and binary
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
-    permissions:
-      contents: read
-      packages: write
     outputs:
       image: ${{ steps.out.outputs.image }}
       image_artifact: ${{ steps.names.outputs.image_artifact }}

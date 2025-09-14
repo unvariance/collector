@@ -38,6 +38,9 @@ jobs:
   build-collector:
     name: Build collector image and binary (reusable)
     uses: yonch/collector/.github/workflows/build-component-artifacts.yaml@ci/modularize-workflows
+    permissions:
+      contents: read
+      packages: read
     with:
       runner: ubuntu-latest
       component: collector

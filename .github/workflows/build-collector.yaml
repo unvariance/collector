@@ -51,6 +51,9 @@ jobs:
             arch: arm64
             component: nri-init
     uses: ./.github/workflows/build-component-artifacts.yaml
+    permissions:
+      contents: read
+      packages: write
     with:
       runner: ${{ matrix.runner }}
       component: ${{ matrix.component }}
