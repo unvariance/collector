@@ -32,7 +32,7 @@ on:
         required: false
         default: 'ghcr.io/unvariance/collector/collector'
         type: string
-  pull_request_target:
+  pull_request:
     paths:
       - deploy/opentelemetry-demo/values.yaml
       - .github/workflows/benchmark.yaml
@@ -63,7 +63,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
         
       - name: Calculate timeout
         id: calculate-timeout
@@ -108,7 +108,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: (k8s) Setup k3s cluster
         uses: ./.github/actions/setup-k3s
@@ -650,7 +650,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: (install) Cache build tools
         uses: awalsh128/cache-apt-pkgs-action@v1
@@ -738,7 +738,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install R Dependencies
         run: |
@@ -996,7 +996,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Install R Dependencies
         run: |
@@ -1048,7 +1048,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
         
       - name: Stop AWS Runner
         uses: ./.github/actions/aws-runner/cleanup
