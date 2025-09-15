@@ -58,11 +58,11 @@ jobs:
             grep -m1 -i '^flags' /proc/cpuinfo || true
             cat /proc/cmdline || true
 
-            echo "== Kernel config: resctrl related =="
+          echo "== Kernel config: resctrl related =="
             if [ -r /proc/config.gz ]; then
-              zcat /proc/config.gz | rg -i 'RESCTRL|RDT' || true
+              if command -v rg >/dev/null 2>&1; then zcat /proc/config.gz | rg -i 'RESCTRL|RDT' || true; else zcat /proc/config.gz | grep -Ei 'RESCTRL|RDT' || true; fi
             elif [ -r "/boot/config-$(uname -r)" ]; then
-              rg -i 'RESCTRL|RDT' "/boot/config-$(uname -r)" || true
+              if command -v rg >/dev/null 2>&1; then rg -i 'RESCTRL|RDT' "/boot/config-$(uname -r)" || true; else grep -Ei 'RESCTRL|RDT' "/boot/config-$(uname -r)" || true; fi
             else
               echo "kernel config not readable"
             fi
@@ -99,9 +99,27 @@ jobs:
             done
 
             if ! command -v perf >/dev/null 2>&1; then
-              echo "perf not found; attempting install"
-              sudo apt-get update -y || true
-              sudo apt-get install -y linux-tools-common linux-tools-generic linux-tools-$(uname -r) || true
+              echo "perf not found; attempting install via common package managers"
+              if command -v apt-get >/dev/null 2>&1; then
+                sudo apt-get update -y || true
+                # Try Ubuntu/Debian variants
+                sudo apt-get install -y linux-tools-common || true
+                sudo apt-get install -y linux-tools-$(uname -r) || true
+                sudo apt-get install -y linux-tools-generic || true
+                sudo apt-get install -y linux-perf || true
+                sudo apt-get install -y perf || true
+              elif command -v dnf >/dev/null 2>&1; then
+                sudo dnf install -y perf || true
+              elif command -v yum >/dev/null 2>&1; then
+                sudo yum install -y perf || true
+              elif command -v zypper >/dev/null 2>&1; then
+                sudo zypper --non-interactive install perf || true
+              elif command -v apk >/dev/null 2>&1; then
+                sudo apk add --no-cache linux-perf || true
+                sudo apk add --no-cache perf || true
+              else
+                echo "No known package manager detected for perf installation"
+              fi
             fi
             command -v perf || true
             perf --version || true
