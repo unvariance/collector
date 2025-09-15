@@ -8,8 +8,8 @@ mod error;
 mod provider;
 pub use provider::{FsProvider, RealFs};
 
-#[cfg(test)]
-mod test_utils;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 
 const DEFAULT_ROOT: &str = "/sys/fs/resctrl";
 const DEFAULT_PREFIX: &str = "pod_";

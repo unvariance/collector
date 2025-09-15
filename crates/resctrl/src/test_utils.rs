@@ -1,4 +1,3 @@
-#[cfg(test)]
 pub mod mock_fs {
     #![allow(dead_code)]
     use crate::FsProvider;
@@ -20,6 +19,8 @@ pub mod mock_fs {
         pub child_dir_overrides: HashMap<PathBuf, Vec<String>>,
         // Simulate permission denied on remove_dir for these paths
         pub no_perm_remove_dirs: HashSet<PathBuf>,
+        // Track create_dir invocations per path
+        pub mkdir_calls: HashMap<PathBuf, usize>,
     }
 
     #[derive(Clone, Default)]
@@ -72,6 +73,16 @@ pub mod mock_fs {
             st.mount_err = Some(err);
         }
 
+        pub fn clear_nospace_dir(&self, p: &Path) {
+            let mut st = self.state.lock().unwrap();
+            st.nospace_dirs.remove(p);
+        }
+
+        pub fn clear_missing_pid(&self, pid: i32) {
+            let mut st = self.state.lock().unwrap();
+            st.missing_pids.remove(&pid);
+        }
+
         pub fn dir_exists(&self, p: &Path) -> bool {
             let st = self.state.lock().unwrap();
             st.dirs.contains(p)
@@ -93,6 +104,29 @@ pub mod mock_fs {
             let mut st = self.state.lock().unwrap();
             st.child_dir_overrides.insert(parent.to_path_buf(), names);
         }
+
+        /// Return number of times create_dir has been called for the given path.
+        pub fn mkdir_count(&self, p: &Path) -> usize {
+            let st = self.state.lock().unwrap();
+            *st.mkdir_calls.get(p).unwrap_or(&0)
+        }
+
+        /// Convenience: build a MockFs with resctrl pre-mounted at the default root.
+        /// Seeds /proc/mounts with a resctrl entry, ensures the root and its tasks file exist.
+        pub fn with_premounted_resctrl() -> Self {
+            let fs = Self::new();
+            // Seed /proc/mounts
+            fs.add_file(
+                Path::new("/proc/mounts"),
+                "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+            );
+            // Ensure default root exists with tasks
+            fs.add_dir(Path::new("/sys"));
+            fs.add_dir(Path::new("/sys/fs"));
+            fs.add_dir(Path::new("/sys/fs/resctrl"));
+            fs.add_file(Path::new("/sys/fs/resctrl/tasks"), "");
+            fs
+        }
     }
 
     impl FsProvider for MockFs {
@@ -103,6 +137,7 @@ pub mod mock_fs {
 
         fn create_dir(&self, p: &Path) -> io::Result<()> {
             let mut st = self.state.lock().unwrap();
+            *st.mkdir_calls.entry(p.to_path_buf()).or_default() += 1;
             if st.no_perm_dirs.contains(p) {
                 return Err(io::Error::from_raw_os_error(libc::EACCES));
             }
@@ -113,6 +148,12 @@ pub mod mock_fs {
                 return Err(io::Error::from_raw_os_error(libc::EEXIST));
             }
             st.dirs.insert(p.to_path_buf());
+            if let Some(name) = p.file_name() {
+                if name.to_string_lossy().starts_with("pod_") {
+                    let tasks = p.join("tasks");
+                    st.files.entry(tasks).or_default();
+                }
+            }
             Ok(())
         }
 

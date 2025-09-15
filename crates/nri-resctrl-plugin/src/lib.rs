@@ -736,173 +736,11 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
 mod tests {
     use super::*;
     use protobuf::SpecialFields;
-
-    #[derive(Clone)]
-    struct TestFsState {
-        files: std::collections::HashMap<std::path::PathBuf, String>,
-        dirs: std::collections::HashSet<std::path::PathBuf>,
-        no_perm_files: std::collections::HashSet<std::path::PathBuf>,
-        nospace_dirs: std::collections::HashSet<std::path::PathBuf>,
-        mkdir_calls: std::collections::HashMap<std::path::PathBuf, usize>,
-        missing_pids: std::collections::HashSet<i32>,
-    }
-
-    #[derive(Clone)]
-    struct TestFs {
-        state: std::sync::Arc<std::sync::Mutex<TestFsState>>,
-    }
-
-    impl Default for TestFsState {
-        fn default() -> Self {
-            let mut s = TestFsState {
-                files: Default::default(),
-                dirs: Default::default(),
-                no_perm_files: Default::default(),
-                nospace_dirs: Default::default(),
-                mkdir_calls: Default::default(),
-                missing_pids: Default::default(),
-            };
-            // Provide a default /proc/mounts that indicates resctrl is mounted
-            s.files.insert(
-                std::path::PathBuf::from("/proc/mounts"),
-                "resctrl /sys/fs/resctrl resctrl rw 0 0\n".to_string(),
-            );
-            s
-        }
-    }
-
-    impl Default for TestFs {
-        fn default() -> Self {
-            TestFs {
-                state: std::sync::Arc::new(std::sync::Mutex::new(TestFsState::default())),
-            }
-        }
-    }
-
-    impl TestFs {
-        #[allow(dead_code)]
-        fn add_file(&self, p: &std::path::Path, content: &str) {
-            let mut st = self.state.lock().unwrap();
-            st.files.insert(p.to_path_buf(), content.to_string());
-        }
-        fn add_dir(&self, p: &std::path::Path) {
-            let mut st = self.state.lock().unwrap();
-            st.dirs.insert(p.to_path_buf());
-        }
-        fn set_nospace_dir(&self, p: &std::path::Path) {
-            let mut st = self.state.lock().unwrap();
-            st.nospace_dirs.insert(p.to_path_buf());
-        }
-        fn clear_nospace_dir(&self, p: &std::path::Path) {
-            let mut st = self.state.lock().unwrap();
-            st.nospace_dirs.remove(p);
-        }
-        fn mkdir_count(&self, p: &std::path::Path) -> usize {
-            let st = self.state.lock().unwrap();
-            *st.mkdir_calls.get(p).unwrap_or(&0)
-        }
-        fn set_missing_pid(&self, pid: i32) {
-            let mut st = self.state.lock().unwrap();
-            st.missing_pids.insert(pid);
-        }
-        fn clear_missing_pid(&self, pid: i32) {
-            let mut st = self.state.lock().unwrap();
-            st.missing_pids.remove(&pid);
-        }
-    }
-
-    impl FsProvider for TestFs {
-        fn exists(&self, p: &std::path::Path) -> bool {
-            let st = self.state.lock().unwrap();
-            st.dirs.contains(p) || st.files.contains_key(p)
-        }
-        fn create_dir(&self, p: &std::path::Path) -> std::io::Result<()> {
-            let mut st = self.state.lock().unwrap();
-            *st.mkdir_calls.entry(p.to_path_buf()).or_default() += 1;
-            if st.nospace_dirs.contains(p) {
-                return Err(std::io::Error::from_raw_os_error(libc::ENOSPC));
-            }
-            if st.dirs.contains(p) {
-                return Err(std::io::Error::from_raw_os_error(libc::EEXIST));
-            }
-            st.dirs.insert(p.to_path_buf());
-            // Simulate kernel-provided tasks file for resctrl groups
-            if let Some(name) = p.file_name() {
-                if name.to_string_lossy().starts_with("pod_") {
-                    let tasks = p.join("tasks");
-                    st.files.entry(tasks).or_default();
-                }
-            }
-            Ok(())
-        }
-        fn remove_dir(&self, p: &std::path::Path) -> std::io::Result<()> {
-            let mut st = self.state.lock().unwrap();
-            if !st.dirs.remove(p) {
-                return Err(std::io::Error::from_raw_os_error(libc::ENOENT));
-            }
-            Ok(())
-        }
-        fn write_str(&self, p: &std::path::Path, data: &str) -> std::io::Result<()> {
-            let mut st = self.state.lock().unwrap();
-            if st.no_perm_files.contains(p) {
-                return Err(std::io::Error::from_raw_os_error(libc::EACCES));
-            }
-            // If writing to tasks, simulate ESRCH for configured PIDs
-            if p.file_name() == Some(std::ffi::OsStr::new("tasks")) {
-                for line in data.lines() {
-                    if let Ok(pid) = line.trim().parse::<i32>() {
-                        if st.missing_pids.contains(&pid) {
-                            return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
-                        }
-                    }
-                }
-            }
-            let e = st.files.entry(p.to_path_buf()).or_default();
-            if !e.ends_with('\n') && !e.is_empty() {
-                e.push('\n');
-            }
-            e.push_str(data);
-            e.push('\n');
-            Ok(())
-        }
-        fn read_to_string(&self, p: &std::path::Path) -> std::io::Result<String> {
-            let st = self.state.lock().unwrap();
-            match st.files.get(p) {
-                Some(s) => Ok(s.clone()),
-                None => Err(std::io::Error::from_raw_os_error(libc::ENOENT)),
-            }
-        }
-        fn check_can_open_for_write(&self, p: &std::path::Path) -> std::io::Result<()> {
-            let st = self.state.lock().unwrap();
-            if st.files.contains_key(p) {
-                Ok(())
-            } else {
-                Err(std::io::Error::from_raw_os_error(libc::ENOENT))
-            }
-        }
-        fn read_child_dirs(&self, p: &std::path::Path) -> std::io::Result<Vec<String>> {
-            let st = self.state.lock().unwrap();
-            if !st.dirs.contains(p) {
-                return Err(std::io::Error::from_raw_os_error(libc::ENOENT));
-            }
-            let mut out = Vec::new();
-            for d in st.dirs.iter() {
-                if d.parent() == Some(p) {
-                    if let Some(name) = d.file_name() {
-                        out.push(name.to_string_lossy().into_owned());
-                    }
-                }
-            }
-            Ok(out)
-        }
-        fn mount_resctrl(&self, _target: &std::path::Path) -> std::io::Result<()> {
-            Err(std::io::Error::from_raw_os_error(libc::ENOSYS))
-        }
-    }
+    use resctrl::test_utils::mock_fs::MockFs;
 
     #[tokio::test]
     async fn test_cleanup_on_start_removes_only_prefix() {
-        let fs = TestFs::default();
+        let fs = MockFs::with_premounted_resctrl();
         // Ensure resctrl directories exist and contain entries
         let root = std::path::PathBuf::from("/sys/fs/resctrl");
         fs.add_dir(std::path::Path::new("/sys"));
@@ -990,7 +828,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     async fn test_reconcile_emits_counts() {
         // This test requires Linux-specific functionality
-        let fs = TestFs::default();
+        let fs = MockFs::new();
         // Ensure resctrl root exists
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
@@ -1104,7 +942,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_pod_sandbox_creates_group_and_emits_event() {
-        let fs = TestFs::default();
+        let fs = MockFs::new();
         // Ensure resctrl root exists
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
@@ -1196,7 +1034,7 @@ mod tests {
         use crate::pid_source::test_support::MockCgroupPidSource;
         use tokio::time::{timeout, Duration};
 
-        let fs = TestFs::default();
+        let fs = MockFs::new();
         // Ensure resctrl root exists
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
@@ -1327,7 +1165,7 @@ mod tests {
         use crate::pid_source::test_support::MockCgroupPidSource;
         use tokio::time::{timeout, Duration};
 
-        let fs = TestFs::default();
+        let fs = MockFs::new();
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
@@ -1451,7 +1289,7 @@ mod tests {
         use crate::pid_source::test_support::MockCgroupPidSource;
         use tokio::time::{timeout, Duration};
 
-        let fs = TestFs::default();
+        let fs = MockFs::new();
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));

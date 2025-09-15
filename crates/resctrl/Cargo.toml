@@ -11,3 +11,7 @@ libc = { workspace = true }
 tempfile = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+
+[features]
+# Exposes test utilities (MockFs) for downstream tests.
+test-utils = []
