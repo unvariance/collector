@@ -41,8 +41,8 @@ jobs:
           images-folder-parent: "/tmp/images"
           cpu: 2
           mem: 2G
-          # Use qemu64 CPU model with PMU enabled
-          cpu-kind: 'qemu64,pmu=on'
+          # Try QEMU's "max" CPU model with PMU enabled
+          cpu-kind: 'max,pmu=on'
           lvh-version: "v0.0.23"
           install-dependencies: 'true'
           verbose: 'true'
