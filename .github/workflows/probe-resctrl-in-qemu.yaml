@@ -41,8 +41,8 @@ jobs:
           images-folder-parent: "/tmp/images"
           cpu: 2
           mem: 2G
-          # Enable passthrough PMU support for the guest
-          cpu-kind: 'host,pmu=on'
+          # Use qemu64 CPU model with PMU enabled
+          cpu-kind: 'qemu64,pmu=on'
           lvh-version: "v0.0.23"
           install-dependencies: 'true'
           verbose: 'true'
