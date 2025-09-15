@@ -22,8 +22,8 @@ What `nri-resctrl-plugin`’s TestFs has that resctrl’s MockFs lacks
 Notes on behavior differences to keep in mind
 
 - `check_can_open_for_write` semantics:
-  - RealFs requires the file to exist. `TestFs` returns Ok only if the file exists (closer to RealFs). resctrl’s MockFs currently returns Ok if either the file exists OR the parent directory exists; this can over-report writability.
->> actually it seems that resctrl's MockFs is more realistic. But not sure it matters -- are there any tests affected by this?
+  - RealFs requires the file to exist. `TestFs` returns Ok only if the file exists (matches RealFs). resctrl’s MockFs currently returns Ok if either the file exists OR the parent directory exists; this is more lenient than RealFs and can over-report writability.
+  - Test impact: none observed in either crate when moving to strict RealFs semantics, because tests that assert writability create the `tasks` file explicitly, and permission tests rely on `set_no_perm_file`. To minimize churn, we’ll keep resctrl’s existing (lenient) behavior by default and, if needed, add an opt-in strict mode later.
 - Mount simulation:
   - resctrl’s MockFs implements `mount_resctrl()` and can append to `/proc/mounts` and create a mountpoint `tasks` file. `TestFs` returns `ENOSYS` for `mount_resctrl()` and relies on a premounted default.
 - Permission/race simulation richness:
@@ -40,29 +40,30 @@ API and behavior additions to MockFs
   - API: `fn mkdir_count(&self, p: &Path) -> usize`.
 - Add clear helpers for toggles
   - API: `fn clear_nospace_dir(&self, p: &Path)`; `fn clear_missing_pid(&self, pid: i32)`.
-- Optional auto-creation of `tasks` for new group dirs
-  - Add a configurable option on MockFs (off by default to preserve existing resctrl tests) to auto-create `tasks` when `create_dir` is called for a directory that matches a provided group prefix.
->> This seems like enabling always would have a positive effect on resctrl tests too? Which tests would be affected? List them here and we'll fix them.
+- Auto-creation of `tasks` for new group dirs
+  - Enable by default to mirror kernel behavior and simplify tests. When `create_dir` is called on a directory whose leaf name starts with the configured group prefix, also create an empty `tasks` file beneath it.
+  - Tests affected: none expected.
+    - resctrl tests generally seed directories via `add_dir(...)` (bypassing `create_dir`) and explicitly add `tasks` when needed. The one test depending on a missing `tasks` file (`test_assign_tasks_enoent_group_missing`) creates the group via `add_dir` and remains unaffected.
+    - plugin tests benefit from this default (they relied on it in their local `TestFs`).
   - API: `fn set_group_tasks_autocreate(&self, enabled: bool, group_prefix: impl Into<String>)`.
-  - Behavior: when enabled and `create_dir(/path/to/<prefix>...)` succeeds, insert an empty `/path/to/<prefix...>/tasks` file.
 - Optional premounted convenience builder
->> Again, can we enable this always? Which tests would be affected?
+  - Do not enable by default. Pre-seeding `/proc/mounts` globally would break tests that expect it to be missing by default (e.g., `crates/resctrl/src/lib.rs::tests::test_detect_support_proc_mounts_missing`).
   - Provide a constructor that seeds `/proc/mounts` and the resctrl root directory (no behavior change to Default):
     - `fn with_premounted_resctrl() -> Self` (or `fn new_premounted_at(root: &Path)`), which writes a `resctrl <root> resctrl` line to `/proc/mounts`, ensures `<root>` exists, and creates `<root>/tasks`.
 - Align `check_can_open_for_write` with RealFs when possible
->> Let's keep the resctrl implementation. Which nri-resctrl-plugin tests would be affected by this change?
-  - Consider changing to return Ok only if the file exists and is not marked no-perm, to better emulate `OpenOptions::open()` behavior. If any existing resctrl tests rely on the more lenient behavior, we can gate the strictness under an opt-in flag (defaulting to strict).
+  - Decision: keep resctrl’s current (lenient) behavior by default for back-compat; optionally add a strict mode later for targeted tests.
+  - Plugin tests impact: none. The plugin unit tests do not call `detect_support()`, and no plugin tests rely on `check_can_open_for_write` semantics.
 
 Migration plan
 
 1) Extend resctrl’s MockFs with the APIs above (behind test-only code as it is today).
 2) In `nri-resctrl-plugin` tests, replace the local `TestFs` with `resctrl::test_utils::mock_fs::MockFs`.
    - Use `with_premounted_resctrl()` or manually seed `/proc/mounts` to retain the premounted behavior where needed.
-   - Enable `set_group_tasks_autocreate(true, "pod_")` so group creation produces a `tasks` file automatically, preserving test simplicity.
+   - Group creation now auto-creates a `tasks` file for `pod_`-prefixed groups by default; override the prefix via `set_group_tasks_autocreate(true, <prefix>)` for tests that use a different one.
    - Where tests assert mkdir attempts, call `mkdir_count(&group_path)`.
    - Where tests previously cleared toggles, call the new `clear_*` helpers.
 3) Remove the `TestFs` from `crates/nri-resctrl-plugin/src/lib.rs` test module.
-4) Run the full test suite for both crates and adjust any tests that made implicit assumptions differing from the unified behavior (e.g., `check_can_open_for_write` strictness). If needed, temporarily enable the lenient mode via a MockFs option and then follow up with a targeted fix to the affected tests.
+4) Run the full test suite for both crates and adjust any tests that made implicit assumptions differing from the unified behavior (e.g., `check_can_open_for_write` strictness).
 
 Acceptance criteria
 
@@ -70,6 +71,7 @@ Acceptance criteria
 - All plugin tests compile and pass using `resctrl::test_utils::mock_fs::MockFs` with the added APIs.
 - The unified MockFs remains test-only and does not leak into production code paths.
 - Behavior parity is preserved (e.g., mkdir call count checks continue to work; `tasks` file is present for groups in tests that expect it; premounted convenience remains available for tests that used it implicitly).
+- Default behavior mirrors kernel realities more closely (auto-created `tasks` on group `create_dir`).
 
 Out of scope (can be follow-ups)
 
@@ -80,4 +82,3 @@ References
 
 - Canonical target: `crates/resctrl/src/test_utils.rs`
 - Duplicate to replace: `crates/nri-resctrl-plugin/src/lib.rs` (test module `TestFs`)
-
