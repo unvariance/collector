@@ -2,17 +2,29 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
+fn init_test_logger() {
+    let _ = env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("info"),
+    )
+    .is_test(true)
+    .try_init();
+}
+
 use nri::NRI;
 use nri_resctrl_plugin::{PodResctrlEvent, ResctrlPlugin, ResctrlPluginConfig};
 
 #[tokio::test]
 #[ignore]
 async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
+    init_test_logger();
+
     // Use NRI socket path provided by the workflow via env.
     let socket_path = std::env::var("NRI_SOCKET_PATH")?;
+    println!("[integration_test] Using NRI socket at: {}", socket_path);
 
     // Connect to NRI runtime socket
-    let socket = tokio::net::UnixStream::connect(socket_path).await?;
+    let socket = tokio::net::UnixStream::connect(&socket_path).await?;
+    println!("[integration_test] Connected to NRI socket");
 
     // Build plugin with an externally provided channel
     let (tx, mut _rx) = mpsc::channel::<PodResctrlEvent>(64);
@@ -20,7 +32,9 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
 
     // Start NRI server for plugin and register
     let (nri, join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
+    println!("[integration_test] Created NRI instance; registering plugin");
     nri.register().await?;
+    println!("[integration_test] Plugin registered successfully");
 
     // Allow runtime to settle briefly
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -28,6 +42,7 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
     // Shut down cleanly
     nri.close().await?;
     join_handle.await??;
+    println!("[integration_test] Plugin shutdown completed");
 
     Ok(())
 }
@@ -35,6 +50,7 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
 #[tokio::test]
 #[cfg(target_os = "linux")]
 async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
+    init_test_logger();
     // Guard: explicit opt-in for E2E and only on Linux systems with permissions.
     if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
         eprintln!("RESCTRL_E2E not set; skipping E2E cleanup test");

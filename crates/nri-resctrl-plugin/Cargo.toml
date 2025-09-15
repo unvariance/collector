@@ -22,3 +22,4 @@ cgroups-rs = "0.3"
 uuid = { workspace = true }
 tempfile = { workspace = true }
 libc = { workspace = true }
+env_logger = { workspace = true }
