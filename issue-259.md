@@ -1,23 +1,29 @@
 # Sub-Issue 07: Integration tests and CI wiring
 
 ## Summary
-Add end-to-end tests that validate resctrl plugin behavior for Add/Remove events, pod group state and per-pod reconciliation counts, startup cleanup, and retries. Align tests with the implemented event model and APIs introduced while working on Issue #252 and its sub-issues:
+Add end-to-end tests that validate resctrl plugin behavior for Add/Remove events, pod group state and per-pod reconciliation counts, startup cleanup, and retries. Cover both regular containers and containers added to a running Pod via `kubectl debug` (ephemeral containers). Align tests with the implemented event model and APIs introduced while working on Issue #252 and its sub-issues:
 - Events: `PodResctrlEvent::{AddOrUpdate(PodResctrlAddOrUpdate), Removed(PodResctrlRemoved)}`
 - Pod group state: `ResctrlGroupState::{Exists(String), Failed}`
 - Per-pod counters: `{ total_containers, reconciled_containers }`
 
 Default integration tests run with a mocked resctrl filesystem provider and a test PID source for determinism. Hardware E2E runs on EC2 use the real resctrl filesystem and real PID enumeration.
+Additionally, validate that a Pod initially synchronized with a subset of its containers (e.g., due to concurrent creation) is fully reconciled when late containers appear (including those added via `kubectl debug`).
 
 ## Scope
 - Add an integration test crate (or module) covering:
   - Startup with preexisting pods/containers: plugin emits `AddOrUpdate` with `group_state = Exists(_) | Failed` and correct `{total,reconciled}` counts after reconcile.
   - Container add/update: event dedup; counts only change when a container transitions to `Reconciled`.
+  - Post-start add container to a running Pod: include adding via `kubectl debug` (ephemeral container) and verify coverage by the plugin; counts and assignments update accordingly.
+  - Post-start add Pod: exercise `RUN_POD_SANDBOX` followed by `CREATE_CONTAINER`; verify correct group creation, task assignment, and event emission.
+  - Pod removal: remove a Pod that existed before plugin registration and one created after; verify `Removed` events and that resctrl cleanup occurs correctly.
   - ENOSPC on first attempt → `AddOrUpdate` with `group_state = Failed` → `retry_group_creation` transitions to `Exists(path)`; follow-up container reconciliation improves counts.
   - `cleanup_on_start` removes only prefixed groups at resctrl root and root-level `mon_groups` (no traversal into control-group-local `mon_groups`). No pod events emitted for cleanup.
 - Hardware E2E tests on EC2 (real resctrl):
   1) Preexisting containers assigned: Start plugin with running container(s). Verify it creates the pod group and assigns existing container tasks; observe `AddOrUpdate` and verify `/sys/fs/resctrl/<prefix>.../tasks` contains the expected PIDs.
-  2) Post-start add container: After plugin start, create a new container in the pod; verify reconciliation adds tasks and counts improve if needed.
-  3) RMID exhaustion and caller-driven retry: Pre-fill resctrl capacity using a distinct prefix (so startup cleanup doesn’t remove them); verify group creation fails (`group_state = Failed`). Then free one resource and call `retry_group_creation` or `retry_all_once`; expect transition to `Exists(path)` and tasks assigned.
+  2) Post-start add container: After plugin start, add a new container in the pod. Use both a regular container launch and `kubectl debug` to add an ephemeral container; verify reconciliation adds tasks and counts improve if needed.
+  3) Post-start add Pod: create a new Pod after plugin start (triggering `RUN_POD_SANDBOX` and `CREATE_CONTAINER`); verify group creation and assignments.
+  4) Pod removal: remove a preexisting Pod and a newly created Pod; verify `Removed` events and that resctrl groups are deleted or left consistent per policy.
+  5) RMID exhaustion and caller-driven retry: Pre-fill resctrl capacity using a distinct prefix (so startup cleanup doesn’t remove them); verify group creation fails (`group_state = Failed`). Then free one resource and call `retry_group_creation` or `retry_all_once`; expect transition to `Exists(path)` and tasks assigned.
 - Wire tests into CI:
   - Default job (GitHub runners or generic VMs): run all scenarios using mocked resctrl FS and a test PID source for determinism.
   - Optional hardware job (EC2 with resctrl): run the same scenarios with the real resctrl FS provider (no mocks) and real PID enumeration to validate kernel behavior end‑to‑end.
@@ -28,6 +34,10 @@ Default integration tests run with a mocked resctrl filesystem provider and a te
   - Mocked run: `Resctrl<TestFs>` (or equivalent mock) simulates create/assign/list/delete and can inject `ENOSPC`.
   - Hardware run (optional): `Resctrl<RealFs>` uses the actual filesystem under `/sys/fs/resctrl`.
 - Each scenario body is implemented once and executed under both providers, gated by platform/features as needed.
+
+- Exercising late-container reconciliation
+  - Ensure scenarios cover pods initially synchronized with a subset of their containers (e.g., race between `synchronize()` and container creation).
+  - Add a container to a running pod via `kubectl debug` (ephemeral container) and verify the plugin observes it and fully reconciles the pod: group creation (if needed), PID assignment, and counters update.
 
 ## Out of Scope
 - Background/periodic retries; cadence is caller-driven via `retry_*` APIs.
@@ -46,7 +56,8 @@ Default integration tests run with a mocked resctrl filesystem provider and a te
 - Hardware path:
   - Ensure containerd+NRI are installed on EC2. Deploy the `nri-resctrl-plugin` binary with `cleanup_on_start=true` and a unique `group_prefix`.
   - Preexisting test: launch a pod/container before plugin start, then start plugin and observe `AddOrUpdate` and group assignment by inspecting `/sys/fs/resctrl/<prefix>.../tasks`.
-  - Post-start add test: create a new container; verify assignment and improved counts.
+  - Post-start add container: create a new container; verify assignment and improved counts. Also add an ephemeral container via `kubectl debug` to a running pod and verify coverage and reconciliation.
+  - Post-start add Pod: create a new Pod after plugin start and verify group creation and task assignment (expect `RUN_POD_SANDBOX` then `CREATE_CONTAINER`).
   - Exhaustion test: pre-create many monitoring groups with a separate prefix until ENOSPC; verify `group_state = Failed`. Then delete one helper group and call `retry_group_creation` or `retry_all_once`; verify transition to `Exists(path)` and task assignment.
   - Keep prefixes distinct so startup cleanup doesn’t remove the exhaustion helpers.
   - Emit structured logs/metrics for precise assertions.
@@ -66,11 +77,14 @@ Default integration tests run with a mocked resctrl filesystem provider and a te
   - Validate event model: `PodResctrlEvent::{AddOrUpdate, Removed}` with `ResctrlGroupState` and per-pod counts.
   - Validate retry APIs: `retry_group_creation`, `retry_container_reconcile`, `retry_all_once`.
   - Validate startup cleanup semantics once Sub-Issue 06 lands: prefix-only deletion at root and root `mon_groups`; no pod events.
+  - Validate late-container reconciliation: if `synchronize()` initially sees a subset of pod containers, verify follow-up events (including from `kubectl debug`) lead to full reconciliation.
 
 - Integration tests (mocked provider, deterministic PID source)
   - Add tests under `crates/nri-resctrl-plugin/tests/` or extend the existing `#[cfg(test)]` module to cover:
     - Initial synchronize with preexisting pods/containers: expect `AddOrUpdate` with `Exists(path)` and accurate counts; handle failure path with `Failed` when ENOSPC is injected for `create_dir`.
-    - Container add/update: create pod, then container; simulate PIDs that converge; expect counts `{total=1,reconciled=1}`. Change PID source to simulate non-convergence and verify event dedup (no extra events unless counts change).
+    - Container add/update: create pod, then container; simulate PIDs that converge; expect counts `{total=1,reconciled=1}`. Change PID source to simulate non-convergence and verify event dedup (no extra events unless counts change). Include adding a container to a running pod via `kubectl debug` and verify plugin coverage.
+    - Pod add post-start: create a Pod after plugin start (simulate `RUN_POD_SANDBOX` + `CREATE_CONTAINER`) and verify group creation, PID assignment, and events.
+    - Pod removal: remove a preexisting Pod (present before plugin registration) and a post-registration Pod; expect `Removed` events and resctrl cleanup for both.
     - Capacity and retries: inject ENOSPC for `create_group` → `AddOrUpdate` with `Failed`; call `retry_group_creation` while ENOSPC persists → expect `Error::Capacity` and no event; clear ENOSPC → call `retry_group_creation` again → expect transition to `Exists(path)` and updated event; then call `retry_container_reconcile` to improve counts and emit exactly one updated `AddOrUpdate`.
     - `retry_all_once`: prepare multiple pods, one `Failed` (capacity) and one with `Exists(path)` + one `Partial` container; verify early-stop on capacity (instrument mock FS to count `create_dir` calls) and improved counts for the other pod.
 
@@ -81,7 +95,7 @@ Default integration tests run with a mocked resctrl filesystem provider and a te
 
 - Hardware E2E (optional job)
   - Provision resctrl-capable EC2 (e.g., m7i.metal-24xl). Install containerd + NRI and deploy the plugin binary.
-  - Run scenarios mirroring mocked tests: preexisting assignment, post-start add, and capacity + retry (using a separate helper prefix for pre-filling to avoid startup cleanup).
+  - Run scenarios mirroring mocked tests: preexisting assignment, post-start add container (including `kubectl debug`), post-start add Pod, pod removal (preexisting and post-registration), and capacity + retry (using a separate helper prefix for pre-filling to avoid startup cleanup).
   - Gate on label or branch; skip gracefully on unsupported kernels/instances.
 
 - CI wiring
