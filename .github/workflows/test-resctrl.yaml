@@ -198,6 +198,7 @@ jobs:
       - name: Run plugin integration test (register + shutdown)
         env:
           NRI_SOCKET_PATH: /tmp/nri/nri.sock
+          RUST_LOG: info
         run: |
           echo "Using test binary: $TEST_BINARY_PATH"
           sudo -E "$TEST_BINARY_PATH" --ignored --nocapture
