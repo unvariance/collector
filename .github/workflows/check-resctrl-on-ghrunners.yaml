@@ -83,9 +83,14 @@ jobs:
           set -euxo pipefail
           LOG=probe.log
           exec > >(tee -a "$LOG") 2>&1
-          echo "== perf sysctls =="
+          echo "== perf sysctls (before) =="
           sysctl kernel.perf_event_paranoid || true
           sysctl kernel.kptr_restrict || true
+
+          echo "== attempting to set kernel.perf_event_paranoid=-1 (sudo) =="
+          sudo sysctl -w kernel.perf_event_paranoid=-1 || true
+          echo "== perf sysctls (after) =="
+          sysctl kernel.perf_event_paranoid || true
 
           echo "== PMU event sources =="
           for d in /sys/bus/event_source/devices/*; do
@@ -112,4 +117,3 @@ jobs:
           name: resctrl-perf-probe
           path: probe.log
           if-no-files-found: warn
-
