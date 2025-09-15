@@ -53,12 +53,12 @@ jobs:
         run: |
           source $HOME/.cargo/env
           # RESCTRL_E2E not set, so smoke test is skipped
-          cargo test -p resctrl --release -- --nocapture
+          RUST_TEST_THREADS=1 cargo test -p resctrl --release -- --nocapture --test-threads=1
 
       - name: Run unit tests (nri-resctrl-plugin)
         run: |
           source $HOME/.cargo/env
-          cargo test -p nri-resctrl-plugin --release -- --nocapture
+          RUST_TEST_THREADS=1 cargo test -p nri-resctrl-plugin --release -- --nocapture --test-threads=1
 
       - name: Build test binaries (no-run)
         run: |
@@ -201,7 +201,7 @@ jobs:
           RUST_LOG: info
         run: |
           echo "Using test binary: $TEST_BINARY_PATH"
-          sudo -E "$TEST_BINARY_PATH" --ignored --nocapture
+          sudo -E "$TEST_BINARY_PATH" --ignored --nocapture --test-threads=1
 
       - name: Cleanup KIND
         if: always()
@@ -255,7 +255,7 @@ jobs:
           BIN=./resctrl-smoke
           chmod +x "$BIN" || true
           echo "Executing $BIN"
-          RESCTRL_E2E=1 "$BIN" --nocapture
+          RESCTRL_E2E=1 "$BIN" --nocapture --test-threads=1
 
   nri-resctrl-plugin-e2e:
     name: Run nri-resctrl-plugin E2E
@@ -276,12 +276,16 @@ jobs:
 
       - name: Run nri-resctrl-plugin E2E (hardware resctrl)
         shell: bash
+        env:
+          NRI_SOCKET_PATH: /var/run/nri/nri.sock
+          RUST_TEST_THREADS: 1
+          RUST_LOG: info
         run: |
           set -euxo pipefail
           P_BIN=./nri-resctrl-plugin-e2e
           chmod +x "$P_BIN" || true
           echo "Executing $P_BIN"
-          RESCTRL_E2E=1 "$P_BIN" --include-ignored --nocapture
+          RESCTRL_E2E=1 "$P_BIN" --include-ignored --nocapture --test-threads=1
 
   stop-runner:
     name: Stop EC2 runner
