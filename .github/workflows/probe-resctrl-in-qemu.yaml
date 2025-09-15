@@ -28,9 +28,11 @@ jobs:
           - runner: ubuntu-latest
             image: complexity-test
             cpu_kind: 'max,pmu=on'
+            install_deps: 'true'
           - runner: ubuntu-24.04-arm
             image: complexity-test-aarch64
             cpu_kind: 'max,pmu=on'
+            install_deps: 'false'
     permissions:
       contents: read
     steps:
@@ -55,7 +57,7 @@ jobs:
           # CPU model from matrix (x86 or aarch64)
           cpu-kind: ${{ matrix.cpu_kind }}
           lvh-version: "v0.0.23"
-          install-dependencies: 'true'
+          install-dependencies: ${{ matrix.install_deps }}
           verbose: 'true'
           cmd: |
             set -euxo pipefail
