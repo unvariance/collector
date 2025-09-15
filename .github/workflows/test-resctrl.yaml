@@ -49,7 +49,7 @@ jobs:
           rustc -V
           cargo -V
 
-      - name: Run unit tests (no hardware)
+      - name: Run unit tests (resctrl)
         run: |
           source $HOME/.cargo/env
           # RESCTRL_E2E not set, so smoke test is skipped
@@ -58,7 +58,7 @@ jobs:
       - name: Run unit tests (nri-resctrl-plugin)
         run: |
           source $HOME/.cargo/env
-          cargo test -p nri-resctrl-plugin -- --nocapture
+          cargo test -p nri-resctrl-plugin --release -- --nocapture
 
       - name: Build test binaries (no-run)
         run: |
