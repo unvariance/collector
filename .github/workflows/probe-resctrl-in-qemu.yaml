@@ -36,7 +36,7 @@ jobs:
         with:
           test-name: qemu-probe
           image: 'complexity-test'
-          image-version: ${{ inputs.kernel-version || '6.6-20250507.063028' }}
+          image-version: ${{ github.event.inputs.kernel-version || '6.6-20250507.063028' }}
           host-mount: ./
           images-folder-parent: "/tmp/images"
           cpu: 2
@@ -57,8 +57,7 @@ jobs:
             lscpu || true
             grep -m1 -i '^flags' /proc/cpuinfo || true
             cat /proc/cmdline || true
-
-          echo "== Kernel config: resctrl related =="
+            echo "== Kernel config: resctrl related =="
             if [ -r /proc/config.gz ]; then
               if command -v rg >/dev/null 2>&1; then zcat /proc/config.gz | rg -i 'RESCTRL|RDT' || true; else zcat /proc/config.gz | grep -Ei 'RESCTRL|RDT' || true; fi
             elif [ -r "/boot/config-$(uname -r)" ]; then
