@@ -55,7 +55,7 @@ Wire tests into CI (`test-resctrl.yaml`):
 - Mocked path:
   - see existing tests.
 - Hardware path:
-  - Test with KIND on EC2 on a resctrl-capable machine. See test-nri-integration.yaml for setting up KIND with NRI with access to the Kubernetes API and the NRI socket from the host machine (so the integration test doesn't have to run inside docker).
+  - Test with KIND on EC2 on a resctrl-capable machine. We already have a job with KIND that sets up NRI in test-resctrl.yaml.
   - See the NRI integration test for reference: crates/nri-resctrl-plugin/tests/integration_test.rs . It interacts with the Kubernetes API to create and delete pods. Refactor common code into helper functions as needed so we don't reinvent the wheel -- the scenarios are relatively similar.
   - Preexisting test: launch a pod/container before plugin start, then start plugin and observe `AddOrUpdate` and group assignment by inspecting `/sys/fs/resctrl/<prefix>.../tasks`.
   - Post-start add container: add an ephemeral container via `kubectl debug` to a running pod; verify messages with improved counts and PID/task assignment.
@@ -97,7 +97,7 @@ Wire tests into CI (`test-resctrl.yaml`):
     - `test_retry_all_once_early_stop_on_capacity_and_reconcile_others` — already exists. Keep.
     - NEW: removal of a preexisting Pod (present before registration) — add test to expect `Removed` and cleanup.
   - E2E tests:
-    - `crates/nri-resctrl-plugin/tests/integration_test.rs::test_resctrl_plugin_registers_with_nri` — exists; registration path. Keep. Need to enable this in CI under the KIND setup. Rename to "test_plugin_full_flow" and expand to cover:
+    - `crates/nri-resctrl-plugin/tests/integration_test.rs::test_resctrl_plugin_registers_with_nri` — exists; registration path. Keep. Need to enable this in CI under the KIND setup. Rename to `test_plugin_full_flow` and expand to cover:
       - Preexisting assignment: create pod/container before plugin start; verify `AddOrUpdate` and tasks assigned.
       - Post-start add container: add ephemeral container via `kubectl debug` and verify improved counts and tasks assigned.
       - Post-start add Pod: create a new Pod after plugin start and verify group creation, tasks assigned, and event.
@@ -108,8 +108,9 @@ Wire tests into CI (`test-resctrl.yaml`):
 
 - CI wiring
   - Use existing `.github/workflows/test-resctrl.yaml`:
-    - Build + unit tests job runs plugin mocked tests and builds binaries.
-    - KIND job validates plugin registration against an NRI-enabled containerd.
+    - Keep the resctrl tests.
+    - Keep separate build + unit tests job runs plugin mocked tests and builds binaries.
+    - Change KIND job to run on the resctrl-capable EC2 instance, and run the integration tests there (including `test_plugin_full_flow` and the cleanup e2e).
     - Hardware jobs execute resctrl smoke and plugin E2E on EC2; opt-in via `RESCTRL_E2E=1`.
 
 - Documentation
