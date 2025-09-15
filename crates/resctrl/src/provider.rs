@@ -9,6 +9,8 @@ pub trait FsProvider: Clone + Send + Sync + 'static {
     fn write_str(&self, p: &Path, data: &str) -> io::Result<()>;
     fn read_to_string(&self, p: &Path) -> io::Result<String>;
     fn check_can_open_for_write(&self, p: &Path) -> io::Result<()>;
+    /// Return the names of immediate sub-directories under the given path.
+    fn read_child_dirs(&self, p: &Path) -> io::Result<Vec<String>>;
     fn mount_resctrl(&self, target: &Path) -> io::Result<()>;
 }
 
@@ -41,6 +43,22 @@ impl FsProvider for RealFs {
     fn check_can_open_for_write(&self, p: &Path) -> io::Result<()> {
         let _ = OpenOptions::new().write(true).open(p)?;
         Ok(())
+    }
+
+    fn read_child_dirs(&self, p: &Path) -> io::Result<Vec<String>> {
+        let mut out = Vec::new();
+        for entry in fs::read_dir(p)? {
+            let de = entry?;
+            let ft = de.file_type()?;
+            if ft.is_dir() {
+                let name = de
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned();
+                out.push(name);
+            }
+        }
+        Ok(out)
     }
 
     fn mount_resctrl(&self, target: &Path) -> io::Result<()> {
