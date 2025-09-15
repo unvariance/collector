@@ -364,23 +364,27 @@ impl<P: FsProvider> Resctrl<P> {
     /// deletion errors are counted in the returned report and the sweep continues.
     pub fn cleanup_all(&self) -> Result<CleanupReport> {
         let root = &self.cfg.root;
-        let mg = root.join("mon_groups");
+        let mon_groups_dir = root.join("mon_groups");
 
         let mut report = CleanupReport::default();
 
-        // Sweep root-level groups
-        let root_children = self
+        // Sweep root-level groups, excluding known non-group directories.
+        let root_children_all = self
             .fs
             .read_child_dirs(root)
             .map_err(|e| map_basic_fs_error(root, &e))?;
+        let root_children: Vec<String> = root_children_all
+            .into_iter()
+            .filter(|n| n != "info" && n != "mon_data" && n != "mon_groups")
+            .collect();
         report = self.cleanup_in_dir(root, &root_children, report)?;
 
         // Sweep root-level mon_groups
-        let mg_children = self
+        let mon_groups_dir_children = self
             .fs
-            .read_child_dirs(&mg)
-            .map_err(|e| map_basic_fs_error(&mg, &e))?;
-        report = self.cleanup_in_dir(&mg, &mg_children, report)?;
+            .read_child_dirs(&mon_groups_dir)
+            .map_err(|e| map_basic_fs_error(&mon_groups_dir, &e))?;
+        report = self.cleanup_in_dir(&mon_groups_dir, &mon_groups_dir_children, report)?;
 
         Ok(report)
     }
@@ -400,10 +404,6 @@ impl<P: FsProvider> Resctrl<P> {
                         if let Some(code) = e.raw_os_error() {
                             if code == libc::ENOENT {
                                 report.removal_race += 1;
-                                continue;
-                            }
-                            if code == libc::EACCES || code == libc::EPERM {
-                                report.removal_failures += 1;
                                 continue;
                             }
                         }
@@ -1202,6 +1202,8 @@ mod tests {
         fs.add_dir(&root.join("pod_u1"));
         fs.add_dir(&root.join("pod_u2"));
         fs.add_dir(&root.join("info"));
+        // include a non-prefix custom directory under root
+        fs.add_dir(&root.join("custom_root"));
         fs.add_dir(&root.join("mon_groups"));
         // mon_groups children
         fs.add_dir(&root.join("mon_groups").join("pod_u1"));
@@ -1220,8 +1222,8 @@ mod tests {
         assert_eq!(rep.removed, 4);
         assert_eq!(rep.removal_failures, 0);
         assert_eq!(rep.removal_race, 0);
-        // info + mon_groups under root, and custom under mon_groups
-        assert_eq!(rep.non_prefix_groups, 3);
+        // non-prefix: custom_root under root, and custom under mon_groups
+        assert_eq!(rep.non_prefix_groups, 2);
 
         // Verify removals on fs
         assert!(!fs.dir_exists(&root.join("pod_u1")));
@@ -1233,6 +1235,7 @@ mod tests {
         assert!(fs.dir_exists(&root.join("info")));
         assert!(fs.dir_exists(&root.join("mon_groups")));
         assert!(fs.dir_exists(&root.join("mon_groups").join("custom")));
+        assert!(fs.dir_exists(&root.join("custom_root")));
     }
 
     #[test]
@@ -1251,17 +1254,20 @@ mod tests {
         fs.add_dir(&root.join("mon_groups"));
 
         // We'll simulate listing that includes one existing, one missing (race),
-        // and one no-permission path for removal.
-        fs.add_dir(&root.join("pod_keep")); // non-prefix
+        // and one no-permission path for removal; plus a non-prefix keep entry.
+        fs.add_dir(&root.join("x_keep")); // non-prefix
         fs.add_dir(&root.join("pod_fail"));
         fs.set_no_perm_remove_dir(&root.join("pod_fail"));
+        // Also add a root entry that will successfully be removed
+        fs.add_dir(&root.join("pod_r_ok"));
         // Race: include pod_race in listing override but do not create it
         fs.set_child_dirs_override(
             &root,
             vec![
                 "pod_fail".into(),
                 "pod_race".into(),
-                "x_other".into(), // non-prefix
+                "x_keep".into(), // non-prefix
+                "pod_r_ok".into(),
             ],
         );
 
@@ -1277,15 +1283,19 @@ mod tests {
         );
 
         let rep = rc.cleanup_all().expect("cleanup ok");
-        // Removed: mon_groups/pod_m1
-        assert_eq!(rep.removed, 1);
+        // Removed: mon_groups/pod_m1 and root/pod_r_ok
+        assert_eq!(rep.removed, 2);
         // Failures: pod_fail remove permission denied
         assert_eq!(rep.removal_failures, 1);
         // Race: pod_race ENOENT
         assert_eq!(rep.removal_race, 1);
-        // Non-prefix: x_other, plus mon_groups directory under root if override didn't include it
-        // Since we overrode root listing, only x_other is counted there, and none under mon_groups
+        // Non-prefix: x_keep (root). Root special dirs filtered; none under mon_groups listing.
         assert_eq!(rep.non_prefix_groups, 1);
+
+        // Verify removals and non-removals on fs
+        assert!(fs.dir_exists(&root.join("x_keep")), "x_keep should remain");
+        assert!(!fs.dir_exists(&root.join("pod_r_ok")), "pod_r_ok should be removed");
+        assert!(!fs.dir_exists(&root.join("mon_groups").join("pod_m1")), "pod_m1 should be removed");
     }
 
     #[test]

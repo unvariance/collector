@@ -562,23 +562,28 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         _ctx: &TtrpcContext,
         req: SynchronizeRequest,
     ) -> ttrpc::Result<SynchronizeResponse> {
-        // Startup cleanup: ensure mounted (according to resctrl config) and remove stale groups.
-        if self.cfg.cleanup_on_start {
-            match self.resctrl.ensure_mounted(self.cfg.auto_mount) {
-                Ok(()) => match self.resctrl.cleanup_all() {
-                    Ok(rep) => {
-                        info!(
-                            "resctrl-plugin: startup cleanup report: removed={}, failures={}, race={}, non_prefix={}",
-                            rep.removed, rep.removal_failures, rep.removal_race, rep.non_prefix_groups
-                        );
-                    }
-                    Err(e) => {
-                        // Log and continue; do not emit events for cleanup-only actions
-                        warn!("resctrl-plugin: cleanup_all failed: {}", e);
-                    }
-                },
+        // Ensure resctrl is mounted according to config on every startup synchronize.
+        // If mounting fails, log and continue; subsequent operations may be no-ops.
+        let mounted_ok = match self.resctrl.ensure_mounted(self.cfg.auto_mount) {
+            Ok(()) => true,
+            Err(e) => {
+                warn!("resctrl-plugin: ensure_mounted failed: {}", e);
+                false
+            }
+        };
+
+        // Startup cleanup: if enabled and mounted, remove stale groups.
+        if self.cfg.cleanup_on_start && mounted_ok {
+            match self.resctrl.cleanup_all() {
+                Ok(rep) => {
+                    info!(
+                        "resctrl-plugin: startup cleanup report: removed={}, failures={}, race={}, non_prefix={}",
+                        rep.removed, rep.removal_failures, rep.removal_race, rep.non_prefix_groups
+                    );
+                }
                 Err(e) => {
-                    warn!("resctrl-plugin: ensure_mounted failed: {}", e);
+                    // Log and continue; do not emit events for cleanup-only actions
+                    warn!("resctrl-plugin: cleanup_all failed: {}", e);
                 }
             }
         }
