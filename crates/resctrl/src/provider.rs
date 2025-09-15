@@ -51,10 +51,7 @@ impl FsProvider for RealFs {
             let de = entry?;
             let ft = de.file_type()?;
             if ft.is_dir() {
-                let name = de
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned();
+                let name = de.file_name().to_string_lossy().into_owned();
                 out.push(name);
             }
         }

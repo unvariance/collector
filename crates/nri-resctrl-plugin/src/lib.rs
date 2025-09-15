@@ -922,7 +922,12 @@ mod tests {
         let _ = plugin
             .synchronize(
                 &ctx,
-                SynchronizeRequest { pods: vec![], containers: vec![], more: false, special_fields: protobuf::SpecialFields::default() },
+                SynchronizeRequest {
+                    pods: vec![],
+                    containers: vec![],
+                    more: false,
+                    special_fields: protobuf::SpecialFields::default(),
+                },
             )
             .await
             .unwrap();
