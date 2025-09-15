@@ -31,7 +31,6 @@ impl AssignmentResult {
 pub struct Config {
     pub root: PathBuf,
     pub group_prefix: String,
-    pub auto_mount: bool,
 }
 
 impl Default for Config {
@@ -39,7 +38,6 @@ impl Default for Config {
         Self {
             root: PathBuf::from(DEFAULT_ROOT),
             group_prefix: DEFAULT_PREFIX.to_string(),
-            auto_mount: false,
         }
     }
 }
@@ -120,17 +118,17 @@ impl<P: FsProvider> Resctrl<P> {
         })
     }
 
-    /// Ensure resctrl is mounted according to configuration.
+    /// Ensure resctrl is mounted according to the given flag.
     /// - If already mounted, returns Ok(())
-    /// - If not mounted and auto_mount is false, returns Error::NotMounted
-    /// - If not mounted and auto_mount is true, attempts to mount and returns
+    /// - If not mounted and `auto_mount` is false, returns Error::NotMounted
+    /// - If not mounted and `auto_mount` is true, attempts to mount and returns
     ///   NoPermission/Unsupported/Io on failure.
-    pub fn ensure_mounted(&self) -> Result<()> {
+    pub fn ensure_mounted(&self, auto_mount: bool) -> Result<()> {
         let info = self.detect_support()?;
         if info.mounted {
             return Ok(());
         }
-        if !self.cfg.auto_mount {
+        if !auto_mount {
             return Err(Error::NotMounted {
                 root: self.cfg.root.clone(),
             });
@@ -574,10 +572,9 @@ mod tests {
             Config {
                 root: PathBuf::from("/sys/fs/resctrl"),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
-        let err = rc.ensure_mounted().unwrap_err();
+        let err = rc.ensure_mounted(false).unwrap_err();
         match err {
             Error::NotMounted { .. } => {}
             other => panic!("unexpected: {other:?}"),
@@ -596,10 +593,9 @@ mod tests {
             Config {
                 root: PathBuf::from("/sys/fs/resctrl"),
                 group_prefix: "pod_".into(),
-                auto_mount: true,
             },
         );
-        rc.ensure_mounted().expect("mounted");
+        rc.ensure_mounted(true).expect("mounted");
         // After mount, detect reports mounted
         let info = rc.detect_support().expect("detect ok");
         assert!(info.mounted);
@@ -620,10 +616,9 @@ mod tests {
             Config {
                 root: PathBuf::from("/sys/fs/resctrl"),
                 group_prefix: "pod_".into(),
-                auto_mount: true,
             },
         );
-        let err = rc.ensure_mounted().unwrap_err();
+        let err = rc.ensure_mounted(true).unwrap_err();
         match err {
             Error::NoPermission { .. } => {}
             other => panic!("unexpected: {other:?}"),
@@ -641,10 +636,9 @@ mod tests {
             Config {
                 root: PathBuf::from("/sys/fs/resctrl"),
                 group_prefix: "pod_".into(),
-                auto_mount: true,
             },
         );
-        let err = rc.ensure_mounted().unwrap_err();
+        let err = rc.ensure_mounted(true).unwrap_err();
         match err {
             Error::Unsupported { .. } => {}
             other => panic!("unexpected: {other:?}"),
@@ -659,7 +653,6 @@ mod tests {
         let cfg = Config {
             root: root.clone(),
             group_prefix: "pod_".into(),
-            auto_mount: false,
         };
         let rc = Resctrl::with_provider(fs.clone(), cfg);
         let group = rc.create_group("my-pod:UID").expect("create ok");
@@ -688,7 +681,6 @@ mod tests {
         let cfg = Config {
             root: root.clone(),
             group_prefix: "pod_".into(),
-            auto_mount: false,
         };
         let group_path = root.join("pod_abc");
         fs.set_nospace_dir(&group_path);
@@ -711,7 +703,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         rc.delete_group(group_path.to_str().unwrap())
@@ -736,7 +727,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let res = rc
@@ -762,7 +752,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let err = rc
@@ -787,7 +776,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let err = rc
@@ -817,7 +805,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let pids = rc
@@ -841,7 +828,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let err = rc
@@ -872,7 +858,6 @@ mod tests {
             Config {
                 root,
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let err = rc
@@ -913,7 +898,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -973,7 +957,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1014,7 +997,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1056,7 +1038,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1105,7 +1086,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1164,7 +1144,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1234,7 +1213,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1295,7 +1273,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
 
@@ -1321,7 +1298,6 @@ mod tests {
             Config {
                 root: root.clone(),
                 group_prefix: "pod_".into(),
-                auto_mount: false,
             },
         );
         let err = rc.cleanup_all().unwrap_err();

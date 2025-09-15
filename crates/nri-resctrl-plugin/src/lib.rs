@@ -132,7 +132,6 @@ impl ResctrlPlugin<RealFs> {
     pub fn new(cfg: ResctrlPluginConfig, tx: mpsc::Sender<PodResctrlEvent>) -> Self {
         let rc_cfg = ResctrlConfig {
             group_prefix: cfg.group_prefix.clone(),
-            auto_mount: cfg.auto_mount,
             ..Default::default()
         };
         Self {
@@ -565,7 +564,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
     ) -> ttrpc::Result<SynchronizeResponse> {
         // Startup cleanup: ensure mounted (according to resctrl config) and remove stale groups.
         if self.cfg.cleanup_on_start {
-            match self.resctrl.ensure_mounted() {
+            match self.resctrl.ensure_mounted(self.cfg.auto_mount) {
                 Ok(()) => match self.resctrl.cleanup_all() {
                     Ok(rep) => {
                         info!(
@@ -911,13 +910,7 @@ mod tests {
         fs.add_dir(&root.join("mon_groups").join("pod_mx"));
         fs.add_dir(&root.join("mon_groups").join("foo"));
 
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(8);
         let plugin = ResctrlPlugin::with_resctrl(ResctrlPluginConfig::default(), rc, tx);
 
@@ -999,13 +992,7 @@ mod tests {
         fs.add_dir(&cg);
         fs.add_file(&cg.join("cgroup.procs"), "1\n2\n");
 
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
         // Use mock PID source from the module
         use crate::pid_source::test_support::MockCgroupPidSource;
@@ -1113,13 +1100,7 @@ mod tests {
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
 
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
         use crate::pid_source::test_support::MockCgroupPidSource;
         let mock_pid_src = MockCgroupPidSource::new();
@@ -1211,13 +1192,7 @@ mod tests {
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
 
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
         let mock_pid_src = Arc::new(MockCgroupPidSource::new());
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
@@ -1347,13 +1322,7 @@ mod tests {
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
 
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
         let gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
         fs.add_dir(&gp);
@@ -1476,13 +1445,7 @@ mod tests {
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
-        let rc = Resctrl::with_provider(
-            fs.clone(),
-            resctrl::Config {
-                auto_mount: false,
-                ..Default::default()
-            },
-        );
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(32);
         let pod_a = nri::api::PodSandbox {
             id: "sbA".into(),

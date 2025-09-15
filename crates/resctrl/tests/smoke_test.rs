@@ -62,20 +62,14 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         ));
     }
     // ensure_mounted should fail with auto_mount=false
-    let rc_no_auto = Resctrl::new(Config {
-        auto_mount: false,
-        ..Default::default()
-    });
-    match rc_no_auto.ensure_mounted() {
+    let rc_no_auto = Resctrl::new(Config::default());
+    match rc_no_auto.ensure_mounted(false) {
         Err(Error::NotMounted { .. }) => {}
         other => return Err(anyhow::anyhow!("expected NotMounted, got: {other:?}")),
     }
     // Now with auto_mount=true it should mount successfully
-    let rc_auto = Resctrl::new(Config {
-        auto_mount: true,
-        ..Default::default()
-    });
-    rc_auto.ensure_mounted()?;
+    let rc_auto = Resctrl::new(Config::default());
+    rc_auto.ensure_mounted(true)?;
     let info_after = rc_auto.detect_support()?;
     if !info_after.mounted {
         return Err(anyhow::anyhow!(
@@ -88,7 +82,7 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         ));
     }
     // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
-    rc_auto.ensure_mounted()?;
+    rc_auto.ensure_mounted(true)?;
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
     let group = match rc.create_group(&uid) {
