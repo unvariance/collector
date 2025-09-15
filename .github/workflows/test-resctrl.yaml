@@ -66,6 +66,12 @@ jobs:
           # Build only the hardware smoke integration test binary
           cargo test -p resctrl --test smoke_test --release --no-run
 
+      - name: Build nri-resctrl-plugin integration tests (no-run)
+        run: |
+          source $HOME/.cargo/env
+          # Build all integration tests for nri-resctrl-plugin without running them
+          cargo test -p nri-resctrl-plugin --tests --release --no-run
+
 
       - name: Collect smoke test binary
         id: collect-bin
@@ -86,6 +92,28 @@ jobs:
         with:
           name: resctrl-smoke-bin
           path: resctrl-smoke
+          if-no-files-found: error
+
+      - name: Collect nri-resctrl-plugin e2e binary
+        id: collect-plugin-bin
+        run: |
+          set -euxo pipefail
+          P_BIN=$(find target/release/deps -maxdepth 1 -type f -executable -name 'integration_test-*' | head -n 1)
+          if [ -z "$P_BIN" ]; then
+            echo "nri-resctrl-plugin integration test binary not found" >&2
+            find target/release -maxdepth 2 -type f -name '*integration_test*' || true
+            exit 1
+          fi
+          file "$P_BIN" || true
+          ldd "$P_BIN" || true
+          cp "$P_BIN" nri-resctrl-plugin-e2e
+          chmod +x nri-resctrl-plugin-e2e
+
+      - name: Upload nri-resctrl-plugin e2e binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nri-resctrl-plugin-e2e
+          path: nri-resctrl-plugin-e2e
           if-no-files-found: error
 
   nri-resctrl-plugin-registration:
@@ -203,7 +231,7 @@ jobs:
           market-type: 'spot'
 
   resctrl-e2e:
-    name: Run resctrl smoke test
+    name: Run resctrl E2E (smoke + plugin)
     needs: [build-and-unit-test, setup-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
@@ -232,6 +260,21 @@ jobs:
           chmod +x "$BIN" || true
           echo "Executing $BIN"
           RESCTRL_E2E=1 "$BIN" --nocapture
+
+      - name: Download nri-resctrl-plugin e2e binary
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-resctrl-plugin-e2e
+          path: ./
+
+      - name: Run nri-resctrl-plugin E2E (hardware resctrl)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          P_BIN=./nri-resctrl-plugin-e2e
+          chmod +x "$P_BIN" || true
+          echo "Executing $P_BIN"
+          RESCTRL_E2E=1 "$P_BIN" --nocapture
 
   stop-runner:
     name: Stop EC2 runner
