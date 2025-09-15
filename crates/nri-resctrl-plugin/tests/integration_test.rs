@@ -44,7 +44,10 @@ async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
     // Precondition: ensure resctrl is mounted using RealFs without shelling out.
     let rc = resctrl::Resctrl::default();
     if let Err(e) = rc.ensure_mounted(true) {
-        eprintln!("ensure_mounted failed (need CAP_SYS_ADMIN?): {} — skipping", e);
+        eprintln!(
+            "ensure_mounted failed (need CAP_SYS_ADMIN?): {} — skipping",
+            e
+        );
         return Ok(());
     }
 

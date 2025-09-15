@@ -1294,8 +1294,14 @@ mod tests {
 
         // Verify removals and non-removals on fs
         assert!(fs.dir_exists(&root.join("x_keep")), "x_keep should remain");
-        assert!(!fs.dir_exists(&root.join("pod_r_ok")), "pod_r_ok should be removed");
-        assert!(!fs.dir_exists(&root.join("mon_groups").join("pod_m1")), "pod_m1 should be removed");
+        assert!(
+            !fs.dir_exists(&root.join("pod_r_ok")),
+            "pod_r_ok should be removed"
+        );
+        assert!(
+            !fs.dir_exists(&root.join("mon_groups").join("pod_m1")),
+            "pod_m1 should be removed"
+        );
     }
 
     #[test]
