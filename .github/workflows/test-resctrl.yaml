@@ -230,8 +230,8 @@ jobs:
           image-type: ${{ inputs.image-type || 'ubuntu-24.04' }}
           market-type: 'spot'
 
-  resctrl-e2e:
-    name: Run resctrl E2E (smoke + plugin)
+  resctrl-e2e-smoke:
+    name: Run resctrl smoke test
     needs: [build-and-unit-test, setup-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
@@ -240,9 +240,6 @@ jobs:
     steps:
       - name: Prepare HOME
         run: mkdir -p "$HOME"
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
 
       - name: Download smoke binary
         uses: actions/download-artifact@v4
@@ -261,6 +258,17 @@ jobs:
           echo "Executing $BIN"
           RESCTRL_E2E=1 "$BIN" --nocapture
 
+  nri-resctrl-plugin-e2e:
+    name: Run nri-resctrl-plugin E2E
+    needs: [build-and-unit-test, setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    env:
+      HOME: /root
+    steps:
+      - name: Prepare HOME
+        run: mkdir -p "$HOME"
+
       - name: Download nri-resctrl-plugin e2e binary
         uses: actions/download-artifact@v4
         with:
@@ -278,7 +286,7 @@ jobs:
 
   stop-runner:
     name: Stop EC2 runner
-    needs: [setup-runner, resctrl-e2e]
+    needs: [setup-runner, resctrl-e2e-smoke, nri-resctrl-plugin-e2e]
     runs-on: ubuntu-latest
     if: always()
     steps:
