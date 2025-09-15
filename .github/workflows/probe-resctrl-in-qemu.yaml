@@ -3,10 +3,10 @@ name: Probe resctrl/perf in QEMU guest
 on:
   workflow_dispatch:
     inputs:
-      image-type:
-        description: 'LVH image type (e.g., ubuntu-22.04 or ubuntu-24.04)'
+      kernel-version:
+        description: 'LVH complexity-test image version (e.g., 6.6-YYYYMMDD.HHMMSS)'
         required: false
-        default: 'ubuntu-22.04'
+        default: '6.6-20250507.063028'
         type: string
   pull_request:
     paths:
@@ -26,13 +26,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare images directory
+        run: |
+          sudo mkdir -p /tmp/images
+          sudo chmod 777 /tmp/images
+
       - name: Provision LVH VM and run probe
         uses: yonch/little-vm-helper@main
         with:
           test-name: qemu-probe
-          image: ${{ inputs.image-type || 'ubuntu-22.04' }}
+          image: 'complexity-test'
+          image-version: ${{ inputs.kernel-version || '6.6-20250507.063028' }}
           host-mount: ./
-          images-folder-parent: "/tmp"
+          images-folder-parent: "/tmp/images"
           cpu: 2
           mem: 2G
           # Enable passthrough PMU support for the guest
@@ -118,4 +124,3 @@ jobs:
           name: qemu-guest-probe
           path: probe-vm.log
           if-no-files-found: warn
-
