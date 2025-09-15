@@ -33,7 +33,7 @@ Additionally, validate that a Pod initially synchronized with a subset of its co
 - Resctrl provider injection: parameterize `Resctrl<P>` over `FsProvider` from the `resctrl` crate:
   - Mocked run: `Resctrl<TestFs>` (or equivalent mock) simulates create/assign/list/delete and can inject `ENOSPC`.
   - Hardware run (optional): `Resctrl<RealFs>` uses the actual filesystem under `/sys/fs/resctrl`.
-- Each scenario body is implemented once and executed under both providers, gated by platform/features as needed.
+- Keep mock-based tests (unit/integration in-crate) and hardware E2E tests separate; do not attempt to reuse identical scenario code across providers. Mock tests validate logic deterministically; E2E validates kernel/runtime behavior.
 
 - Exercising late-container reconciliation
   - Ensure scenarios cover pods initially synchronized with a subset of their containers (e.g., race between `synchronize()` and container creation).
@@ -87,6 +87,7 @@ Additionally, validate that a Pod initially synchronized with a subset of its co
     - Pod removal: remove a preexisting Pod (present before plugin registration) and a post-registration Pod; expect `Removed` events and resctrl cleanup for both.
     - Capacity and retries: inject ENOSPC for `create_group` → `AddOrUpdate` with `Failed`; call `retry_group_creation` while ENOSPC persists → expect `Error::Capacity` and no event; clear ENOSPC → call `retry_group_creation` again → expect transition to `Exists(path)` and updated event; then call `retry_container_reconcile` to improve counts and emit exactly one updated `AddOrUpdate`.
     - `retry_all_once`: prepare multiple pods, one `Failed` (capacity) and one with `Exists(path)` + one `Partial` container; verify early-stop on capacity (instrument mock FS to count `create_dir` calls) and improved counts for the other pod.
+    - Auto-mount behavior: `resctrl::Resctrl::ensure_mounted(auto_mount)` already has unit and smoke tests in the `resctrl` crate exercising mounted/unmounted cases for both `auto_mount=true|false`. Reference those rather than duplicating in plugin mock tests.
 
 - Cleanup tests (after Sub-Issue 06)
   - Introduce a mock FS listing API consistent with `read_child_dirs`; seed root and root `mon_groups` with mixed entries: prefixed/non-prefixed, files/dirs, and disappearing entries to simulate races.
@@ -98,9 +99,30 @@ Additionally, validate that a Pod initially synchronized with a subset of its co
   - Run scenarios mirroring mocked tests: preexisting assignment, post-start add container (including `kubectl debug`), post-start add Pod, pod removal (preexisting and post-registration), and capacity + retry (using a separate helper prefix for pre-filling to avoid startup cleanup).
   - Gate on label or branch; skip gracefully on unsupported kernels/instances.
 
+- Test inventory and deltas
+  - In-crate unit/integration (mocked) in `crates/nri-resctrl-plugin/src/lib.rs`:
+    - `test_cleanup_on_start_removes_only_prefix` — already exists; covers startup cleanup. Keep.
+    - `test_configure_event_mask` — already exists; validates minimal NRI events set. Keep.
+    - `test_reconcile_emits_counts` — already exists; initial synchronize counts. Expand to cover late-container reconciliation. Modify.
+    - `test_run_pod_sandbox_creates_group_and_emits_event` — already exists; validates `RUN_POD_SANDBOX` and removal. Optionally add create-after-run assertion. Modify.
+    - `test_capacity_error_emits_failed_and_retry_group_creation_transitions` — already exists. Keep.
+    - `test_retry_container_reconcile_improves_counts` — already exists. Keep.
+    - `test_retry_all_once_early_stop_on_capacity_and_reconcile_others` — already exists. Keep.
+    - NEW: container added via `kubectl debug` (ephemeral) — add mocked test to simulate post-sync container; verify counts/assignments.
+    - NEW: removal of a preexisting Pod (present before registration) — add test to expect `Removed` and cleanup.
+  - E2E tests:
+    - `crates/nri-resctrl-plugin/tests/integration_test.rs::test_resctrl_plugin_registers_with_nri` — exists; registration path. Keep.
+    - `crates/nri-resctrl-plugin/tests/integration_test.rs::test_startup_cleanup_e2e` — exists; cleanup and ensure_mounted(true). Keep.
+    - NEW: preexisting assignment and post-start container add (regular + `kubectl debug`).
+    - NEW: post-start pod add and removal for both preexisting and post-registration pods.
+  - Resctrl crate tests (mounting):
+    - `crates/resctrl/tests/smoke_test.rs` and unit tests in `crates/resctrl/src/lib.rs` exercise `ensure_mounted` for mounted/unmounted with `auto_mount=true|false` — rely on these; no plugin duplication.
+
 - CI wiring
-  - Default job: run mocked-provider integration tests on Linux runners. Gate hardware-only tests behind `#[cfg(target_os = "linux")]` and feature flags if needed.
-  - Hardware job: separate workflow that provisions EC2, builds the plugin, runs the E2E scenarios, and collects logs/metrics as artifacts.
+  - Use existing `.github/workflows/test-resctrl.yaml`:
+    - Build + unit tests job runs plugin mocked tests and builds binaries.
+    - KIND job validates plugin registration against an NRI-enabled containerd.
+    - Hardware jobs execute resctrl smoke and plugin E2E on EC2; opt-in via `RESCTRL_E2E=1`.
 
 - Documentation
   - Update docs to reflect event model, counters, retry APIs, and cleanup behavior. Include brief runbooks for local runs and hardware job gating.
