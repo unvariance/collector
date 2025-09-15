@@ -285,7 +285,7 @@ jobs:
           P_BIN=./nri-resctrl-plugin-e2e
           chmod +x "$P_BIN" || true
           echo "Executing $P_BIN"
-          RESCTRL_E2E=1 "$P_BIN" --include-ignored --nocapture --test-threads=1
+          RESCTRL_E2E=1 "$P_BIN" --nocapture --test-threads=1
 
   stop-runner:
     name: Stop EC2 runner
