@@ -247,8 +247,6 @@ jobs:
           name: resctrl-smoke-bin
           path: ./
 
-      # All detection and ensure_mounted checks are now part of the smoke test itself
-
       - name: Run resctrl smoke test (hardware)
         shell: bash
         run: |
@@ -282,7 +280,7 @@ jobs:
           P_BIN=./nri-resctrl-plugin-e2e
           chmod +x "$P_BIN" || true
           echo "Executing $P_BIN"
-          RESCTRL_E2E=1 "$P_BIN" --nocapture
+          RESCTRL_E2E=1 "$P_BIN" --include-ignored --nocapture
 
   stop-runner:
     name: Stop EC2 runner
