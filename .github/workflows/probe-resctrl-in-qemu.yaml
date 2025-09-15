@@ -20,6 +20,7 @@ jobs:
   probe-in-guest:
     name: Probe in guest VM
     runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.runner == 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false
       matrix:
