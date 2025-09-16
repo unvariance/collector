@@ -755,10 +755,64 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         }
     }
 
+    // Build plugin with real FS/PID sources and perform a Configure+Synchronize
+    // cycle to mirror the production handshake before we mutate resctrl state.
+    let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(128);
+    let plugin = ResctrlPlugin::new(
+        ResctrlPluginConfig {
+            cleanup_on_start: false,
+            auto_mount: true,
+            ..Default::default()
+        },
+        tx,
+    );
+
+    let ctx = ttrpc::r#async::TtrpcContext {
+        mh: ttrpc::MessageHeader::default(),
+        metadata: std::collections::HashMap::new(),
+        timeout_nano: 5_000,
+    };
+
+    let _ = nri::api_ttrpc::Plugin::configure(
+        &plugin,
+        &ctx,
+        nri::api::ConfigureRequest {
+            config: String::new(),
+            runtime_name: "e2e-runtime".into(),
+            runtime_version: "1.0".into(),
+            registration_timeout: 1000,
+            request_timeout: 1000,
+            special_fields: protobuf::SpecialFields::default(),
+        },
+    )
+    .await?;
+
+    let _ = nri::api_ttrpc::Plugin::synchronize(
+        &plugin,
+        &ctx,
+        nri::api::SynchronizeRequest {
+            pods: vec![],
+            containers: vec![],
+            more: false,
+            special_fields: protobuf::SpecialFields::default(),
+        },
+    )
+    .await?;
+
+    // Drain any startup events if future changes emit them.
+    while rx.try_recv().is_ok() {}
+
     // Prefill resctrl capacity with placeholder groups under a distinct prefix.
     let mut filler_dirs: Vec<PathBuf> = Vec::new();
     let mut enospc_hit = false;
-    for idx in 0..256 {
+    let num_rmids_path = root.join("info").join("L3_MON").join("num_rmids");
+    let num_rmids_limit = fs::read_to_string(&num_rmids_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(32);
+    let filler_budget = num_rmids_limit.saturating_add(2);
+    for idx in 0..filler_budget {
         let dir = root.join(format!("{}{}", filler_prefix, idx));
         match fs::create_dir(&dir) {
             Ok(()) => filler_dirs.push(dir),
@@ -800,23 +854,6 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     let mut child = Command::new("sleep").arg("300").spawn()?;
     let child_pid = child.id();
     fs::write(cgroup_path.join("cgroup.procs"), format!("{}\n", child_pid))?;
-
-    // Build plugin with real FS/PID sources.
-    let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(128);
-    let plugin = ResctrlPlugin::new(
-        ResctrlPluginConfig {
-            cleanup_on_start: false,
-            auto_mount: true,
-            ..Default::default()
-        },
-        tx,
-    );
-
-    let ctx = ttrpc::r#async::TtrpcContext {
-        mh: ttrpc::MessageHeader::default(),
-        metadata: std::collections::HashMap::new(),
-        timeout_nano: 5_000,
-    };
 
     let pod = nri::api::PodSandbox {
         id: "sb-capacity".into(),

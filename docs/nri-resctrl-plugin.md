@@ -2,7 +2,7 @@
 
 ## Overview
 
-The NRI resctrl plugin manages per-pod resctrl groups under `/sys/fs/resctrl` and assigns container tasks into the appropriate pod group. It emits concise, deduplicated events to report pod group state and reconciliation progress.
+The NRI resctrl plugin manages per-pod resctrl groups under `/sys/fs/resctrl` and assigns container tasks into the appropriate pod group. It emits events to report pod group state and reconciliation progress.
 
 ## Event Model
 
@@ -16,16 +16,16 @@ The NRI resctrl plugin manages per-pod resctrl groups under `/sys/fs/resctrl` an
   - Emitted when a pod is removed; the plugin deletes its resctrl group (best effort).
 
 Events are emitted on:
-- Initial synchronize: once per pod; then per-container only when a count changes
-- Pod sandbox create/remove
-- Container create/remove: counts update only when transitions change reconciliation state
+- Initial synchronize: one `AddOrUpdate` per pod (initially reporting `total_containers = 0` and `reconciled_containers = 0`), followed by an event whenever either counter changes.
+- Pod sandbox lifecycle events (`RUN_POD_SANDBOX`, `REMOVE_POD_SANDBOX`).
+- Container create/update/remove transitions that change the counters or the pod group state.
 
 ## Per-Pod Counters
 
 - `total_containers`: number of known containers for the pod
 - `reconciled_containers`: number of containers whose PIDs have been assigned to the pod group
 
-Counters only change when a container becomes known or transitions to Reconciled, or on removal.
+Counters increment whenever a container becomes known, increment again when it reconciles successfully, and decrement on removal.
 
 ## Retries
 
@@ -56,14 +56,23 @@ Counters only change when a container becomes known or transitions to Reconciled
 - Hardware/KIND E2E (optional):
   - Run on an EC2 runner with a KIND cluster configured for NRI
   - Validates that groups are created, tasks are assigned, counts improve, and cleanup occurs on pod removal
-  - Gated by `RESCTRL_E2E=1`
+  - Tests are `#[ignore]` by default; CI enables them with `cargo test -- --ignored`
+- CI wiring uses existing `.github/workflows/test-resctrl.yaml` to build, run mocked tests on GitHub-hosted runners, and execute the KIND + hardware jobs when the EC2 runner is available.
+
+### Test Inventory and Deltas
+
+- `src/lib.rs` mocked tests (existing) cover auto-mount true/false, startup cleanup, retry flows, and now verify PID assignment via `list_group_tasks` in addition to event sequencing.
+- `tests/integration_test.rs::test_plugin_full_flow` (new) drives a live KIND cluster: pre/post registration pods, `kubectl debug` ephemeral container addition, and pod removal cleanup.
+- `tests/integration_test.rs::test_cleanup_on_start_removes_only_prefix` (new) covers startup cleanup with a mocked filesystem.
+- `tests/integration_test.rs::test_startup_cleanup_e2e` (new) validates `cleanup_on_start` behavior against the real resctrl filesystem.
+- `tests/integration_test.rs::test_capacity_retry_e2e` (new) exercises RMID exhaustion, retry flows, and PID verification on hardware.
 
 ## Runbooks
 
 ### Local (mocked) tests
 
 ```
-RUST_TEST_THREADS=1 cargo test -p nri-resctrl-plugin -- --nocapture --test-threads=1
+cargo test -p nri-resctrl-plugin -- --nocapture
 ```
 
 ### Hardware E2E on a resctrl-capable host
@@ -99,9 +108,7 @@ EOF
 
 ```
 export NRI_SOCKET_PATH=/tmp/nri/nri.sock
-export RESCTRL_E2E=1
-cargo test -p nri-resctrl-plugin --test integration_test -- --ignored --nocapture --test-threads=1
+cargo test -p nri-resctrl-plugin --test integration_test -- --ignored --nocapture
 ```
 
 The test `test_plugin_full_flow` creates pods before and after plugin registration, exercises an ephemeral container via `kubectl debug` (when available), and deletes pods to validate `Removed` events and cleanup.
-
