@@ -225,6 +225,7 @@ jobs:
 
   setup-runner:
     name: Start EC2 runner (resctrl-capable)
+    needs: [build-and-unit-test]
     runs-on: ubuntu-latest
     outputs:
       runner-label: ${{ steps.start-runner.outputs.runner-label }}
