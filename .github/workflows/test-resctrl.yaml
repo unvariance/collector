@@ -204,7 +204,7 @@ jobs:
           RUST_LOG: info
         run: |
           echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
-          RESCTRL_E2E=1 sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1
+          RESCTRL_E2E=1 NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1
 
       - name: Cleanup KIND
         if: always()
