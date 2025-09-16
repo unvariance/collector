@@ -125,13 +125,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ensure Docker is running
-        run: |
-          set -x
-          set +e
-          (sudo systemctl start docker || sudo service docker start || true)
-          docker info
-
       - name: Install KIND and kubectl
         run: |
           # Install KIND
