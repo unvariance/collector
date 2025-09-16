@@ -171,6 +171,8 @@ jobs:
 
       - name: Create KIND cluster with NRI support
         id: kind-cluster
+        env:
+          HOME: /user
         run: |
           cat > kind-config.yaml << 'EOF'
           kind: Cluster
@@ -198,6 +200,12 @@ jobs:
           sudo mkdir -p /tmp/nri /tmp/nri-conf /tmp/nri-plugins
           sudo chmod 777 /tmp/nri /tmp/nri-conf /tmp/nri-plugins
 
+          # Ensure HOME exists for kubeconfig
+          sudo mkdir -p "$HOME"
+          sudo chmod 755 "$HOME"
+          sudo chown "$USER":"$USER" "$HOME"
+          mkdir -p "$HOME/.kube"
+
           kind create cluster --config kind-config.yaml --wait 300s
           kubectl cluster-info --context kind-nri-resctrl-plugin-test
           echo "kubeconfig=$HOME/.kube/config" >> "$GITHUB_OUTPUT"
@@ -217,7 +225,7 @@ jobs:
         with:
           name: nri-resctrl-plugin-e2e
           path: ./
-      
+
       - name: Prepare test binary
         run: |
           chmod +x ./nri-resctrl-plugin-e2e || true
@@ -228,6 +236,7 @@ jobs:
           RESCTRL_E2E: 1
           RUST_LOG: info
           KUBECONFIG: ${{ steps.kind-cluster.outputs.kubeconfig }}
+          HOME: /root
         run: |
           echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
           RESCTRL_E2E=1 NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1
