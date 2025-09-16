@@ -11,21 +11,58 @@ fn init_test_logger() {
 use nri::NRI;
 use nri_resctrl_plugin::{PodResctrlEvent, ResctrlPlugin, ResctrlPluginConfig};
 
+async fn run_kubectl(args: &[&str]) -> anyhow::Result<()> {
+    let status = tokio::process::Command::new("kubectl")
+        .args(args)
+        .status()
+        .await?;
+    anyhow::ensure!(status.success(), "kubectl {:?} failed: {:?}", args, status);
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore]
-async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
+async fn test_plugin_full_flow() -> anyhow::Result<()> {
     init_test_logger();
+
+    // Gate: only run when explicitly requested and when tools are available
+    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
+        eprintln!("RESCTRL_E2E not set; skipping full flow e2e test");
+        return Ok(());
+    }
 
     // Use NRI socket path provided by the workflow via env.
     let socket_path = std::env::var("NRI_SOCKET_PATH")?;
     println!("[integration_test] Using NRI socket at: {}", socket_path);
+
+    // Pre-create a pod before plugin registration (preexisting assignment)
+    // Best-effort cleanup then create
+    let _ = run_kubectl(&["delete", "pod", "e2e-a", "--ignore-not-found=true"]).await;
+    run_kubectl(&[
+        "run",
+        "e2e-a",
+        "--image=busybox",
+        "--restart=Never",
+        "--",
+        "/bin/sh",
+        "-c",
+        "sleep 3600",
+    ])
+    .await?;
+    run_kubectl(&[
+        "wait",
+        "--for=condition=Ready",
+        "pod/e2e-a",
+        "--timeout=120s",
+    ])
+    .await?;
 
     // Connect to NRI runtime socket
     let socket = tokio::net::UnixStream::connect(&socket_path).await?;
     println!("[integration_test] Connected to NRI socket");
 
     // Build plugin with an externally provided channel
-    let (tx, mut _rx) = mpsc::channel::<PodResctrlEvent>(64);
+    let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
     let plugin = ResctrlPlugin::new(ResctrlPluginConfig::default(), tx);
 
     // Start NRI server for plugin and register
@@ -34,8 +71,55 @@ async fn test_resctrl_plugin_registers_with_nri() -> anyhow::Result<()> {
     nri.register().await?;
     println!("[integration_test] Plugin registered successfully");
 
-    // Allow runtime to settle briefly
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Allow runtime to settle briefly and drain at least one event if any
+    if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+        println!("[integration_test] Initial event: {:?}", ev);
+    }
+
+    // Post-start: add an ephemeral container using kubectl debug
+    // Note: not all clusters may have debugging enabled; ignore failures
+    let _ = run_kubectl(&[
+        "debug",
+        "pod/e2e-a",
+        "-c",
+        "dbg",
+        "--image=busybox",
+        "--target=e2e-a",
+        "--",
+        "/bin/sh",
+        "-c",
+        "sleep 600",
+    ])
+    .await;
+    // Let events flow
+    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+
+    // Post-start: create a new pod
+    let _ = run_kubectl(&["delete", "pod", "e2e-b", "--ignore-not-found=true"]).await;
+    run_kubectl(&[
+        "run",
+        "e2e-b",
+        "--image=busybox",
+        "--restart=Never",
+        "--",
+        "/bin/sh",
+        "-c",
+        "sleep 3600",
+    ])
+    .await?;
+    run_kubectl(&[
+        "wait",
+        "--for=condition=Ready",
+        "pod/e2e-b",
+        "--timeout=120s",
+    ])
+    .await?;
+    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+
+    // Pod removal: delete both pods and allow events to propagate
+    let _ = run_kubectl(&["delete", "pod", "e2e-a", "--timeout=60s"]).await;
+    let _ = run_kubectl(&["delete", "pod", "e2e-b", "--timeout=60s"]).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
 
     // Shut down cleanly
     nri.close().await?;

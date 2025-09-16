@@ -116,9 +116,10 @@ jobs:
           path: nri-resctrl-plugin-e2e
           if-no-files-found: error
 
-  nri-resctrl-plugin-registration:
-    name: NRI resctrl plugin registration (KIND)
-    runs-on: ubuntu-latest
+  nri-resctrl-plugin-e2e:
+    name: NRI resctrl plugin full flow (KIND on EC2)
+    needs: [setup-runner, build-and-unit-test]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -186,22 +187,24 @@ jobs:
           done
           sudo test -S "/tmp/nri/nri.sock" || { echo "NRI socket missing"; exit 1; }
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build plugin integration test
+      - name: Download nri-resctrl-plugin e2e binary
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-resctrl-plugin-e2e
+          path: ./
+      
+      - name: Prepare test binary
         run: |
-          cargo test --package nri-resctrl-plugin --test integration_test --no-run --verbose
-          TEST_BIN=$(find target/debug/deps -name 'integration_test-*' -type f -executable | head -1)
-          echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
+          chmod +x ./nri-resctrl-plugin-e2e || true
 
-      - name: Run plugin integration test (register + shutdown)
+      - name: Run plugin integration tests (full flow + cleanup)
         env:
           NRI_SOCKET_PATH: /tmp/nri/nri.sock
+          RESCTRL_E2E: 1
           RUST_LOG: info
         run: |
-          echo "Using test binary: $TEST_BINARY_PATH"
-          sudo -E "$TEST_BINARY_PATH" --ignored --nocapture --test-threads=1
+          echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
+          RESCTRL_E2E=1 sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1
 
       - name: Cleanup KIND
         if: always()
@@ -256,36 +259,6 @@ jobs:
           chmod +x "$BIN" || true
           echo "Executing $BIN"
           RESCTRL_E2E=1 "$BIN" --nocapture --test-threads=1
-
-  nri-resctrl-plugin-e2e:
-    name: Run nri-resctrl-plugin E2E
-    needs: [build-and-unit-test, setup-runner]
-    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    timeout-minutes: 20
-    env:
-      HOME: /root
-    steps:
-      - name: Prepare HOME
-        run: mkdir -p "$HOME"
-
-      - name: Download nri-resctrl-plugin e2e binary
-        uses: actions/download-artifact@v4
-        with:
-          name: nri-resctrl-plugin-e2e
-          path: ./
-
-      - name: Run nri-resctrl-plugin E2E (hardware resctrl)
-        shell: bash
-        env:
-          NRI_SOCKET_PATH: /var/run/nri/nri.sock
-          RUST_TEST_THREADS: 1
-          RUST_LOG: info
-        run: |
-          set -euxo pipefail
-          P_BIN=./nri-resctrl-plugin-e2e
-          chmod +x "$P_BIN" || true
-          echo "Executing $P_BIN"
-          RESCTRL_E2E=1 "$P_BIN" --nocapture --test-threads=1
 
   stop-runner:
     name: Stop EC2 runner
