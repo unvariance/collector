@@ -19,7 +19,10 @@ fn init_test_logger() {
         .try_init();
 }
 
-use nri::NRI;
+use nri::{
+    api::{CreateContainerRequest, Event, StateChangeEvent},
+    NRI,
+};
 use nri_resctrl_plugin::{
     PodResctrlAddOrUpdate, PodResctrlEvent, ResctrlGroupState, ResctrlPlugin, ResctrlPluginConfig,
 };
@@ -611,6 +614,249 @@ async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+#[ignore]
+async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
+    use anyhow::{bail, Context};
+    use std::fs;
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use tokio::time::{timeout, Duration};
+
+    init_test_logger();
+    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
+        eprintln!("RESCTRL_E2E not set; skipping capacity retry e2e test");
+        return Ok(());
+    }
+
+    // Ensure real resctrl is mounted.
+    let rc = resctrl::Resctrl::default();
+    if let Err(e) = rc.ensure_mounted(true) {
+        eprintln!(
+            "ensure_mounted failed (need CAP_SYS_ADMIN?): {} — skipping",
+            e
+        );
+        return Ok(());
+    }
+
+    let root = PathBuf::from("/sys/fs/resctrl");
+    let filler_prefix = "capfill_e2e_";
+
+    // Clean up any stale filler groups from previous runs.
+    if let Ok(entries) = fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(filler_prefix) {
+                    let _ = fs::remove_dir(entry.path());
+                }
+            }
+        }
+    }
+
+    // Prefill resctrl capacity with placeholder groups under a distinct prefix.
+    let mut filler_dirs: Vec<PathBuf> = Vec::new();
+    let mut enospc_hit = false;
+    for idx in 0..256 {
+        let dir = root.join(format!("{}{}", filler_prefix, idx));
+        match fs::create_dir(&dir) {
+            Ok(()) => filler_dirs.push(dir),
+            Err(e) if e.raw_os_error() == Some(libc::ENOSPC) => {
+                enospc_hit = true;
+                break;
+            }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                filler_dirs.push(dir);
+            }
+            Err(e) => {
+                for path in filler_dirs.iter().rev() {
+                    let _ = fs::remove_dir(path);
+                }
+                return Err(e.into());
+            }
+        }
+    }
+
+    if !enospc_hit {
+        for path in filler_dirs.iter().rev() {
+            let _ = fs::remove_dir(path);
+        }
+        eprintln!("resctrl capacity not exhausted; skipping capacity retry test");
+        return Ok(());
+    }
+
+    // Release one slot later; track remaining fillers for cleanup.
+    let freed_dir = filler_dirs
+        .pop()
+        .context("at least one filler dir expected")?;
+
+    // Prepare a real cgroup for the container PIDs.
+    let cgroup_path = PathBuf::from("/sys/fs/cgroup/resctrl-e2e-capacity");
+    let _ = fs::remove_dir(&cgroup_path);
+    fs::create_dir_all(&cgroup_path)?;
+
+    // Spawn a helper process and attach it to the cgroup for PID enumeration.
+    let mut child = Command::new("sleep").arg("300").spawn()?;
+    let child_pid = child.id();
+    fs::write(cgroup_path.join("cgroup.procs"), format!("{}\n", child_pid))?;
+
+    // Build plugin with real FS/PID sources.
+    let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(128);
+    let plugin = ResctrlPlugin::new(
+        ResctrlPluginConfig {
+            cleanup_on_start: false,
+            auto_mount: true,
+            ..Default::default()
+        },
+        tx,
+    );
+
+    let ctx = ttrpc::r#async::TtrpcContext {
+        mh: ttrpc::MessageHeader::default(),
+        metadata: std::collections::HashMap::new(),
+        timeout_nano: 5_000,
+    };
+
+    let pod = nri::api::PodSandbox {
+        id: "sb-capacity".into(),
+        uid: "uid-capacity".into(),
+        ..Default::default()
+    };
+    let container = nri::api::Container {
+        id: "ctr-capacity".into(),
+        pod_sandbox_id: pod.id.clone(),
+        linux: protobuf::MessageField::some(nri::api::LinuxContainer {
+            cgroups_path: cgroup_path.to_string_lossy().into_owned(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // Register pod → expect group creation failure due to ENOSPC.
+    let _ = nri::api_ttrpc::Plugin::state_change(
+        &plugin,
+        &ctx,
+        StateChangeEvent {
+            event: Event::RUN_POD_SANDBOX.into(),
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::none(),
+            special_fields: protobuf::SpecialFields::default(),
+        },
+    )
+    .await?;
+    let ev = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .context("expected initial event")?
+        .context("channel closed")?;
+    match ev {
+        PodResctrlEvent::AddOrUpdate(add) => {
+            anyhow::ensure!(
+                matches!(add.group_state, ResctrlGroupState::Failed),
+                "expected Failed state on capacity exhaustion"
+            );
+            anyhow::ensure!(add.total_containers == 0 && add.reconciled_containers == 0);
+        }
+        other => bail!("unexpected event after RUN_POD_SANDBOX: {:?}", other),
+    }
+
+    let create_req = CreateContainerRequest {
+        pod: protobuf::MessageField::some(pod.clone()),
+        container: protobuf::MessageField::some(container.clone()),
+        special_fields: protobuf::SpecialFields::default(),
+    };
+    let _ = nri::api_ttrpc::Plugin::create_container(&plugin, &ctx, create_req).await?;
+    let ev = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .context("expected container event")?
+        .context("channel closed")?;
+    match ev {
+        PodResctrlEvent::AddOrUpdate(add) => {
+            anyhow::ensure!(add.total_containers == 1);
+            anyhow::ensure!(add.reconciled_containers == 0);
+            anyhow::ensure!(matches!(add.group_state, ResctrlGroupState::Failed));
+        }
+        other => bail!("unexpected event for container add: {:?}", other),
+    }
+
+    // Free one filler group and retry creation to transition to Exists.
+    fs::remove_dir(&freed_dir)?;
+    let state = plugin
+        .retry_group_creation(&pod.uid)
+        .context("retry group")?;
+    let mut group_path = match state {
+        ResctrlGroupState::Exists(path) => path,
+        ResctrlGroupState::Failed => bail!("retry_group_creation still reports Failed"),
+    };
+    let ev = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .context("expected retry event")?
+        .context("channel closed")?;
+    match ev {
+        PodResctrlEvent::AddOrUpdate(add) => {
+            anyhow::ensure!(add.total_containers == 1);
+            anyhow::ensure!(matches!(add.group_state, ResctrlGroupState::Exists(_)));
+            if let ResctrlGroupState::Exists(path) = add.group_state {
+                group_path = path;
+            }
+        }
+        other => bail!("unexpected event after retry_group_creation: {:?}", other),
+    }
+
+    // Now retry container reconciliation to assign tasks and update counts.
+    plugin.retry_all_once().context("retry_all_once")?;
+    let ev = timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .context("expected reconciliation event")?
+        .context("channel closed")?;
+    match ev {
+        PodResctrlEvent::AddOrUpdate(add) => {
+            anyhow::ensure!(add.total_containers == 1);
+            anyhow::ensure!(add.reconciled_containers == 1);
+        }
+        other => bail!("unexpected event after retry_all_once: {:?}", other),
+    }
+
+    // Validate tasks file contains the helper PID.
+    let tasks_contents = tokio::fs::read_to_string(Path::new(&group_path).join("tasks"))
+        .await
+        .with_context(|| format!("reading tasks for {}", group_path))?;
+    anyhow::ensure!(
+        tasks_contents
+            .lines()
+            .any(|line| line.trim() == child_pid.to_string()),
+        "tasks file {} missing PID {} (contents: {})",
+        group_path,
+        child_pid,
+        tasks_contents
+    );
+
+    // Cleanup: terminate helper process and ensure group removal.
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = nri::api_ttrpc::Plugin::state_change(
+        &plugin,
+        &ctx,
+        StateChangeEvent {
+            event: Event::REMOVE_POD_SANDBOX.into(),
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::none(),
+            special_fields: protobuf::SpecialFields::default(),
+        },
+    )
+    .await?;
+    let _ = timeout(Duration::from_secs(2), rx.recv()).await;
+    let _ = wait_for_group_absent(&group_path, Duration::from_secs(10)).await;
+
+    // Cleanup filler dirs and the temporary cgroup.
+    for path in filler_dirs.into_iter().rev() {
+        let _ = fs::remove_dir(path);
+    }
+    let _ = fs::remove_dir(&cgroup_path);
 
     Ok(())
 }
