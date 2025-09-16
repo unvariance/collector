@@ -1,6 +1,6 @@
 use std::backtrace::BacktraceStatus;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context};
@@ -9,7 +9,7 @@ use kube::{
     api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
     Client, Error as KubeError,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -194,44 +194,266 @@ fn trim_container_runtime_prefix(container_id: &str) -> &str {
         .unwrap_or(container_id)
 }
 
-async fn container_pid(container_id: &str) -> anyhow::Result<i32> {
-    let trimmed = trim_container_runtime_prefix(container_id);
-    let output = tokio::process::Command::new("crictl")
-        .args(["inspect", "--output", "json", trimmed])
-        .output()
-        .await
-        .with_context(|| {
-            format!(
-                "failed to run crictl inspect for container {} (trimmed {})",
-                container_id, trimmed
-            )
-        })?;
-    anyhow::ensure!(
-        output.status.success(),
-        "crictl inspect failed for {}: {:?}",
-        container_id,
-        output.status
-    );
-    let v: Value = serde_json::from_slice(&output.stdout)?;
-    let pid = v
-        .pointer("/info/pid")
-        .and_then(Value::as_i64)
-        .or_else(|| v.pointer("/status/pid").and_then(Value::as_i64))
-        .or_else(|| v.pointer("/status/linux/pid").and_then(Value::as_i64))
-        .context("PID not found in crictl inspect output")?;
-    Ok(pid as i32)
+fn sanitized_pod_fragment(uid: &str) -> String {
+    format!("pod{}", uid.replace('-', "_"))
 }
 
-async fn resolve_container_pids(ids: &[String]) -> anyhow::Result<Vec<i32>> {
-    let mut pids = Vec::with_capacity(ids.len());
-    for id in ids {
-        pids.push(
-            container_pid(id)
-                .await
-                .with_context(|| format!("resolving pid for container {}", id))?,
-        );
+fn add_class_candidates<F>(push: &mut F, class: &str, pod_fragment: &str)
+where
+    F: FnMut(PathBuf),
+{
+    let base = Path::new("/sys/fs/cgroup");
+    let kubepods_slice = base.join("kubepods.slice");
+    let kubelet_slice = base.join("kubelet.slice").join("kubelet-kubepods.slice");
+    let system_slice = base
+        .join("system.slice")
+        .join("kubelet.service")
+        .join("kubepods.slice");
+    let cgroupfs_base = base.join("kubepods");
+
+    match class {
+        "Guaranteed" => {
+            push(kubepods_slice.join(format!("kubepods-{}.slice", pod_fragment)));
+            push(system_slice.join(format!("kubepods-{}.slice", pod_fragment)));
+            push(kubelet_slice.join(format!("kubelet-kubepods-{}.slice", pod_fragment)));
+            push(cgroupfs_base.join(pod_fragment));
+        }
+        "Burstable" => {
+            push(
+                kubepods_slice
+                    .join("kubepods-burstable.slice")
+                    .join(format!("kubepods-burstable-{}.slice", pod_fragment)),
+            );
+            push(
+                system_slice
+                    .join("kubepods-burstable.slice")
+                    .join(format!("kubepods-burstable-{}.slice", pod_fragment)),
+            );
+            push(
+                kubelet_slice
+                    .join("kubelet-kubepods-burstable.slice")
+                    .join(format!("kubelet-kubepods-burstable-{}.slice", pod_fragment)),
+            );
+            push(cgroupfs_base.join("burstable").join(pod_fragment));
+        }
+        "BestEffort" => {
+            push(
+                kubepods_slice
+                    .join("kubepods-besteffort.slice")
+                    .join(format!("kubepods-besteffort-{}.slice", pod_fragment)),
+            );
+            push(
+                system_slice
+                    .join("kubepods-besteffort.slice")
+                    .join(format!("kubepods-besteffort-{}.slice", pod_fragment)),
+            );
+            push(
+                kubelet_slice
+                    .join("kubelet-kubepods-besteffort.slice")
+                    .join(format!(
+                        "kubelet-kubepods-besteffort-{}.slice",
+                        pod_fragment
+                    )),
+            );
+            push(cgroupfs_base.join("besteffort").join(pod_fragment));
+            push(cgroupfs_base.join("best_effort").join(pod_fragment));
+        }
+        _ => {}
     }
-    Ok(pids)
+}
+
+fn candidate_pod_cgroup_paths(uid: &str, qos: Option<&str>) -> Vec<PathBuf> {
+    let pod_fragment = sanitized_pod_fragment(uid);
+    let mut candidates = Vec::new();
+    let mut push_candidate = |path: PathBuf| {
+        if !candidates.iter().any(|existing| existing == &path) {
+            candidates.push(path);
+        }
+    };
+
+    if let Some(class) = qos {
+        add_class_candidates(&mut push_candidate, class, &pod_fragment);
+    }
+
+    for class in ["Guaranteed", "Burstable", "BestEffort"] {
+        add_class_candidates(&mut push_candidate, class, &pod_fragment);
+    }
+
+    candidates
+}
+
+fn search_pod_cgroup_path(pod_fragment: &str) -> Option<PathBuf> {
+    let mut stack = vec![(PathBuf::from("/sys/fs/cgroup"), 0usize)];
+    let search_terms = [
+        pod_fragment.to_string(),
+        format!("kubepods-{}", pod_fragment),
+        format!("kubelet-kubepods-{}", pod_fragment),
+    ];
+
+    while let Some((path, depth)) = stack.pop() {
+        if depth > 8 {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&path) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if !entry_path.is_dir() {
+                continue;
+            }
+            if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
+                if search_terms.iter().any(|term| name.contains(term)) {
+                    if entry_path.join("cgroup.procs").exists() {
+                        return Some(entry_path);
+                    }
+                }
+            }
+            stack.push((entry_path, depth + 1));
+        }
+    }
+
+    None
+}
+
+fn find_pod_cgroup_path(uid: &str, qos: Option<&str>) -> anyhow::Result<PathBuf> {
+    let pod_fragment = sanitized_pod_fragment(uid);
+    for path in candidate_pod_cgroup_paths(uid, qos) {
+        if path.join("cgroup.procs").exists() {
+            return Ok(path);
+        }
+    }
+
+    if let Some(found) = search_pod_cgroup_path(&pod_fragment) {
+        return Ok(found);
+    }
+
+    bail!("unable to locate cgroup directory for pod uid {}", uid)
+}
+
+fn cgroup_matches_container(content: &str, container_id: &str) -> bool {
+    const PREFIXES: [&str; 3] = ["cri-containerd-", "docker-", "crio-"];
+    let id_len = container_id.len();
+    if id_len == 0 {
+        return false;
+    }
+
+    let mut lengths = vec![id_len];
+    for candidate in [64usize, 48, 32, 20, 12] {
+        if candidate < id_len {
+            lengths.push(candidate);
+        }
+    }
+    lengths.sort_unstable();
+    lengths.dedup();
+    lengths.sort_unstable_by(|a, b| b.cmp(a));
+
+    for len in lengths {
+        let slice = &container_id[..len];
+        if len == id_len && content.contains(slice) {
+            return true;
+        }
+        for prefix in PREFIXES {
+            let mut pattern = String::with_capacity(prefix.len() + slice.len());
+            pattern.push_str(prefix);
+            pattern.push_str(slice);
+            if content.contains(&pattern) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+async fn find_pid_for_container(
+    trimmed_container_id: &str,
+    candidate_pids: &[i32],
+) -> anyhow::Result<Option<i32>> {
+    for pid in candidate_pids {
+        let cgroup_path = format!("/proc/{}/cgroup", pid);
+        match tokio::fs::read_to_string(&cgroup_path).await {
+            Ok(content) => {
+                if cgroup_matches_container(&content, trimmed_container_id) {
+                    return Ok(Some(*pid));
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(None)
+}
+
+async fn resolve_container_pids(
+    pods: &Api<Pod>,
+    pod_name: &str,
+    ids: &[String],
+) -> anyhow::Result<Vec<i32>> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..5 {
+        let pod = pods.get(pod_name).await?;
+        let pod_uid = pod
+            .metadata
+            .uid
+            .clone()
+            .context(format!("pod {} missing metadata.uid", pod_name))?;
+        let qos = pod.status.as_ref().and_then(|st| st.qos_class.as_deref());
+
+        let cgroup_dir = find_pod_cgroup_path(&pod_uid, qos).with_context(|| {
+            format!("locating cgroup for pod {} with uid {}", pod_name, pod_uid)
+        })?;
+        let procs_path = cgroup_dir.join("cgroup.procs");
+        let procs_contents = tokio::fs::read_to_string(&procs_path)
+            .await
+            .with_context(|| format!("reading {}", procs_path.display()))?;
+        let mut available_pids: Vec<i32> = procs_contents
+            .lines()
+            .filter_map(|line| line.trim().parse::<i32>().ok())
+            .collect();
+
+        let mut resolved = Vec::with_capacity(ids.len());
+        let mut failure: Option<anyhow::Error> = None;
+
+        for id in ids {
+            let trimmed = trim_container_runtime_prefix(id);
+            match find_pid_for_container(trimmed, &available_pids).await {
+                Ok(Some(pid)) => {
+                    resolved.push(pid);
+                    available_pids.retain(|candidate| *candidate != pid);
+                }
+                Ok(None) => {
+                    failure = Some(anyhow::anyhow!(
+                        "no PID found for container {} within {}",
+                        id,
+                        procs_path.display()
+                    ));
+                    break;
+                }
+                Err(e) => {
+                    return Err(e.context(format!(
+                        "resolving pid for container {} in pod {}",
+                        id, pod_name
+                    )));
+                }
+            }
+        }
+
+        if failure.is_none() {
+            return Ok(resolved);
+        }
+        last_err = failure;
+
+        if attempt + 1 < 5 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    Err(last_err.unwrap_or_else(|| {
+        anyhow::anyhow!("failed to resolve container pids for pod {}", pod_name)
+    }))
 }
 
 async fn wait_for_tasks_with_pids(
@@ -420,7 +642,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
         .clone()
         .context("pod e2e-a missing metadata.uid")?;
     let containers_a = wait_for_container_ids(&pods, "e2e-a", 1, Duration::from_secs(90)).await?;
-    let pids_a = resolve_container_pids(&containers_a).await?;
+    let pids_a = resolve_container_pids(&pods, "e2e-a", &containers_a).await?;
 
     // Connect to NRI runtime socket
     let socket = tokio::net::UnixStream::connect(&socket_path)
@@ -460,7 +682,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     add_ephemeral_container(&pods, "e2e-a", MAIN_CONTAINER_NAME).await?;
     let containers_a_after =
         wait_for_container_ids(&pods, "e2e-a", 2, Duration::from_secs(120)).await?;
-    let pids_a_after = resolve_container_pids(&containers_a_after).await?;
+    let pids_a_after = resolve_container_pids(&pods, "e2e-a", &containers_a_after).await?;
     let update_a_after = wait_for_pod_update(
         &mut rx,
         &pod_a_uid,
@@ -486,7 +708,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
         .clone()
         .context("pod e2e-b missing metadata.uid")?;
     let containers_b = wait_for_container_ids(&pods, "e2e-b", 1, Duration::from_secs(90)).await?;
-    let pids_b = resolve_container_pids(&containers_b).await?;
+    let pids_b = resolve_container_pids(&pods, "e2e-b", &containers_b).await?;
     let _ = wait_for_pod_update(&mut rx, &pod_b_uid, 0, 0, Duration::from_secs(60)).await?;
     let update_b = wait_for_pod_update(
         &mut rx,
