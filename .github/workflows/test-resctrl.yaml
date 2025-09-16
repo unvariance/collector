@@ -41,6 +41,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Cache cargo registry and git index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-resctrl-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-resctrl-cargo-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-resctrl-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-resctrl-target-
+
       - name: Install Rust toolchain
         run: |
           rustc -V || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
