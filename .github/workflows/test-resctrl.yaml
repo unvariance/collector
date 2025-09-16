@@ -148,7 +148,7 @@ jobs:
         with:
           packages: |
             docker.io
-          cache-version: 1
+          version: 1
 
       - name: Validate Docker installation
         run: |
