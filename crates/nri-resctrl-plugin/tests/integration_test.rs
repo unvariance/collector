@@ -194,266 +194,98 @@ fn trim_container_runtime_prefix(container_id: &str) -> &str {
         .unwrap_or(container_id)
 }
 
-fn sanitized_pod_fragment(uid: &str) -> String {
-    format!("pod{}", uid.replace('-', "_"))
-}
+fn find_container_scope_path(container_id: &str) -> anyhow::Result<PathBuf> {
+    let target_name = format!("cri-containerd-{}.scope", container_id);
+    let mut stack = vec![PathBuf::from("/sys/fs/cgroup")];
 
-fn add_class_candidates<F>(push: &mut F, class: &str, pod_fragment: &str)
-where
-    F: FnMut(PathBuf),
-{
-    let base = Path::new("/sys/fs/cgroup");
-    let kubepods_slice = base.join("kubepods.slice");
-    let kubelet_slice = base.join("kubelet.slice").join("kubelet-kubepods.slice");
-    let system_slice = base
-        .join("system.slice")
-        .join("kubelet.service")
-        .join("kubepods.slice");
-    let cgroupfs_base = base.join("kubepods");
-
-    match class {
-        "Guaranteed" => {
-            push(kubepods_slice.join(format!("kubepods-{}.slice", pod_fragment)));
-            push(system_slice.join(format!("kubepods-{}.slice", pod_fragment)));
-            push(kubelet_slice.join(format!("kubelet-kubepods-{}.slice", pod_fragment)));
-            push(cgroupfs_base.join(pod_fragment));
-        }
-        "Burstable" => {
-            push(
-                kubepods_slice
-                    .join("kubepods-burstable.slice")
-                    .join(format!("kubepods-burstable-{}.slice", pod_fragment)),
-            );
-            push(
-                system_slice
-                    .join("kubepods-burstable.slice")
-                    .join(format!("kubepods-burstable-{}.slice", pod_fragment)),
-            );
-            push(
-                kubelet_slice
-                    .join("kubelet-kubepods-burstable.slice")
-                    .join(format!("kubelet-kubepods-burstable-{}.slice", pod_fragment)),
-            );
-            push(cgroupfs_base.join("burstable").join(pod_fragment));
-        }
-        "BestEffort" => {
-            push(
-                kubepods_slice
-                    .join("kubepods-besteffort.slice")
-                    .join(format!("kubepods-besteffort-{}.slice", pod_fragment)),
-            );
-            push(
-                system_slice
-                    .join("kubepods-besteffort.slice")
-                    .join(format!("kubepods-besteffort-{}.slice", pod_fragment)),
-            );
-            push(
-                kubelet_slice
-                    .join("kubelet-kubepods-besteffort.slice")
-                    .join(format!(
-                        "kubelet-kubepods-besteffort-{}.slice",
-                        pod_fragment
-                    )),
-            );
-            push(cgroupfs_base.join("besteffort").join(pod_fragment));
-            push(cgroupfs_base.join("best_effort").join(pod_fragment));
-        }
-        _ => {}
-    }
-}
-
-fn candidate_pod_cgroup_paths(uid: &str, qos: Option<&str>) -> Vec<PathBuf> {
-    let pod_fragment = sanitized_pod_fragment(uid);
-    let mut candidates = Vec::new();
-    let mut push_candidate = |path: PathBuf| {
-        if !candidates.iter().any(|existing| existing == &path) {
-            candidates.push(path);
-        }
-    };
-
-    if let Some(class) = qos {
-        add_class_candidates(&mut push_candidate, class, &pod_fragment);
-    }
-
-    for class in ["Guaranteed", "Burstable", "BestEffort"] {
-        add_class_candidates(&mut push_candidate, class, &pod_fragment);
-    }
-
-    candidates
-}
-
-fn search_pod_cgroup_path(pod_fragment: &str) -> Option<PathBuf> {
-    let mut stack = vec![(PathBuf::from("/sys/fs/cgroup"), 0usize)];
-    let search_terms = [
-        pod_fragment.to_string(),
-        format!("kubepods-{}", pod_fragment),
-        format!("kubelet-kubepods-{}", pod_fragment),
-    ];
-
-    while let Some((path, depth)) = stack.pop() {
-        if depth > 8 {
-            continue;
-        }
-        let entries = match std::fs::read_dir(&path) {
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
             Ok(entries) => entries,
-            Err(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "reading directory {} while searching for container scope: {}",
+                    dir.display(),
+                    e
+                ))
+            }
         };
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            if !entry_path.is_dir() {
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(e) => return Err(e.into()),
+            };
+
+            let file_type = match entry.file_type() {
+                Ok(file_type) => file_type,
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(e) => return Err(e.into()),
+            };
+
+            if !file_type.is_dir() {
                 continue;
             }
-            if let Some(name) = entry_path.file_name().and_then(|n| n.to_str()) {
-                if search_terms.iter().any(|term| name.contains(term)) {
-                    if entry_path.join("cgroup.procs").exists() {
-                        return Some(entry_path);
-                    }
-                }
+
+            let path = entry.path();
+            if entry.file_name().to_string_lossy() == target_name {
+                return Ok(path);
             }
-            stack.push((entry_path, depth + 1));
+
+            stack.push(path);
         }
     }
 
-    None
+    bail!(
+        "unable to locate container scope cri-containerd-{}.scope within /sys/fs/cgroup",
+        container_id
+    )
 }
 
-fn find_pod_cgroup_path(uid: &str, qos: Option<&str>) -> anyhow::Result<PathBuf> {
-    let pod_fragment = sanitized_pod_fragment(uid);
-    for path in candidate_pod_cgroup_paths(uid, qos) {
-        if path.join("cgroup.procs").exists() {
-            return Ok(path);
-        }
-    }
+async fn resolve_container_pids(ids: &[String]) -> anyhow::Result<Vec<i32>> {
+    let mut resolved = Vec::with_capacity(ids.len());
 
-    if let Some(found) = search_pod_cgroup_path(&pod_fragment) {
-        return Ok(found);
-    }
+    for id in ids {
+        let trimmed = trim_container_runtime_prefix(id);
+        let scope_dir = find_container_scope_path(trimmed)
+            .with_context(|| format!("locating scope for container id {}", id))?;
 
-    bail!("unable to locate cgroup directory for pod uid {}", uid)
-}
-
-fn cgroup_matches_container(content: &str, container_id: &str) -> bool {
-    const PREFIXES: [&str; 3] = ["cri-containerd-", "docker-", "crio-"];
-    let id_len = container_id.len();
-    if id_len == 0 {
-        return false;
-    }
-
-    let mut lengths = vec![id_len];
-    for candidate in [64usize, 48, 32, 20, 12] {
-        if candidate < id_len {
-            lengths.push(candidate);
-        }
-    }
-    lengths.sort_unstable();
-    lengths.dedup();
-    lengths.sort_unstable_by(|a, b| b.cmp(a));
-
-    for len in lengths {
-        let slice = &container_id[..len];
-        if len == id_len && content.contains(slice) {
-            return true;
-        }
-        for prefix in PREFIXES {
-            let mut pattern = String::with_capacity(prefix.len() + slice.len());
-            pattern.push_str(prefix);
-            pattern.push_str(slice);
-            if content.contains(&pattern) {
-                return true;
+        let procs_path = scope_dir.join("cgroup.procs");
+        let procs_contents = match tokio::fs::read_to_string(&procs_path).await {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let tasks_path = scope_dir.join("tasks");
+                tokio::fs::read_to_string(&tasks_path)
+                    .await
+                    .with_context(|| format!("reading PID list from {}", tasks_path.display()))?
             }
-        }
-    }
-
-    false
-}
-
-async fn find_pid_for_container(
-    trimmed_container_id: &str,
-    candidate_pids: &[i32],
-) -> anyhow::Result<Option<i32>> {
-    for pid in candidate_pids {
-        let cgroup_path = format!("/proc/{}/cgroup", pid);
-        match tokio::fs::read_to_string(&cgroup_path).await {
-            Ok(content) => {
-                if cgroup_matches_container(&content, trimmed_container_id) {
-                    return Ok(Some(*pid));
-                }
+            Err(err) => {
+                return Err(anyhow::anyhow!(
+                    "reading PID list from {}: {}",
+                    procs_path.display(),
+                    err
+                ));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        }
-    }
+        };
 
-    Ok(None)
-}
-
-async fn resolve_container_pids(
-    pods: &Api<Pod>,
-    pod_name: &str,
-    ids: &[String],
-) -> anyhow::Result<Vec<i32>> {
-    let mut last_err: Option<anyhow::Error> = None;
-    for attempt in 0..5 {
-        let pod = pods.get(pod_name).await?;
-        let pod_uid = pod
-            .metadata
-            .uid
-            .clone()
-            .context(format!("pod {} missing metadata.uid", pod_name))?;
-        let qos = pod.status.as_ref().and_then(|st| st.qos_class.as_deref());
-
-        let cgroup_dir = find_pod_cgroup_path(&pod_uid, qos).with_context(|| {
-            format!("locating cgroup for pod {} with uid {}", pod_name, pod_uid)
-        })?;
-        let procs_path = cgroup_dir.join("cgroup.procs");
-        let procs_contents = tokio::fs::read_to_string(&procs_path)
-            .await
-            .with_context(|| format!("reading {}", procs_path.display()))?;
-        let mut available_pids: Vec<i32> = procs_contents
+        let pid = procs_contents
             .lines()
             .filter_map(|line| line.trim().parse::<i32>().ok())
-            .collect();
+            .next();
 
-        let mut resolved = Vec::with_capacity(ids.len());
-        let mut failure: Option<anyhow::Error> = None;
-
-        for id in ids {
-            let trimmed = trim_container_runtime_prefix(id);
-            match find_pid_for_container(trimmed, &available_pids).await {
-                Ok(Some(pid)) => {
-                    resolved.push(pid);
-                    available_pids.retain(|candidate| *candidate != pid);
-                }
-                Ok(None) => {
-                    failure = Some(anyhow::anyhow!(
-                        "no PID found for container {} within {}",
-                        id,
-                        procs_path.display()
-                    ));
-                    break;
-                }
-                Err(e) => {
-                    return Err(e.context(format!(
-                        "resolving pid for container {} in pod {}",
-                        id, pod_name
-                    )));
-                }
-            }
-        }
-
-        if failure.is_none() {
-            return Ok(resolved);
-        }
-        last_err = failure;
-
-        if attempt + 1 < 5 {
-            tokio::time::sleep(Duration::from_millis(200)).await;
+        if let Some(pid) = pid {
+            resolved.push(pid);
+        } else {
+            return Err(anyhow::anyhow!(
+                "no PIDs listed in cgroup for container {} at {}",
+                id,
+                scope_dir.display()
+            ));
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        anyhow::anyhow!("failed to resolve container pids for pod {}", pod_name)
-    }))
+    Ok(resolved)
 }
 
 async fn wait_for_tasks_with_pids(
@@ -636,7 +468,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
         .clone()
         .context("pod e2e-a missing metadata.uid")?;
     let containers_a = wait_for_container_ids(&pods, "e2e-a", 1, Duration::from_secs(90)).await?;
-    let pids_a = resolve_container_pids(&pods, "e2e-a", &containers_a).await?;
+    let pids_a = resolve_container_pids(&containers_a).await?;
 
     // Connect to NRI runtime socket
     let socket = tokio::net::UnixStream::connect(&socket_path)
@@ -676,7 +508,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     add_ephemeral_container(&pods, "e2e-a", MAIN_CONTAINER_NAME).await?;
     let containers_a_after =
         wait_for_container_ids(&pods, "e2e-a", 2, Duration::from_secs(120)).await?;
-    let pids_a_after = resolve_container_pids(&pods, "e2e-a", &containers_a_after).await?;
+    let pids_a_after = resolve_container_pids(&containers_a_after).await?;
     let update_a_after = wait_for_pod_update(
         &mut rx,
         &pod_a_uid,
@@ -702,7 +534,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
         .clone()
         .context("pod e2e-b missing metadata.uid")?;
     let containers_b = wait_for_container_ids(&pods, "e2e-b", 1, Duration::from_secs(90)).await?;
-    let pids_b = resolve_container_pids(&pods, "e2e-b", &containers_b).await?;
+    let pids_b = resolve_container_pids(&containers_b).await?;
     let _ = wait_for_pod_update(&mut rx, &pod_b_uid, 0, 0, Duration::from_secs(60)).await?;
     let update_b = wait_for_pod_update(
         &mut rx,
