@@ -1,5 +1,4 @@
 use std::env;
-use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use libbpf_cargo::SkeletonBuilder;
@@ -24,20 +23,31 @@ fn main() {
 
     let arch = env::var("CARGO_CFG_TARGET_ARCH")
         .expect("CARGO_CFG_TARGET_ARCH must be set in build script");
+    println!("cargo:warning=bpf arch={}", arch);
 
     let vmlinux_path = vmlinux::include_path_root().join(&arch);
+    let sync_timer_include = manifest_dir
+        .join("..")
+        .join("bpf-sync-timer")
+        .join("include");
+    let vmlinux_str = vmlinux_path
+        .to_str()
+        .expect("vmlinux include path must be valid UTF-8");
+    let sync_timer_str = sync_timer_include
+        .to_str()
+        .expect("sync timer include path must be valid UTF-8");
 
     // Build the collector skeleton
     SkeletonBuilder::new()
         .source(COLLECTOR_SRC)
-        .clang_args([OsStr::new("-I"), vmlinux_path.as_os_str()])
+        .clang_args(["-I", vmlinux_str, "-I", sync_timer_str])
         .build_and_generate(&collector_out)
         .unwrap();
 
     // Build the cgroup test skeleton
     SkeletonBuilder::new()
         .source(CGROUP_TEST_SRC)
-        .clang_args([OsStr::new("-I"), vmlinux_path.as_os_str()])
+        .clang_args(["-I", vmlinux_str, "-I", sync_timer_str])
         .build_and_generate(&cgroup_test_out)
         .unwrap();
 

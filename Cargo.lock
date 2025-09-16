@@ -339,6 +339,7 @@ name = "bpf"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bpf-sync-timer",
  "libbpf-cargo",
  "libbpf-rs",
  "libc",
@@ -346,6 +347,20 @@ dependencies = [
  "nix 0.27.1",
  "perf_events",
  "plain",
+ "thiserror 1.0.69",
+ "vmlinux",
+]
+
+[[package]]
+name = "bpf-sync-timer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libbpf-cargo",
+ "libbpf-rs",
+ "libc",
+ "log",
+ "nix 0.27.1",
  "thiserror 1.0.69",
  "vmlinux",
 ]
@@ -497,6 +512,7 @@ dependencies = [
  "arrow-array",
  "arrow-schema",
  "bpf",
+ "bpf-sync-timer",
  "chrono",
  "clap",
  "env_logger 0.11.8",

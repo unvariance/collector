@@ -9,6 +9,7 @@ members = [
     "crates/perf_events",
     "crates/timeslot",
     "crates/bpf",
+    "crates/bpf-sync-timer",
     "crates/nri",
     "crates/trace-analysis",
     "crates/nri-init",
@@ -21,6 +22,7 @@ collector = { path = "crates/collector" }
 perf_events = { path = "crates/perf_events" }
 timeslot = { path = "crates/timeslot" }
 bpf = { path = "crates/bpf" }
+bpf-sync-timer = { path = "crates/bpf-sync-timer" }
 nri = { path = "crates/nri" }
 resctrl = { path = "crates/resctrl" }
 nri-resctrl-plugin = { path = "crates/nri-resctrl-plugin" }

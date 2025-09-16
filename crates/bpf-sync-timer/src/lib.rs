@@ -4,23 +4,27 @@ use nix::sched::{sched_getaffinity, sched_getcpu, sched_setaffinity, CpuSet};
 use nix::unistd::Pid;
 use std::fs;
 use std::io;
+use std::mem::MaybeUninit;
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 use thiserror::Error;
 
-// Import the auto-generated enums from BPF skeleton
-use crate::bpf::types::{sync_timer_init_error, sync_timer_mode};
+mod bpf {
+    include!("bpf/sync_timer.skel.rs");
+}
 
-impl sync_timer_mode {
+use libbpf_rs::skel::{OpenSkel, SkelBuilder};
+use libbpf_rs::{set_print, OpenObject, PrintLevel};
+
+pub use self::bpf::types::{sync_timer_init_error, sync_timer_mode};
+
+impl bpf::types::sync_timer_mode {
     fn description(&self) -> &'static str {
         match self {
-            sync_timer_mode::SYNC_TIMER_MODE_MODERN => {
-                "modern CPU pinning + absolute time (kernel 6.7+)"
-            }
-            sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE => {
+            Self::SYNC_TIMER_MODE_MODERN => "modern CPU pinning + absolute time (kernel 6.7+)",
+            Self::SYNC_TIMER_MODE_INTERMEDIATE => {
                 "intermediate absolute time only (kernel 6.4-6.6)"
             }
-            sync_timer_mode::SYNC_TIMER_MODE_LEGACY => {
-                "legacy relative time only (kernel 5.15-6.3)"
-            }
+            Self::SYNC_TIMER_MODE_LEGACY => "legacy relative time only (kernel 5.15-6.3)",
         }
     }
 }
@@ -96,9 +100,96 @@ pub enum SyncTimerError {
 
     #[error("All timer initialization methods failed (modern, intermediate, and legacy)")]
     AllMethodsFailed,
+
+    #[error("Failed to open sync timer BPF skeleton")]
+    SkeletonOpenFailed(#[source] libbpf_rs::Error),
+
+    #[error("Failed to load sync timer BPF skeleton")]
+    SkeletonLoadFailed(#[source] libbpf_rs::Error),
+
+    #[error("Failed to duplicate timer map file descriptor")]
+    MapFdDupFailed(#[source] io::Error),
 }
 
 const TIMER_MIGRATION_SYSCTL_PATH: &str = "/proc/sys/kernel/timer_migration";
+
+pub struct SyncTimer {
+    skel: bpf::SyncTimerSkel<'static>,
+    allocated_mask: u64,
+    interval_ns: u64,
+}
+
+impl SyncTimer {
+    pub fn start(interval_ns: u64) -> Result<Self, SyncTimerError> {
+        fn print_to_log(level: PrintLevel, msg: String) {
+            match level {
+                PrintLevel::Debug => debug!("{}", msg),
+                PrintLevel::Info => info!("{}", msg),
+                PrintLevel::Warn => warn!("{}", msg),
+            }
+        }
+
+        set_print(Some((PrintLevel::Debug, print_to_log)));
+
+        let interval = interval_ns.max(1);
+
+        let skel_builder = bpf::SyncTimerSkelBuilder::default();
+        let obj_ref = Box::leak(Box::new(MaybeUninit::<OpenObject>::uninit()));
+        let open_skel = skel_builder
+            .open(obj_ref)
+            .map_err(SyncTimerError::SkeletonOpenFailed)?;
+
+        open_skel.maps.data_data.sync_timer_interval_ns = interval;
+
+        let skel = open_skel
+            .load()
+            .map_err(SyncTimerError::SkeletonLoadFailed)?;
+
+        initialize_sync_timer(&skel.progs.sync_timer_init_shared)?;
+
+        Ok(Self {
+            skel,
+            allocated_mask: 0,
+            interval_ns: interval,
+        })
+    }
+
+    pub fn interval_ns(&self) -> u64 {
+        self.interval_ns
+    }
+
+    pub fn duplicate_map_fd(&self) -> Result<OwnedFd, SyncTimerError> {
+        let fd = self.skel.maps.sync_timer_bitmap.as_fd().as_raw_fd();
+        let dup = unsafe { libc::dup(fd) };
+        if dup < 0 {
+            return Err(SyncTimerError::MapFdDupFailed(io::Error::last_os_error()));
+        }
+        // SAFETY: dup returns a new owned file descriptor on success
+        let owned = unsafe { OwnedFd::from_raw_fd(dup) };
+        Ok(owned)
+    }
+
+    pub fn assign_id(&mut self) -> Result<u8, AssignIdError> {
+        for id in 0..64 {
+            let bit = 1u64 << id;
+            if self.allocated_mask & bit == 0 {
+                self.allocated_mask |= bit;
+                return Ok(id as u8);
+            }
+        }
+        Err(AssignIdError::Exhausted)
+    }
+
+    pub fn skel(&self) -> &bpf::SyncTimerSkel<'static> {
+        &self.skel
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum AssignIdError {
+    #[error("No sync timer subscription IDs available")]
+    Exhausted,
+}
 
 /// Read the current value of kernel.timer_migration sysctl
 fn read_timer_migration_sysctl() -> Result<u8, SyncTimerError> {
@@ -119,7 +210,8 @@ fn write_timer_migration_sysctl(value: u8) -> Result<(), SyncTimerError> {
         .map_err(SyncTimerError::SysctlWriteFailed)
 }
 
-/// Initializes and starts a synchronized timer on all available CPU cores with three-way fallback support
+/// Initializes and starts the synchronized timer on all available CPU cores using
+/// the provided BPF program. This is invoked internally by `SyncTimer::start`.
 ///
 /// This function attempts to initialize BPF timers using three different methods in order of preference:
 ///
@@ -155,18 +247,19 @@ fn write_timer_migration_sysctl(value: u8) -> Result<(), SyncTimerError> {
 ///     }
 /// }
 /// ```
-pub fn initialize_sync_timer(
-    timer_init_prog: &libbpf_rs::ProgramMut,
-) -> Result<(), SyncTimerError> {
+fn initialize_sync_timer(timer_init_prog: &libbpf_rs::ProgramMut) -> Result<(), SyncTimerError> {
     info!("Initializing synchronized timer on all cores...");
 
     // Try modern pinning first (kernel 6.7+)
     debug!("Attempting modern timer initialization with CPU pinning + absolute time...");
-    match initialize_timers_with_mode(timer_init_prog, sync_timer_mode::SYNC_TIMER_MODE_MODERN) {
+    match initialize_timers_with_mode(
+        timer_init_prog,
+        bpf::types::sync_timer_mode::SYNC_TIMER_MODE_MODERN,
+    ) {
         Ok(()) => {
             info!(
                 "Successfully initialized timers using {}",
-                sync_timer_mode::SYNC_TIMER_MODE_MODERN.description()
+                bpf::types::sync_timer_mode::SYNC_TIMER_MODE_MODERN.description()
             );
             return Ok(());
         }
@@ -180,12 +273,12 @@ pub fn initialize_sync_timer(
     info!("Attempting intermediate timer initialization with absolute time only...");
     match initialize_timers_with_mode(
         timer_init_prog,
-        sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE,
+        bpf::types::sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE,
     ) {
         Ok(()) => {
             info!(
                 "Successfully initialized timers using {}",
-                sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE.description()
+                bpf::types::sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE.description()
             );
             return Ok(());
         }
@@ -197,11 +290,14 @@ pub fn initialize_sync_timer(
 
     // Fall back to legacy method (kernel 5.15-6.3)
     info!("Attempting legacy timer initialization with relative time only...");
-    match initialize_timers_with_mode(timer_init_prog, sync_timer_mode::SYNC_TIMER_MODE_LEGACY) {
+    match initialize_timers_with_mode(
+        timer_init_prog,
+        bpf::types::sync_timer_mode::SYNC_TIMER_MODE_LEGACY,
+    ) {
         Ok(()) => {
             info!(
                 "Successfully initialized timers using {}",
-                sync_timer_mode::SYNC_TIMER_MODE_LEGACY.description()
+                bpf::types::sync_timer_mode::SYNC_TIMER_MODE_LEGACY.description()
             );
             Ok(())
         }
@@ -222,7 +318,8 @@ fn initialize_timers_with_mode(
     // For intermediate and legacy modes, temporarily disable timer migration
     if matches!(
         mode,
-        sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE | sync_timer_mode::SYNC_TIMER_MODE_LEGACY
+        bpf::types::sync_timer_mode::SYNC_TIMER_MODE_INTERMEDIATE
+            | bpf::types::sync_timer_mode::SYNC_TIMER_MODE_LEGACY
     ) {
         let current_migration = read_timer_migration_sysctl()?;
         debug!(
@@ -380,21 +477,24 @@ fn initialize_timer_on_core(
         })?;
 
     // Check return value using the auto-generated enum
-    if output.return_value != sync_timer_init_error::SYNC_TIMER_SUCCESS as u32 {
+    if output.return_value != bpf::types::sync_timer_init_error::SYNC_TIMER_SUCCESS as u32 {
         return match output.return_value {
-            v if v == sync_timer_init_error::SYNC_TIMER_MAP_UPDATE_FAILED as u32 => {
+            v if v == bpf::types::sync_timer_init_error::SYNC_TIMER_MAP_UPDATE_FAILED as u32 => {
                 Err(SyncTimerError::MapUpdateFailed { cpu: cpu_id })
             }
-            v if v == sync_timer_init_error::SYNC_TIMER_MAP_LOOKUP_FAILED as u32 => {
+            v if v == bpf::types::sync_timer_init_error::SYNC_TIMER_MAP_LOOKUP_FAILED as u32 => {
                 Err(SyncTimerError::MapLookupFailed { cpu: cpu_id })
             }
-            v if v == sync_timer_init_error::SYNC_TIMER_TIMER_INIT_FAILED as u32 => {
+            v if v == bpf::types::sync_timer_init_error::SYNC_TIMER_TIMER_INIT_FAILED as u32 => {
                 Err(SyncTimerError::TimerInitFailed { cpu: cpu_id })
             }
-            v if v == sync_timer_init_error::SYNC_TIMER_TIMER_SET_CALLBACK_FAILED as u32 => {
+            v if v
+                == bpf::types::sync_timer_init_error::SYNC_TIMER_TIMER_SET_CALLBACK_FAILED
+                    as u32 =>
+            {
                 Err(SyncTimerError::TimerSetCallbackFailed { cpu: cpu_id })
             }
-            v if v == sync_timer_init_error::SYNC_TIMER_TIMER_START_FAILED as u32 => {
+            v if v == bpf::types::sync_timer_init_error::SYNC_TIMER_TIMER_START_FAILED as u32 => {
                 Err(SyncTimerError::TimerStartFailed { cpu: cpu_id })
             }
             unknown => Err(SyncTimerError::UnknownBpfError {

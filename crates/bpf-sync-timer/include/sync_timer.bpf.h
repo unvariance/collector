@@ -1,10 +1,18 @@
 #pragma once
 
-#define NSEC_PER_MSEC 1000000ULL
 #define CLOCK_MONOTONIC 1
 
 /* Define AF_INET constant for BPF context */
 #define AF_INET 2
+
+#define SYNC_TIMER_DEFAULT_INTERVAL_NS 1000000ULL
+
+extern volatile __u64 sync_timer_interval_ns;
+
+static __always_inline __u64 __sync_timer_effective_interval()
+{
+    return sync_timer_interval_ns ? sync_timer_interval_ns : SYNC_TIMER_DEFAULT_INTERVAL_NS;
+}
 
 /* Timer initialization modes */
 enum sync_timer_mode {
@@ -37,6 +45,7 @@ struct sync_timer_state {
     __u32 expected_cpu;   // CPU ID this timer should fire on
     __u64 timer_flags;    // Pre-computed timer flags for bpf_timer_start()
     __u8 init_mode;       // Initialization mode (0=modern, 1=intermediate, 2=legacy)
+    __u64 interval_ns;    // Interval for the timer
 };
 
 /* Helper function to calculate absolute difference */
@@ -74,7 +83,8 @@ static __always_inline int __sync_timer_shared_callback(
     void (*callback_func)(__u32)  // Modified to pass expected CPU ID
 ) {
     __u64 now = bpf_ktime_get_ns();
-    __u64 expected_tick = now / NSEC_PER_MSEC;
+    __u64 interval = state->interval_ns ? state->interval_ns : __sync_timer_effective_interval();
+    __u64 expected_tick = now / interval;
     __u64 actual_tick = state->last_tick + 1;
     __u64 delta;
 
@@ -90,10 +100,10 @@ static __always_inline int __sync_timer_shared_callback(
     state->last_tick = actual_tick;
 
     /* Calculate timing delta */
-    delta = __sync_timer_abs_diff(now, actual_tick * NSEC_PER_MSEC);
+    delta = __sync_timer_abs_diff(now, actual_tick * interval);
 
     /* Calculate next absolute time for timer */
-    state->next_expected = __sync_timer_align_to_interval(now + NSEC_PER_MSEC, NSEC_PER_MSEC);
+    state->next_expected = __sync_timer_align_to_interval(now + interval, interval);
 
     /* Reschedule timer using computed start parameter */
     __u64 start_param = __sync_timer_compute_start_param(state->next_expected, state->timer_flags);
@@ -155,7 +165,10 @@ static __always_inline int __sync_timer_shared_init(
 
     /* Initialize timer */
     now = bpf_ktime_get_ns();
-    state->next_expected = __sync_timer_align_to_interval(now + NSEC_PER_MSEC, NSEC_PER_MSEC);
+    __u64 interval = __sync_timer_effective_interval();
+    state->interval_ns = interval;
+    state->last_tick = now / interval;
+    state->next_expected = __sync_timer_align_to_interval(now + interval, interval);
     
     ret = bpf_timer_init(&state->timer, timer_states_map, CLOCK_MONOTONIC);
     if (ret < 0) {

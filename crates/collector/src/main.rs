@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use arrow_array::RecordBatch;
 use bpf::BpfLoader;
+use bpf_sync_timer::SyncTimer;
 use clap::Parser;
 use log::{debug, error, info};
 use object_store::ObjectStore;
@@ -41,6 +42,8 @@ const TIMESLOT_PERF_RING_PAGES: u32 = 32;
 
 /// Number of perf ring buffer pages for trace mode (needs more buffering)
 const TRACE_PERF_RING_PAGES: u32 = 256;
+/// Interval for sync timer ticks (1 ms)
+const SYNC_TIMER_INTERVAL_NS: u64 = 1_000_000;
 
 /// Linux process monitoring tool
 #[derive(Debug, Parser)]
@@ -308,10 +311,13 @@ async fn main() -> Result<()> {
     } else {
         TIMESLOT_PERF_RING_PAGES
     };
-    let mut bpf_loader = BpfLoader::new(perf_ring_pages)?;
+    let mut sync_timer = SyncTimer::start(SYNC_TIMER_INTERVAL_NS)
+        .map_err(|e| anyhow!("failed to start sync timer: {}", e))?;
+    let subscriber_id = sync_timer
+        .assign_id()
+        .map_err(|e| anyhow!("failed to assign sync timer subscriber id: {}", e))?;
 
-    // Initialize the sync timer
-    bpf_loader.start_sync_timer()?;
+    let mut bpf_loader = BpfLoader::new(perf_ring_pages, &sync_timer, subscriber_id)?;
 
     // Create PerfEventProcessor with the appropriate mode
     let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, processor_mode);

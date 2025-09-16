@@ -4,7 +4,7 @@
 #include <bpf/bpf_core_read.h>
 
 #include "collector.h"
-#include "sync_timer.bpf.h"
+#include "sync_timer_bitmap.bpf.h"
 // Map to track which tasks have had metadata reported
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
@@ -28,26 +28,16 @@ struct {
     __uint(value_size, sizeof(u32));
 } events SEC(".maps");
 
-// Timer firing state tracking
-enum timer_fire_state {
-    TIMER_RESET = 0,
-    TIMER_FIRED = 1,
-    TIMER_MIGRATION_DETECTED = 2,
-};
-
-// Structure to track timer firing state with expected CPU
-struct timer_fire_info {
-    enum timer_fire_state state;
-    __u32 expected_cpu;
-};
-
-// Per-CPU array to track timer firing state and expected CPU
+// Shared timer bitmap reused from the sync timer crate
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(key_size, sizeof(__u32));
-    __uint(value_size, sizeof(struct timer_fire_info));
+    __uint(value_size, sizeof(struct sync_timer_bitmap_entry));
     __uint(max_entries, 1);
-} timer_fired SEC(".maps");
+} sync_timer_bitmap SEC(".maps");
+
+// Subscriber ID assigned by userspace for the collector handler
+volatile __u64 collector_sync_timer_id;
 
 // Declare the perf event arrays for hardware counters
 struct {
@@ -98,7 +88,6 @@ struct task_free_msg task_free_msg_ = {0};
 struct timer_finished_processing_msg timer_finished_processing_msg_ = {0};
 struct perf_measurement_msg perf_measurement_msg_ = {0};
 struct timer_migration_msg timer_migration_msg_ = {0};
-enum timer_fire_state timer_fire_state_ = 0;
 
 // Initialize value for task storage
 static const __u64 TASK_METADATA_INIT = 0;  // 0 = not reported yet
@@ -384,69 +373,36 @@ static __always_inline int send_timer_finished_processing(void *ctx)
                                 sizeof(msg) - sizeof(__u32));
 }
 
-void sync_timer_callback(__u32 expected_cpu)
-{
-    // Set the timer fired flag for this CPU
-    __u32 key = 0;
-    __u32 actual_cpu = bpf_get_smp_processor_id();
-    
-    struct timer_fire_info info = {};
-    info.expected_cpu = expected_cpu;
-    
-    // Check if timer fired on the wrong CPU
-    if (actual_cpu != expected_cpu) {
-        info.state = TIMER_MIGRATION_DETECTED;
-    } else {
-        info.state = TIMER_FIRED;
-    }
-    
-    bpf_map_update_elem(&timer_fired, &key, &info, BPF_ANY);
-}
-
 /* HR Timer expire exit tracepoint handler */
 SEC("tracepoint/timer/hrtimer_expire_exit")
 int handle_hrtimer_expire_exit(void *ctx)
 {
+    __u64 id = collector_sync_timer_id;
+    if (id >= 64)
+        return 0;
+
+    int triggered = sync_timer_check_and_reset(&sync_timer_bitmap, id);
+    if (!triggered)
+        return 0;
+
     __u32 key = 0;
-    
-    // Check if our timer fired on this CPU
-    struct timer_fire_info *info = bpf_map_lookup_elem(&timer_fired, &key);
-    if (!info || info->state == TIMER_RESET) {
-        // Not our timer or no timer fired
+    struct sync_timer_bitmap_entry *entry = bpf_map_lookup_elem(&sync_timer_bitmap, &key);
+    if (!entry)
+        return 0;
+
+    __u32 cpu = bpf_get_smp_processor_id();
+    if (entry->expected_cpu != cpu) {
+        send_timer_migration_alert(ctx, entry->expected_cpu, cpu);
         return 0;
     }
-    
-    // Handle timer migration detection
-    if (info->state == TIMER_MIGRATION_DETECTED) {
-        // Send migration alert to userspace
-        __u32 cpu = bpf_get_smp_processor_id();
-        send_timer_migration_alert(ctx, info->expected_cpu, cpu);
-        goto reset_and_exit;
-    }
-    
-    // Normal timer processing (no migration detected)
-    // Get current task
-    struct task_struct *current_task = bpf_get_current_task_btf();
-    
-    // Check and send metadata if needed
-    check_and_send_metadata(ctx, current_task);
 
-    // Collect and send performance measurements before sending timer finished message (timer event)
+    struct task_struct *current_task = bpf_get_current_task_btf();
+
+    check_and_send_metadata(ctx, current_task);
     collect_and_send_perf_measurements(ctx, current_task, 0, 0);
-    
-    // Send the timer processing finished message
     send_timer_finished_processing(ctx);
-    
-reset_and_exit:
-    // Reset the flag
-    struct timer_fire_info reset_info = {};
-    reset_info.state = TIMER_RESET;
-    reset_info.expected_cpu = info->expected_cpu;
-    bpf_map_update_elem(&timer_fired, &key, &reset_info, BPF_ANY);
-    
+
     return 0;
 }
-
-DEFINE_SYNC_TIMER(collect, sync_timer_callback);
 
 char LICENSE[] SEC("license") = "GPL"; 

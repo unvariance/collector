@@ -19,6 +19,7 @@ perf_events = { workspace = true }
 nix = { version = "0.27.1", features = ["sched"] }
 timeslot = { workspace = true }
 bpf = { workspace = true }
+bpf-sync-timer = { workspace = true }
 arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 parquet = { workspace = true }
