@@ -963,6 +963,17 @@ mod tests {
             }
             _ => panic!("unexpected event type"),
         }
+
+        // Verify tasks file now includes the PIDs from both containers
+        let group_path = "/sys/fs/resctrl/pod_u123";
+        let pids = plugin
+            .resctrl
+            .list_group_tasks(group_path)
+            .expect("list tasks");
+        assert!(pids.contains(&1));
+        assert!(pids.contains(&2));
+        assert!(pids.contains(&3));
+        assert!(pids.contains(&4));
     }
 
     #[tokio::test]
@@ -1102,22 +1113,39 @@ mod tests {
         let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
         use crate::pid_source::test_support::MockCgroupPidSource;
-        let mock_pid_src = MockCgroupPidSource::new();
         let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(8);
-        let plugin = ResctrlPlugin::with_pid_source(
-            ResctrlPluginConfig::default(),
-            rc,
-            tx,
-            Arc::new(mock_pid_src),
-        );
 
-        // Define a pod sandbox
+        // Define a pod sandbox and a container up-front so we can seed PIDs
+        // into the mock pid source for the full cgroup path
         let pod = nri::api::PodSandbox {
             id: "pod-sb-run-test".into(),
             uid: "u789".into(),
             ..Default::default()
         };
+        let linux = nri::api::LinuxContainer {
+            cgroups_path: "/cg/x:cri-containerd:c1".into(),
+            ..Default::default()
+        };
+        let ctr = nri::api::Container {
+            id: "c1".into(),
+            pod_sandbox_id: pod.id.clone(),
+            linux: protobuf::MessageField::some(linux),
+            ..Default::default()
+        };
+        let full_cg = nri::compute_full_cgroup_path(&ctr, Some(&pod));
 
+        // Seed mock PIDs for this container
+        let mut pid_src = Arc::new(MockCgroupPidSource::new());
+        Arc::get_mut(&mut pid_src)
+            .unwrap()
+            .set_pids(full_cg, vec![7777]);
+
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            pid_src,
+        );
         // Send RUN_POD_SANDBOX via state_change
         let ctx = TtrpcContext {
             mh: ttrpc::MessageHeader::default(),
@@ -1153,18 +1181,7 @@ mod tests {
         // Verify the directory for the resctrl group was created
         assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789")));
 
-        // After pod exists, add a container for it. With MockCgroupPidSource returning
-        // an empty PID list, reconcile is a no-op and considered complete (counts 1/1).
-        let linux = nri::api::LinuxContainer {
-            cgroups_path: "/cg/x:cri-containerd:c1".into(),
-            ..Default::default()
-        };
-        let ctr = nri::api::Container {
-            id: "c1".into(),
-            pod_sandbox_id: pod.id.clone(),
-            linux: protobuf::MessageField::some(linux),
-            ..Default::default()
-        };
+        // After pod exists, add a container for it and expect reconcile to complete
         let _ = Plugin::create_container(
             &plugin,
             &ctx,
@@ -1191,6 +1208,13 @@ mod tests {
         })
         .await
         .ok();
+
+        // Verify the tasks file includes the seeded PID
+        let pids = plugin
+            .resctrl
+            .list_group_tasks("/sys/fs/resctrl/pod_u789")
+            .expect("list tasks");
+        assert!(pids.contains(&7777));
 
         // Remove the container → expect counts 0/0
         let _ = Plugin::state_change(

@@ -810,7 +810,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|limit| *limit > 0)
-        .unwrap_or(32);
+        .unwrap_or(1024);
     let filler_budget = num_rmids_limit.saturating_add(2);
     for idx in 0..filler_budget {
         let dir = root.join(format!("{}{}", filler_prefix, idx));
@@ -836,8 +836,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         for path in filler_dirs.iter().rev() {
             let _ = fs::remove_dir(path);
         }
-        eprintln!("resctrl capacity not exhausted; skipping capacity retry test");
-        return Ok(());
+        bail!("resctrl capacity not exhausted; expected ENOSPC while creating filler groups");
     }
 
     // Release one slot later; track remaining fillers for cleanup.
@@ -845,26 +844,36 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         .pop()
         .context("at least one filler dir expected")?;
 
-    // Prepare a real cgroup for the container PIDs.
-    let cgroup_path = PathBuf::from("/sys/fs/cgroup/resctrl-e2e-capacity");
-    let _ = fs::remove_dir(&cgroup_path);
-    fs::create_dir_all(&cgroup_path)?;
+    // Previously: spawned a helper process and created a synthetic cgroup.
+    // Updated: use actual Kubernetes pod/container for PIDs and cgroup path.
 
-    // Spawn a helper process and attach it to the cgroup for PID enumeration.
-    let mut child = Command::new("sleep").arg("300").spawn()?;
-    let child_pid = child.id();
-    fs::write(cgroup_path.join("cgroup.procs"), format!("{}\n", child_pid))?;
+    // Create a real Kubernetes pod and derive its UID/CG path to feed the plugin
+    let kube_client = Client::try_default().await?;
+    let pods: Api<Pod> = Api::default_namespaced(kube_client);
+    let test_pod_name = "e2e-capacity";
+    delete_pod_if_exists(&pods, test_pod_name).await?;
+    let _kpod = create_sleep_pod(&pods, test_pod_name).await?;
+    let running = wait_for_pod_running(&pods, test_pod_name, Duration::from_secs(120)).await?;
+    let pod_uid = running
+        .metadata
+        .uid
+        .clone()
+        .context("pod missing metadata.uid")?;
+    let container_ids = wait_for_container_ids(&pods, test_pod_name, 1, Duration::from_secs(90)).await?;
+    let pids = resolve_container_pids(&container_ids).await?;
+    // Compute the container cgroup scope path from the container id
+    let cg_scope = find_container_scope_path(trim_container_runtime_prefix(&container_ids[0]))?;
 
     let pod = nri::api::PodSandbox {
         id: "sb-capacity".into(),
-        uid: "uid-capacity".into(),
+        uid: pod_uid.clone(),
         ..Default::default()
     };
     let container = nri::api::Container {
         id: "ctr-capacity".into(),
         pod_sandbox_id: pod.id.clone(),
         linux: protobuf::MessageField::some(nri::api::LinuxContainer {
-            cgroups_path: cgroup_path.to_string_lossy().into_owned(),
+            cgroups_path: cg_scope.to_string_lossy().into_owned(),
             ..Default::default()
         }),
         ..Default::default()
@@ -954,23 +963,24 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         other => bail!("unexpected event after retry_all_once: {:?}", other),
     }
 
-    // Validate tasks file contains the helper PID.
+    // Validate tasks file contains the container PID(s).
     let tasks_contents = tokio::fs::read_to_string(Path::new(&group_path).join("tasks"))
         .await
         .with_context(|| format!("reading tasks for {}", group_path))?;
-    anyhow::ensure!(
-        tasks_contents
-            .lines()
-            .any(|line| line.trim() == child_pid.to_string()),
-        "tasks file {} missing PID {} (contents: {})",
-        group_path,
-        child_pid,
-        tasks_contents
-    );
+    for pid in &pids {
+        anyhow::ensure!(
+            tasks_contents
+                .lines()
+                .any(|line| line.trim() == pid.to_string()),
+            "tasks file {} missing PID {} (contents: {})",
+            group_path,
+            pid,
+            tasks_contents
+        );
+    }
 
-    // Cleanup: terminate helper process and ensure group removal.
-    let _ = child.kill();
-    let _ = child.wait();
+    // Cleanup: delete the real Kubernetes pod and ensure group removal.
+    delete_pod_if_exists(&pods, test_pod_name).await?;
     let _ = nri::api_ttrpc::Plugin::state_change(
         &plugin,
         &ctx,
@@ -985,11 +995,10 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     let _ = timeout(Duration::from_secs(2), rx.recv()).await;
     let _ = wait_for_group_absent(&group_path, Duration::from_secs(10)).await;
 
-    // Cleanup filler dirs and the temporary cgroup.
+    // Cleanup filler dirs.
     for path in filler_dirs.into_iter().rev() {
         let _ = fs::remove_dir(path);
     }
-    let _ = fs::remove_dir(&cgroup_path);
 
     Ok(())
 }

@@ -63,7 +63,7 @@ Counters increment whenever a container becomes known, increment again when it r
 
 - `src/lib.rs` mocked tests (existing) cover auto-mount true/false, startup cleanup, retry flows, and now verify PID assignment via `list_group_tasks` in addition to event sequencing.
 - `tests/integration_test.rs::test_plugin_full_flow` (new) drives a live KIND cluster: pre/post registration pods, `kubectl debug` ephemeral container addition, and pod removal cleanup.
-- `tests/integration_test.rs::test_cleanup_on_start_removes_only_prefix` (new) covers startup cleanup with a mocked filesystem.
+- `src/lib.rs::test_cleanup_on_start_removes_only_prefix` (existing) covers startup cleanup with a mocked filesystem.
 - `tests/integration_test.rs::test_startup_cleanup_e2e` (new) validates `cleanup_on_start` behavior against the real resctrl filesystem.
 - `tests/integration_test.rs::test_capacity_retry_e2e` (new) exercises RMID exhaustion, retry flows, and PID verification on hardware.
 
