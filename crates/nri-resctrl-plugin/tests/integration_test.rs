@@ -1,6 +1,10 @@
+use std::path::Path;
 use std::time::Duration;
 
+use anyhow::{bail, Context};
+use serde_json::Value;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 fn init_test_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -9,7 +13,9 @@ fn init_test_logger() {
 }
 
 use nri::NRI;
-use nri_resctrl_plugin::{PodResctrlEvent, ResctrlPlugin, ResctrlPluginConfig};
+use nri_resctrl_plugin::{
+    PodResctrlAddOrUpdate, PodResctrlEvent, ResctrlGroupState, ResctrlPlugin, ResctrlPluginConfig,
+};
 
 async fn run_kubectl(args: &[&str]) -> anyhow::Result<()> {
     let status = tokio::process::Command::new("kubectl")
@@ -18,6 +24,247 @@ async fn run_kubectl(args: &[&str]) -> anyhow::Result<()> {
         .await?;
     anyhow::ensure!(status.success(), "kubectl {:?} failed: {:?}", args, status);
     Ok(())
+}
+
+async fn kubectl_json(args: &[&str]) -> anyhow::Result<Value> {
+    let output = tokio::process::Command::new("kubectl")
+        .args(args)
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "kubectl {:?} failed: {:?}",
+        args,
+        output.status
+    );
+    let v: Value = serde_json::from_slice(&output.stdout)?;
+    Ok(v)
+}
+
+async fn load_pod_json(name: &str) -> anyhow::Result<Value> {
+    kubectl_json(&["get", "pod", name, "-o", "json"]).await
+}
+
+fn gather_container_ids(pod: &Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if let Some(status) = pod.get("status") {
+        if let Some(arr) = status.get("containerStatuses").and_then(Value::as_array) {
+            for entry in arr {
+                if let (Some(name), Some(id)) = (
+                    entry.get("name").and_then(Value::as_str),
+                    entry.get("containerID").and_then(Value::as_str),
+                ) {
+                    if !id.is_empty() {
+                        out.push((name.to_string(), id.to_string()));
+                    }
+                }
+            }
+        }
+        if let Some(arr) = status
+            .get("ephemeralContainerStatuses")
+            .and_then(Value::as_array)
+        {
+            for entry in arr {
+                if let (Some(name), Some(id)) = (
+                    entry.get("name").and_then(Value::as_str),
+                    entry.get("containerID").and_then(Value::as_str),
+                ) {
+                    if !id.is_empty() {
+                        out.push((name.to_string(), id.to_string()));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+async fn wait_for_container_ids(
+    pod_name: &str,
+    expected: usize,
+    timeout: Duration,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let pod = load_pod_json(pod_name).await?;
+        let ids = gather_container_ids(&pod);
+        if ids.len() >= expected {
+            return Ok(ids);
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for {} containers on pod {}; last seen {}",
+                expected,
+                pod_name,
+                ids.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
+fn trim_container_runtime_prefix(container_id: &str) -> &str {
+    container_id
+        .split_once("//")
+        .map(|(_, rest)| rest)
+        .unwrap_or(container_id)
+}
+
+async fn container_pid(container_id: &str) -> anyhow::Result<i32> {
+    let trimmed = trim_container_runtime_prefix(container_id);
+    let output = tokio::process::Command::new("crictl")
+        .args(["inspect", "--output", "json", trimmed])
+        .output()
+        .await?;
+    anyhow::ensure!(
+        output.status.success(),
+        "crictl inspect failed for {}: {:?}",
+        container_id,
+        output.status
+    );
+    let v: Value = serde_json::from_slice(&output.stdout)?;
+    let pid = v
+        .pointer("/info/pid")
+        .and_then(Value::as_i64)
+        .or_else(|| v.pointer("/status/pid").and_then(Value::as_i64))
+        .or_else(|| v.pointer("/status/linux/pid").and_then(Value::as_i64))
+        .context("PID not found in crictl inspect output")?;
+    Ok(pid as i32)
+}
+
+async fn resolve_container_pids(ids: &[(String, String)]) -> anyhow::Result<Vec<i32>> {
+    let mut pids = Vec::with_capacity(ids.len());
+    for (_, id) in ids {
+        pids.push(container_pid(id).await?);
+    }
+    Ok(pids)
+}
+
+async fn wait_for_tasks_with_pids(
+    group_path: &str,
+    expected_pids: &[i32],
+    timeout: Duration,
+) -> anyhow::Result<Vec<i32>> {
+    let tasks_path = Path::new(group_path).join("tasks");
+    let deadline = Instant::now() + timeout;
+    loop {
+        match tokio::fs::read_to_string(&tasks_path).await {
+            Ok(contents) => {
+                let pids: Vec<i32> = contents
+                    .lines()
+                    .filter_map(|l| l.trim().parse::<i32>().ok())
+                    .collect();
+                if expected_pids.iter().all(|pid| pids.contains(pid)) {
+                    return Ok(pids);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+
+        if Instant::now() >= deadline {
+            bail!(
+                "timed out waiting for tasks file {} to include {:?}",
+                tasks_path.display(),
+                expected_pids
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_group_absent(group_path: &str, timeout: Duration) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match tokio::fs::metadata(group_path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "group {} still present after waiting {:?}",
+                group_path,
+                timeout
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn wait_for_pod_update(
+    rx: &mut mpsc::Receiver<PodResctrlEvent>,
+    pod_uid: &str,
+    expected_total: usize,
+    expected_reconciled: usize,
+    timeout: Duration,
+) -> anyhow::Result<PodResctrlAddOrUpdate> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = match deadline.checked_duration_since(Instant::now()) {
+            Some(rem) if !rem.is_zero() => rem,
+            _ => {
+                bail!(
+                    "timed out waiting for AddOrUpdate for pod {} with counts {}/{}",
+                    pod_uid,
+                    expected_total,
+                    expected_reconciled
+                )
+            }
+        };
+        let ev = match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(ev)) => ev,
+            Ok(None) => bail!("event channel closed while waiting for pod {pod_uid}"),
+            Err(_) => {
+                bail!(
+                    "timed out waiting for AddOrUpdate for pod {} with counts {}/{}",
+                    pod_uid,
+                    expected_total,
+                    expected_reconciled
+                )
+            }
+        };
+        match ev {
+            PodResctrlEvent::AddOrUpdate(add) if add.pod_uid == pod_uid => {
+                if add.total_containers == expected_total
+                    && add.reconciled_containers == expected_reconciled
+                {
+                    return Ok(add);
+                }
+            }
+            PodResctrlEvent::Removed(r) if r.pod_uid == pod_uid => {
+                bail!(
+                    "saw premature Removed event for pod {} while waiting for counts",
+                    pod_uid
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+async fn wait_for_pod_removed(
+    rx: &mut mpsc::Receiver<PodResctrlEvent>,
+    pod_uid: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = match deadline.checked_duration_since(Instant::now()) {
+            Some(rem) if !rem.is_zero() => rem,
+            _ => bail!("timed out waiting for Removed event for pod {}", pod_uid),
+        };
+        let ev = match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Some(ev)) => ev,
+            Ok(None) => bail!("event channel closed while waiting for removal of {pod_uid}"),
+            Err(_) => bail!("timed out waiting for Removed event for pod {}", pod_uid),
+        };
+        match ev {
+            PodResctrlEvent::Removed(r) if r.pod_uid == pod_uid => return Ok(()),
+            _ => {}
+        }
+    }
 }
 
 #[tokio::test]
@@ -57,6 +304,16 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     ])
     .await?;
 
+    // Record pod metadata and current containers before plugin registration.
+    let pod_a = load_pod_json("e2e-a").await?;
+    let pod_a_uid = pod_a
+        .pointer("/metadata/uid")
+        .and_then(Value::as_str)
+        .context("pod e2e-a missing metadata.uid")?
+        .to_string();
+    let containers_a = wait_for_container_ids("e2e-a", 1, Duration::from_secs(90)).await?;
+    let pids_a = resolve_container_pids(&containers_a).await?;
+
     // Connect to NRI runtime socket
     let socket = tokio::net::UnixStream::connect(&socket_path).await?;
     println!("[integration_test] Connected to NRI socket");
@@ -71,14 +328,26 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     nri.register().await?;
     println!("[integration_test] Plugin registered successfully");
 
-    // Allow runtime to settle briefly and drain at least one event if any
-    if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-        println!("[integration_test] Initial event: {:?}", ev);
-    }
+    // Expect startup synchronization events for the preexisting pod.
+    let _ = wait_for_pod_update(&mut rx, &pod_a_uid, 0, 0, Duration::from_secs(60)).await?;
+    let event_a = wait_for_pod_update(
+        &mut rx,
+        &pod_a_uid,
+        containers_a.len(),
+        containers_a.len(),
+        Duration::from_secs(60),
+    )
+    .await?;
+    let group_path_a = match event_a.group_state {
+        ResctrlGroupState::Exists(ref path) => path.clone(),
+        ResctrlGroupState::Failed => bail!("preexisting pod group creation failed"),
+    };
 
-    // Post-start: add an ephemeral container using kubectl debug
-    // Note: not all clusters may have debugging enabled; ignore failures
-    let _ = run_kubectl(&[
+    // Verify tasks reflect existing containers.
+    let _ = wait_for_tasks_with_pids(&group_path_a, &pids_a, Duration::from_secs(30)).await?;
+
+    // Post-start: add an ephemeral container using kubectl debug and ensure counts improve.
+    run_kubectl(&[
         "debug",
         "pod/e2e-a",
         "-c",
@@ -90,11 +359,26 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
         "-c",
         "sleep 600",
     ])
-    .await;
-    // Let events flow
-    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+    .await?;
+    let containers_a_after = wait_for_container_ids("e2e-a", 2, Duration::from_secs(120)).await?;
+    let pids_a_after = resolve_container_pids(&containers_a_after).await?;
+    let update_a_after = wait_for_pod_update(
+        &mut rx,
+        &pod_a_uid,
+        containers_a_after.len(),
+        containers_a_after.len(),
+        Duration::from_secs(90),
+    )
+    .await?;
+    if let ResctrlGroupState::Exists(path) = &update_a_after.group_state {
+        assert_eq!(
+            path, &group_path_a,
+            "group path should remain stable for pod e2e-a"
+        );
+    }
+    let _ = wait_for_tasks_with_pids(&group_path_a, &pids_a_after, Duration::from_secs(60)).await?;
 
-    // Post-start: create a new pod
+    // Post-start: create a new pod and ensure a new group is provisioned and reconciled.
     let _ = run_kubectl(&["delete", "pod", "e2e-b", "--ignore-not-found=true"]).await;
     run_kubectl(&[
         "run",
@@ -114,12 +398,36 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
         "--timeout=120s",
     ])
     .await?;
-    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+    let pod_b = load_pod_json("e2e-b").await?;
+    let pod_b_uid = pod_b
+        .pointer("/metadata/uid")
+        .and_then(Value::as_str)
+        .context("pod e2e-b missing metadata.uid")?
+        .to_string();
+    let containers_b = wait_for_container_ids("e2e-b", 1, Duration::from_secs(90)).await?;
+    let pids_b = resolve_container_pids(&containers_b).await?;
+    let _ = wait_for_pod_update(&mut rx, &pod_b_uid, 0, 0, Duration::from_secs(60)).await?;
+    let update_b = wait_for_pod_update(
+        &mut rx,
+        &pod_b_uid,
+        containers_b.len(),
+        containers_b.len(),
+        Duration::from_secs(60),
+    )
+    .await?;
+    let group_path_b = match update_b.group_state {
+        ResctrlGroupState::Exists(ref path) => path.clone(),
+        ResctrlGroupState::Failed => bail!("new pod group creation failed"),
+    };
+    let _ = wait_for_tasks_with_pids(&group_path_b, &pids_b, Duration::from_secs(30)).await?;
 
-    // Pod removal: delete both pods and allow events to propagate
-    let _ = run_kubectl(&["delete", "pod", "e2e-a", "--timeout=60s"]).await;
-    let _ = run_kubectl(&["delete", "pod", "e2e-b", "--timeout=60s"]).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await;
+    // Pod removal: delete both pods and ensure Removed events plus cleanup.
+    run_kubectl(&["delete", "pod", "e2e-a", "--timeout=60s"]).await?;
+    run_kubectl(&["delete", "pod", "e2e-b", "--timeout=60s"]).await?;
+    wait_for_pod_removed(&mut rx, &pod_a_uid, Duration::from_secs(120)).await?;
+    wait_for_group_absent(&group_path_a, Duration::from_secs(60)).await?;
+    wait_for_pod_removed(&mut rx, &pod_b_uid, Duration::from_secs(120)).await?;
+    wait_for_group_absent(&group_path_b, Duration::from_secs(60)).await?;
 
     // Shut down cleanly
     nri.close().await?;

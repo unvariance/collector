@@ -24,3 +24,4 @@ tempfile = { workspace = true }
 libc = { workspace = true }
 env_logger = { workspace = true }
 resctrl = { workspace = true, features = ["test-utils"] }
+serde_json = "1"
