@@ -2,9 +2,16 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context};
-use serde_json::Value;
+use k8s_openapi::api::core::v1::Pod;
+use kube::{
+    api::{Api, DeleteParams, Patch, PatchParams, PostParams, ResourceExt},
+    Client, Error as KubeError,
+};
+use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+
+const MAIN_CONTAINER_NAME: &str = "main";
 
 fn init_test_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
@@ -17,60 +24,95 @@ use nri_resctrl_plugin::{
     PodResctrlAddOrUpdate, PodResctrlEvent, ResctrlGroupState, ResctrlPlugin, ResctrlPluginConfig,
 };
 
-async fn run_kubectl(args: &[&str]) -> anyhow::Result<()> {
-    let status = tokio::process::Command::new("kubectl")
-        .args(args)
-        .status()
-        .await?;
-    anyhow::ensure!(status.success(), "kubectl {:?} failed: {:?}", args, status);
-    Ok(())
+async fn delete_pod_if_exists(pods: &Api<Pod>, name: &str) -> anyhow::Result<()> {
+    let dp = DeleteParams {
+        grace_period_seconds: Some(0),
+        ..DeleteParams::default()
+    };
+    match pods.delete(name, &dp).await {
+        Ok(_resp) => {}
+        Err(KubeError::Api(ae)) if ae.code == 404 => return Ok(()),
+        Err(e) => return Err(e.into()),
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(90);
+    loop {
+        match pods.get(name).await {
+            Ok(_) => {
+                if Instant::now() >= deadline {
+                    bail!("timed out waiting for pod {} deletion", name);
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(KubeError::Api(ae)) if ae.code == 404 => return Ok(()),
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
-async fn kubectl_json(args: &[&str]) -> anyhow::Result<Value> {
-    let output = tokio::process::Command::new("kubectl")
-        .args(args)
-        .output()
-        .await?;
-    anyhow::ensure!(
-        output.status.success(),
-        "kubectl {:?} failed: {:?}",
-        args,
-        output.status
-    );
-    let v: Value = serde_json::from_slice(&output.stdout)?;
-    Ok(v)
+async fn create_sleep_pod(pods: &Api<Pod>, name: &str) -> anyhow::Result<Pod> {
+    let pod: Pod = serde_json::from_value(json!({
+        "apiVersion": "v1",
+        "kind": "Pod",
+        "metadata": {
+            "name": name,
+        },
+        "spec": {
+            "containers": [{
+                "name": "main",
+                "image": "busybox",
+                "command": ["/bin/sh", "-c", "sleep 3600"],
+                "imagePullPolicy": "IfNotPresent",
+            }],
+        }
+    }))?;
+    Ok(pods.create(&PostParams::default(), &pod).await?)
 }
 
-async fn load_pod_json(name: &str) -> anyhow::Result<Value> {
-    kubectl_json(&["get", "pod", name, "-o", "json"]).await
+async fn wait_for_pod_running(
+    pods: &Api<Pod>,
+    name: &str,
+    timeout: Duration,
+) -> anyhow::Result<Pod> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let pod = pods.get(name).await?;
+        if let Some(status) = &pod.status {
+            if status.phase.as_deref() == Some("Running") {
+                let ready = status
+                    .container_statuses
+                    .as_ref()
+                    .map(|statuses| statuses.iter().all(|cs| cs.ready))
+                    .unwrap_or(false);
+                if ready {
+                    return Ok(pod);
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("timed out waiting for pod {} to reach Running", name);
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 }
 
-fn gather_container_ids(pod: &Value) -> Vec<(String, String)> {
+fn gather_container_ids_from_pod(pod: &Pod) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(status) = pod.get("status") {
-        if let Some(arr) = status.get("containerStatuses").and_then(Value::as_array) {
-            for entry in arr {
-                if let (Some(name), Some(id)) = (
-                    entry.get("name").and_then(Value::as_str),
-                    entry.get("containerID").and_then(Value::as_str),
-                ) {
+    if let Some(status) = &pod.status {
+        if let Some(containers) = &status.container_statuses {
+            for cs in containers {
+                if let Some(id) = &cs.container_id {
                     if !id.is_empty() {
-                        out.push((name.to_string(), id.to_string()));
+                        out.push(id.clone());
                     }
                 }
             }
         }
-        if let Some(arr) = status
-            .get("ephemeralContainerStatuses")
-            .and_then(Value::as_array)
-        {
-            for entry in arr {
-                if let (Some(name), Some(id)) = (
-                    entry.get("name").and_then(Value::as_str),
-                    entry.get("containerID").and_then(Value::as_str),
-                ) {
+        if let Some(ephemeral) = &status.ephemeral_container_statuses {
+            for ecs in ephemeral {
+                if let Some(id) = &ecs.container_id {
                     if !id.is_empty() {
-                        out.push((name.to_string(), id.to_string()));
+                        out.push(id.clone());
                     }
                 }
             }
@@ -80,14 +122,15 @@ fn gather_container_ids(pod: &Value) -> Vec<(String, String)> {
 }
 
 async fn wait_for_container_ids(
+    pods: &Api<Pod>,
     pod_name: &str,
     expected: usize,
     timeout: Duration,
-) -> anyhow::Result<Vec<(String, String)>> {
+) -> anyhow::Result<Vec<String>> {
     let deadline = Instant::now() + timeout;
     loop {
-        let pod = load_pod_json(pod_name).await?;
-        let ids = gather_container_ids(&pod);
+        let pod = pods.get(pod_name).await?;
+        let ids = gather_container_ids_from_pod(&pod);
         if ids.len() >= expected {
             return Ok(ids);
         }
@@ -133,9 +176,9 @@ async fn container_pid(container_id: &str) -> anyhow::Result<i32> {
     Ok(pid as i32)
 }
 
-async fn resolve_container_pids(ids: &[(String, String)]) -> anyhow::Result<Vec<i32>> {
+async fn resolve_container_pids(ids: &[String]) -> anyhow::Result<Vec<i32>> {
     let mut pids = Vec::with_capacity(ids.len());
-    for (_, id) in ids {
+    for id in ids {
         pids.push(container_pid(id).await?);
     }
     Ok(pids)
@@ -267,6 +310,26 @@ async fn wait_for_pod_removed(
     }
 }
 
+async fn add_ephemeral_container(
+    pods: &Api<Pod>,
+    pod_name: &str,
+    target_container: &str,
+) -> anyhow::Result<()> {
+    let patch = json!({
+        "spec": {
+            "ephemeralContainers": [{
+                "name": "dbg",
+                "image": "busybox",
+                "command": ["/bin/sh", "-c", "sleep 600"],
+                "targetContainerName": target_container,
+            }]
+        }
+    });
+    pods.patch_ephemeral_containers(pod_name, &PatchParams::default(), &Patch::Strategic(patch))
+        .await?;
+    Ok(())
+}
+
 #[tokio::test]
 #[ignore]
 async fn test_plugin_full_flow() -> anyhow::Result<()> {
@@ -282,36 +345,28 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     let socket_path = std::env::var("NRI_SOCKET_PATH")?;
     println!("[integration_test] Using NRI socket at: {}", socket_path);
 
-    // Pre-create a pod before plugin registration (preexisting assignment)
-    // Best-effort cleanup then create
-    let _ = run_kubectl(&["delete", "pod", "e2e-a", "--ignore-not-found=true"]).await;
-    run_kubectl(&[
-        "run",
-        "e2e-a",
-        "--image=busybox",
-        "--restart=Never",
-        "--",
-        "/bin/sh",
-        "-c",
-        "sleep 3600",
-    ])
-    .await?;
-    run_kubectl(&[
-        "wait",
-        "--for=condition=Ready",
-        "pod/e2e-a",
-        "--timeout=120s",
-    ])
-    .await?;
+    let client = Client::try_default().await?;
+    let pods: Api<Pod> = Api::default_namespaced(client);
 
-    // Record pod metadata and current containers before plugin registration.
-    let pod_a = load_pod_json("e2e-a").await?;
-    let pod_a_uid = pod_a
-        .pointer("/metadata/uid")
-        .and_then(Value::as_str)
-        .context("pod e2e-a missing metadata.uid")?
-        .to_string();
-    let containers_a = wait_for_container_ids("e2e-a", 1, Duration::from_secs(90)).await?;
+    // Ensure a clean slate and create the preexisting pod before plugin registration
+    delete_pod_if_exists(&pods, "e2e-a").await?;
+    delete_pod_if_exists(&pods, "e2e-b").await?;
+
+    let preexisting = create_sleep_pod(&pods, "e2e-a").await?;
+    let namespace = preexisting
+        .namespace()
+        .unwrap_or_else(|| "default".to_string());
+    println!(
+        "[integration_test] Created preexisting pod e2e-a in namespace {}",
+        namespace
+    );
+    let running_a = wait_for_pod_running(&pods, "e2e-a", Duration::from_secs(120)).await?;
+    let pod_a_uid = running_a
+        .metadata
+        .uid
+        .clone()
+        .context("pod e2e-a missing metadata.uid")?;
+    let containers_a = wait_for_container_ids(&pods, "e2e-a", 1, Duration::from_secs(90)).await?;
     let pids_a = resolve_container_pids(&containers_a).await?;
 
     // Connect to NRI runtime socket
@@ -346,21 +401,10 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     // Verify tasks reflect existing containers.
     let _ = wait_for_tasks_with_pids(&group_path_a, &pids_a, Duration::from_secs(30)).await?;
 
-    // Post-start: add an ephemeral container using kubectl debug and ensure counts improve.
-    run_kubectl(&[
-        "debug",
-        "pod/e2e-a",
-        "-c",
-        "dbg",
-        "--image=busybox",
-        "--target=e2e-a",
-        "--",
-        "/bin/sh",
-        "-c",
-        "sleep 600",
-    ])
-    .await?;
-    let containers_a_after = wait_for_container_ids("e2e-a", 2, Duration::from_secs(120)).await?;
+    // Post-start: add an ephemeral container using the Kubernetes API and ensure counts improve.
+    add_ephemeral_container(&pods, "e2e-a", MAIN_CONTAINER_NAME).await?;
+    let containers_a_after =
+        wait_for_container_ids(&pods, "e2e-a", 2, Duration::from_secs(120)).await?;
     let pids_a_after = resolve_container_pids(&containers_a_after).await?;
     let update_a_after = wait_for_pod_update(
         &mut rx,
@@ -379,32 +423,14 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     let _ = wait_for_tasks_with_pids(&group_path_a, &pids_a_after, Duration::from_secs(60)).await?;
 
     // Post-start: create a new pod and ensure a new group is provisioned and reconciled.
-    let _ = run_kubectl(&["delete", "pod", "e2e-b", "--ignore-not-found=true"]).await;
-    run_kubectl(&[
-        "run",
-        "e2e-b",
-        "--image=busybox",
-        "--restart=Never",
-        "--",
-        "/bin/sh",
-        "-c",
-        "sleep 3600",
-    ])
-    .await?;
-    run_kubectl(&[
-        "wait",
-        "--for=condition=Ready",
-        "pod/e2e-b",
-        "--timeout=120s",
-    ])
-    .await?;
-    let pod_b = load_pod_json("e2e-b").await?;
-    let pod_b_uid = pod_b
-        .pointer("/metadata/uid")
-        .and_then(Value::as_str)
-        .context("pod e2e-b missing metadata.uid")?
-        .to_string();
-    let containers_b = wait_for_container_ids("e2e-b", 1, Duration::from_secs(90)).await?;
+    let _new_pod = create_sleep_pod(&pods, "e2e-b").await?;
+    let running_b = wait_for_pod_running(&pods, "e2e-b", Duration::from_secs(120)).await?;
+    let pod_b_uid = running_b
+        .metadata
+        .uid
+        .clone()
+        .context("pod e2e-b missing metadata.uid")?;
+    let containers_b = wait_for_container_ids(&pods, "e2e-b", 1, Duration::from_secs(90)).await?;
     let pids_b = resolve_container_pids(&containers_b).await?;
     let _ = wait_for_pod_update(&mut rx, &pod_b_uid, 0, 0, Duration::from_secs(60)).await?;
     let update_b = wait_for_pod_update(
@@ -422,8 +448,8 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     let _ = wait_for_tasks_with_pids(&group_path_b, &pids_b, Duration::from_secs(30)).await?;
 
     // Pod removal: delete both pods and ensure Removed events plus cleanup.
-    run_kubectl(&["delete", "pod", "e2e-a", "--timeout=60s"]).await?;
-    run_kubectl(&["delete", "pod", "e2e-b", "--timeout=60s"]).await?;
+    delete_pod_if_exists(&pods, "e2e-a").await?;
+    delete_pod_if_exists(&pods, "e2e-b").await?;
     wait_for_pod_removed(&mut rx, &pod_a_uid, Duration::from_secs(120)).await?;
     wait_for_group_absent(&group_path_a, Duration::from_secs(60)).await?;
     wait_for_pod_removed(&mut rx, &pod_b_uid, Duration::from_secs(120)).await?;
