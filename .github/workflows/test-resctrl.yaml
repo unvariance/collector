@@ -143,6 +143,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Docker
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: |
+            docker.io
+          cache-version: 1
+
+      - name: Validate Docker installation
+        run: |
+          sudo systemctl start docker || true
+          docker --version
+
       - name: Install KIND and kubectl
         run: |
           # Install KIND
