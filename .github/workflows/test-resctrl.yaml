@@ -230,7 +230,7 @@ jobs:
         run: |
           chmod +x ./nri-resctrl-plugin-e2e || true
 
-      - name: Run plugin integration tests (full flow + cleanup)
+      - name: Run plugin integration tests (excluding capacity retry)
         env:
           NRI_SOCKET_PATH: /tmp/nri/nri.sock
           RESCTRL_E2E: 1
@@ -239,7 +239,18 @@ jobs:
           HOME: /root
         run: |
           echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
-          RESCTRL_E2E=1 NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1
+          RESCTRL_E2E=1 NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1 --skip test_capacity_retry_e2e
+
+      - name: Run plugin integration test (capacity retry)
+        env:
+          NRI_SOCKET_PATH: /tmp/nri/nri.sock
+          RESCTRL_E2E: 1
+          RUST_LOG: info
+          KUBECONFIG: ${{ steps.kind-cluster.outputs.kubeconfig }}
+          HOME: /root
+        run: |
+          echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
+          RESCTRL_E2E=1 NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e test_capacity_retry_e2e --include-ignored --nocapture --test-threads=1
 
       - name: Cleanup KIND
         if: always()
