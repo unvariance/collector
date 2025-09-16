@@ -966,6 +966,132 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_duplicate_container_events_do_not_change_counts() {
+        use crate::pid_source::test_support::MockCgroupPidSource;
+        use tokio::time::{timeout, Duration};
+
+        let fs = TestFs::default();
+        fs.add_dir(std::path::Path::new("/sys"));
+        fs.add_dir(std::path::Path::new("/sys/fs"));
+        fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
+
+        let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
+        let mut mock_pid_src = MockCgroupPidSource::new();
+        let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(16);
+
+        let pod = nri::api::PodSandbox {
+            id: "pod-dup".into(),
+            uid: "uid-dup".into(),
+            ..Default::default()
+        };
+        let linux = nri::api::LinuxContainer {
+            cgroups_path: "/cg/dup".into(),
+            ..Default::default()
+        };
+        let container = nri::api::Container {
+            id: "ctr-dup".into(),
+            pod_sandbox_id: pod.id.clone(),
+            linux: protobuf::MessageField::some(linux),
+            ..Default::default()
+        };
+
+        let full_path = nri::compute_full_cgroup_path(&container, Some(&pod));
+        mock_pid_src.set_pids(full_path, vec![4242]);
+
+        let plugin = ResctrlPlugin::with_pid_source(
+            ResctrlPluginConfig::default(),
+            rc,
+            tx,
+            Arc::new(mock_pid_src),
+        );
+
+        let ctx = TtrpcContext {
+            mh: ttrpc::MessageHeader::default(),
+            metadata: std::collections::HashMap::new(),
+            timeout_nano: 5_000,
+        };
+
+        // Register pod once → expect initial AddOrUpdate with counts 0/0
+        let _ = plugin
+            .state_change(
+                &ctx,
+                StateChangeEvent {
+                    event: Event::RUN_POD_SANDBOX.into(),
+                    pod: protobuf::MessageField::some(pod.clone()),
+                    container: protobuf::MessageField::none(),
+                    special_fields: protobuf::SpecialFields::default(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let ev = timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .expect("initial event")
+            .expect("event value");
+        match ev {
+            PodResctrlEvent::AddOrUpdate(add) => {
+                assert_eq!(add.total_containers, 0);
+                assert_eq!(add.reconciled_containers, 0);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+
+        let create_req = CreateContainerRequest {
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::some(container.clone()),
+            special_fields: protobuf::SpecialFields::default(),
+        };
+        let _ = Plugin::create_container(&plugin, &ctx, create_req.clone())
+            .await
+            .unwrap();
+
+        let ev = timeout(Duration::from_millis(200), rx.recv())
+            .await
+            .expect("event after first container")
+            .expect("event value");
+        match ev {
+            PodResctrlEvent::AddOrUpdate(add) => {
+                assert_eq!(add.total_containers, 1);
+                assert_eq!(add.reconciled_containers, 1);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+
+        // Duplicate CreateContainer → should not emit another event
+        let _ = Plugin::create_container(&plugin, &ctx, create_req.clone())
+            .await
+            .unwrap();
+        match timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Some(ev)) => panic!("unexpected event for duplicate container: {:?}", ev),
+            Ok(None) => panic!("event channel closed unexpectedly"),
+            Err(_) => {}
+        }
+
+        // UpdateContainer for same container should not emit anything either
+        let update_req = UpdateContainerRequest {
+            pod: protobuf::MessageField::some(pod.clone()),
+            container: protobuf::MessageField::some(container.clone()),
+            linux_resources: protobuf::MessageField::none(),
+            special_fields: protobuf::SpecialFields::default(),
+        };
+        let _ = Plugin::update_container(&plugin, &ctx, update_req)
+            .await
+            .unwrap();
+        match timeout(Duration::from_millis(100), rx.recv()).await {
+            Ok(Some(ev)) => panic!("unexpected event for UpdateContainer: {:?}", ev),
+            Ok(None) => panic!("event channel closed unexpectedly"),
+            Err(_) => {}
+        }
+
+        // Internal counters remain unchanged at 1/1
+        let st = plugin.state.lock().unwrap();
+        let pod_state = st.pods.get(&pod.uid).expect("pod state present");
+        assert_eq!(pod_state.total_containers, 1);
+        assert_eq!(pod_state.reconciled_containers, 1);
+    }
+
+    #[tokio::test]
     async fn test_run_pod_sandbox_creates_group_and_emits_event() {
         let fs = MockFs::new();
         // Ensure resctrl root exists
