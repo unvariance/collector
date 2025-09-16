@@ -610,12 +610,6 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
 }
 
 async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
-    // Gate: only run when explicitly requested and when tools are available
-    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
-        eprintln!("RESCTRL_E2E not set; skipping full flow e2e test");
-        return Ok(());
-    }
-
     // Use NRI socket path provided by the workflow via env.
     let socket_path = std::env::var("NRI_SOCKET_PATH")?;
     println!("[integration_test] Using NRI socket at: {}", socket_path);
@@ -742,6 +736,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
 
 #[tokio::test]
 #[cfg(target_os = "linux")]
+#[ignore]
 async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
     init_test_logger();
     run_with_error_reporting(test_startup_cleanup_e2e_impl()).await
@@ -749,12 +744,6 @@ async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
 
 #[cfg(target_os = "linux")]
 async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
-    // Guard: explicit opt-in for E2E and only on Linux systems with permissions.
-    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
-        eprintln!("RESCTRL_E2E not set; skipping E2E cleanup test");
-        return Ok(());
-    }
-
     // Precondition: ensure resctrl is mounted using RealFs without shelling out.
     let rc = resctrl::Resctrl::default();
     if let Err(e) = rc.ensure_mounted(true) {
@@ -909,10 +898,6 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     use tokio::time::{timeout, Duration};
 
     init_test_logger();
-    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
-        eprintln!("RESCTRL_E2E not set; skipping capacity retry e2e test");
-        return Ok(());
-    }
 
     // Ensure real resctrl is mounted.
     let rc = resctrl::Resctrl::default();
