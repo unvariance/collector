@@ -1,3 +1,5 @@
+use std::backtrace::BacktraceStatus;
+use std::future::Future;
 use std::path::Path;
 use std::time::Duration;
 
@@ -14,9 +16,44 @@ use tokio::time::Instant;
 const MAIN_CONTAINER_NAME: &str = "main";
 
 fn init_test_logger() {
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
+    if std::env::var_os("RUST_LIB_BACKTRACE").is_none() {
+        std::env::set_var("RUST_LIB_BACKTRACE", "1");
+    }
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .is_test(true)
         .try_init();
+}
+
+fn report_error(err: &anyhow::Error) {
+    eprintln!("[integration_test] error details: {err:?}");
+    let bt = err.backtrace();
+    match bt.status() {
+        BacktraceStatus::Captured => {
+            eprintln!("[integration_test] captured backtrace:\n{bt}");
+        }
+        status => {
+            eprintln!(
+                "[integration_test] backtrace unavailable (status: {:?})",
+                status
+            );
+        }
+    }
+}
+
+async fn run_with_error_reporting<F>(fut: F) -> anyhow::Result<()>
+where
+    F: Future<Output = anyhow::Result<()>>,
+{
+    match fut.await {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            report_error(&err);
+            Err(err)
+        }
+    }
 }
 
 use nri::{
@@ -162,7 +199,13 @@ async fn container_pid(container_id: &str) -> anyhow::Result<i32> {
     let output = tokio::process::Command::new("crictl")
         .args(["inspect", "--output", "json", trimmed])
         .output()
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "failed to run crictl inspect for container {} (trimmed {})",
+                container_id, trimmed
+            )
+        })?;
     anyhow::ensure!(
         output.status.success(),
         "crictl inspect failed for {}: {:?}",
@@ -182,7 +225,11 @@ async fn container_pid(container_id: &str) -> anyhow::Result<i32> {
 async fn resolve_container_pids(ids: &[String]) -> anyhow::Result<Vec<i32>> {
     let mut pids = Vec::with_capacity(ids.len());
     for id in ids {
-        pids.push(container_pid(id).await?);
+        pids.push(
+            container_pid(id)
+                .await
+                .with_context(|| format!("resolving pid for container {}", id))?,
+        );
     }
     Ok(pids)
 }
@@ -337,7 +384,10 @@ async fn add_ephemeral_container(
 #[ignore]
 async fn test_plugin_full_flow() -> anyhow::Result<()> {
     init_test_logger();
+    run_with_error_reporting(test_plugin_full_flow_impl()).await
+}
 
+async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     // Gate: only run when explicitly requested and when tools are available
     if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
         eprintln!("RESCTRL_E2E not set; skipping full flow e2e test");
@@ -373,7 +423,9 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
     let pids_a = resolve_container_pids(&containers_a).await?;
 
     // Connect to NRI runtime socket
-    let socket = tokio::net::UnixStream::connect(&socket_path).await?;
+    let socket = tokio::net::UnixStream::connect(&socket_path)
+        .await
+        .with_context(|| format!("failed to connect to NRI socket at {}", socket_path))?;
     println!("[integration_test] Connected to NRI socket");
 
     // Build plugin with an externally provided channel
@@ -470,6 +522,11 @@ async fn test_plugin_full_flow() -> anyhow::Result<()> {
 #[cfg(target_os = "linux")]
 async fn test_startup_cleanup_e2e() -> anyhow::Result<()> {
     init_test_logger();
+    run_with_error_reporting(test_startup_cleanup_e2e_impl()).await
+}
+
+#[cfg(target_os = "linux")]
+async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
     // Guard: explicit opt-in for E2E and only on Linux systems with permissions.
     if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
         eprintln!("RESCTRL_E2E not set; skipping E2E cleanup test");
