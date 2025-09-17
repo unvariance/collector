@@ -375,9 +375,45 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
         ))?,
     };
 
-    // Cleanup: delete pod and close NRI connection
+    // After initial synchronization, create another pod and verify its cgroup
+    let pod_name2 = format!(
+        "nri-cgroup-path-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    info!("Creating second test pod: {}", pod_name2);
+    let _pod2 = create_test_pod(&pods, &pod_name2, None, None).await?;
+    let _running_pod2 = wait_for_pod_running(&pods, &pod_name2).await?;
+
+    // Wait for the plugin to verify the second pod inline with the event
+    let timeout_duration = Duration::from_secs(60);
+    match timeout(timeout_duration, async {
+        loop {
+            if let Some(verified) = rx.recv().await {
+                if verified == pod_name2 {
+                    break Ok(());
+                }
+            } else {
+                break Err(anyhow::anyhow!("Verification channel closed"));
+            }
+        }
+    })
+    .await
+    {
+        Ok(res) => res?,
+        Err(_) => Err(anyhow::anyhow!(
+            "Timeout waiting for verification for pod {}",
+            pod_name2
+        ))?,
+    };
+
+    // Cleanup: delete pods and close NRI connection
     info!("Deleting test pod: {}", pod_name);
     delete_pod(&pods, &pod_name).await?;
+    info!("Deleting second test pod: {}", pod_name2);
+    delete_pod(&pods, &pod_name2).await?;
 
     info!("Closing NRI connection");
     nri.close().await?;
