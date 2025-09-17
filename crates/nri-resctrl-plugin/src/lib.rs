@@ -545,7 +545,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         // Subscribe to container and pod lifecycle events we handle.
         let mut events = EventMask::new();
         events.set(&[
-            Event::CREATE_CONTAINER,
+            Event::START_CONTAINER,
             Event::REMOVE_CONTAINER,
             Event::RUN_POD_SANDBOX,
             Event::REMOVE_POD_SANDBOX,
@@ -620,9 +620,7 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
         req: CreateContainerRequest,
     ) -> ttrpc::Result<CreateContainerResponse> {
         debug!("resctrl-plugin: create_container: {}", req.container.id);
-        if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
-            self.handle_new_container(pod, container);
-        }
+        // No-op: container handling is performed on START_CONTAINER via state_change.
         Ok(CreateContainerResponse::default())
     }
 
@@ -663,6 +661,11 @@ impl<P: FsProvider + Send + Sync + 'static> Plugin for ResctrlPlugin<P> {
             Ok(Event::RUN_POD_SANDBOX) => {
                 if let Some(pod) = req.pod.as_ref() {
                     self.handle_new_pod(pod);
+                }
+            }
+            Ok(Event::START_CONTAINER) => {
+                if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
+                    self.handle_new_container(pod, container);
                 }
             }
             Ok(Event::REMOVE_POD_SANDBOX) => {
@@ -818,7 +821,7 @@ mod tests {
         let events = EventMask::from_raw(resp.events);
 
         // Must include minimal container/pod events we need
-        assert!(events.is_set(Event::CREATE_CONTAINER));
+        assert!(events.is_set(Event::START_CONTAINER));
         assert!(events.is_set(Event::RUN_POD_SANDBOX));
         assert!(events.is_set(Event::REMOVE_POD_SANDBOX));
         assert!(events.is_set(Event::REMOVE_CONTAINER));
@@ -939,10 +942,11 @@ mod tests {
         }
 
         // Now add another container for the existing pod and expect updated counts
-        let _ = Plugin::create_container(
+        let _ = Plugin::state_change(
             &plugin,
             &ctx,
-            CreateContainerRequest {
+            StateChangeEvent {
+                event: Event::START_CONTAINER.into(),
                 pod: protobuf::MessageField::some(pod.clone()),
                 container: protobuf::MessageField::some(second_container.clone()),
                 special_fields: SpecialFields::default(),
@@ -1048,14 +1052,13 @@ mod tests {
             other => panic!("unexpected event: {:?}", other),
         }
 
-        let create_req = CreateContainerRequest {
+        let start_req = StateChangeEvent {
+            event: Event::START_CONTAINER.into(),
             pod: protobuf::MessageField::some(pod.clone()),
             container: protobuf::MessageField::some(container.clone()),
             special_fields: protobuf::SpecialFields::default(),
         };
-        let _ = Plugin::create_container(&plugin, &ctx, create_req.clone())
-            .await
-            .unwrap();
+        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone()).await.unwrap();
 
         let ev = timeout(Duration::from_millis(200), rx.recv())
             .await
@@ -1069,10 +1072,8 @@ mod tests {
             other => panic!("unexpected event: {:?}", other),
         }
 
-        // Duplicate CreateContainer → should not emit another event
-        let _ = Plugin::create_container(&plugin, &ctx, create_req.clone())
-            .await
-            .unwrap();
+        // Duplicate START_CONTAINER → should not emit another event
+        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone()).await.unwrap();
         match timeout(Duration::from_millis(100), rx.recv()).await {
             Ok(Some(ev)) => panic!("unexpected event for duplicate container: {:?}", ev),
             Ok(None) => panic!("event channel closed unexpectedly"),
@@ -1178,10 +1179,11 @@ mod tests {
         assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789")));
 
         // After pod exists, add a container for it and expect reconcile to complete
-        let _ = Plugin::create_container(
+        let _ = Plugin::state_change(
             &plugin,
             &ctx,
-            CreateContainerRequest {
+            StateChangeEvent {
+                event: Event::START_CONTAINER.into(),
                 pod: protobuf::MessageField::some(pod.clone()),
                 container: protobuf::MessageField::some(ctr.clone()),
                 special_fields: SpecialFields::default(),
@@ -1412,14 +1414,18 @@ mod tests {
         }
 
         // Add a container while pod Failed → expect counts 1/0
-        let create_req = CreateContainerRequest {
-            pod: protobuf::MessageField::some(pod.clone()),
-            container: protobuf::MessageField::some(container.clone()),
-            special_fields: SpecialFields::default(),
-        };
-        let _ = Plugin::create_container(&plugin, &ctx, create_req)
-            .await
-            .unwrap();
+        let _ = Plugin::state_change(
+            &plugin,
+            &ctx,
+            StateChangeEvent {
+                event: Event::START_CONTAINER.into(),
+                pod: protobuf::MessageField::some(pod.clone()),
+                container: protobuf::MessageField::some(container.clone()),
+                special_fields: SpecialFields::default(),
+            },
+        )
+        .await
+        .unwrap();
         // Expect update with counts 1/0
         let ev = timeout(Duration::from_millis(100), rx.recv())
             .await
@@ -1533,14 +1539,18 @@ mod tests {
             special_fields: SpecialFields::default(),
         };
         let _ = plugin.state_change(&ctx, state_req).await.unwrap();
-        let create_req = CreateContainerRequest {
-            pod: protobuf::MessageField::some(pod.clone()),
-            container: protobuf::MessageField::some(container.clone()),
-            special_fields: SpecialFields::default(),
-        };
-        let _ = Plugin::create_container(&plugin, &ctx, create_req)
-            .await
-            .unwrap();
+        let _ = Plugin::state_change(
+            &plugin,
+            &ctx,
+            StateChangeEvent {
+                event: Event::START_CONTAINER.into(),
+                pod: protobuf::MessageField::some(pod.clone()),
+                container: protobuf::MessageField::some(container.clone()),
+                special_fields: SpecialFields::default(),
+            },
+        )
+        .await
+        .unwrap();
 
         // Drain two events (pod created Exists and container accounted)
         let _ = timeout(Duration::from_millis(100), rx.recv()).await; // pod exists
@@ -1680,10 +1690,11 @@ mod tests {
             )
             .await
             .unwrap();
-        let _ = Plugin::create_container(
+        let _ = Plugin::state_change(
             &plugin,
             &ctx,
-            CreateContainerRequest {
+            StateChangeEvent {
+                event: Event::START_CONTAINER.into(),
                 pod: protobuf::MessageField::some(pod_b.clone()),
                 container: protobuf::MessageField::some(ctr_b.clone()),
                 special_fields: SpecialFields::default(),
