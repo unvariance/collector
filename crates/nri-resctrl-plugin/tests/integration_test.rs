@@ -764,6 +764,20 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     let (nri, _join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
     nri.register().await?;
 
+    // Wait for initial synchronization: drain events until channel is quiet for 1s
+    // so that any existing pods are handled by the plugin before proceeding.
+    let mut _drained = 0usize;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+            Ok(Some(_ev)) => {
+                _drained += 1;
+                continue;
+            }
+            Ok(None) => break, // channel closed
+            Err(_) => break,   // no messages for a full second
+        }
+    }
+
     // Prepare resctrl capacity exhaustion using placeholder groups.
     let root = PathBuf::from("/sys/fs/resctrl");
     let filler_prefix = "capfill_e2e_";
