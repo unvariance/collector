@@ -1059,7 +1059,9 @@ mod tests {
             container: protobuf::MessageField::some(container.clone()),
             special_fields: protobuf::SpecialFields::default(),
         };
-        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone()).await.unwrap();
+        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone())
+            .await
+            .unwrap();
 
         let ev = timeout(Duration::from_millis(200), rx.recv())
             .await
@@ -1074,7 +1076,9 @@ mod tests {
         }
 
         // Duplicate START_CONTAINER → should not emit another event
-        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone()).await.unwrap();
+        let _ = Plugin::state_change(&plugin, &ctx, start_req.clone())
+            .await
+            .unwrap();
         match timeout(Duration::from_millis(100), rx.recv()).await {
             Ok(Some(ev)) => panic!("unexpected event for duplicate container: {:?}", ev),
             Ok(None) => panic!("event channel closed unexpectedly"),

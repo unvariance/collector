@@ -20,6 +20,6 @@ pub enum Error {
     #[error("resctrl unsupported by kernel: {source}")]
     Unsupported { source: io::Error },
 
-    #[error("no PIDs returned by pid source")] 
+    #[error("no PIDs returned by pid source")]
     EmptyPidSet,
 }

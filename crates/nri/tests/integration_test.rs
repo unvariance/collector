@@ -21,15 +21,18 @@ use ttrpc::r#async::TtrpcContext;
 #[derive(Clone)]
 struct EventCapturePlugin {
     tx: mpsc::Sender<String>,
-    check:
-        std::sync::Arc<dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync>,
+    check: std::sync::Arc<
+        dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync,
+    >,
 }
 
 impl EventCapturePlugin {
     fn new(
         tx: mpsc::Sender<String>,
         check: std::sync::Arc<
-            dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync,
+            dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String>
+                + Send
+                + Sync,
         >,
     ) -> Self {
         Self { tx, check }
@@ -88,7 +91,7 @@ impl Plugin for EventCapturePlugin {
         &self,
         _ctx: &TtrpcContext,
         _req: api::UpdatePodSandboxRequest,
-        ) -> ttrpc::Result<api::UpdatePodSandboxResponse> {
+    ) -> ttrpc::Result<api::UpdatePodSandboxResponse> {
         Ok(api::UpdatePodSandboxResponse::default())
     }
 
@@ -98,7 +101,7 @@ impl Plugin for EventCapturePlugin {
         req: api::StateChangeEvent,
     ) -> ttrpc::Result<api::Empty> {
         // Only act on START_CONTAINER events
-        match req.event.enum_value() {        
+        match req.event.enum_value() {
             Ok(api::Event::START_CONTAINER) => {
                 let container = req
                     .container
@@ -109,7 +112,7 @@ impl Plugin for EventCapturePlugin {
                 if let Ok(pod_name) = (self.check)(&container, pod.as_ref()) {
                     let _ = self.tx.try_send(pod_name);
                 }
-            }, 
+            }
             _ => {}
         }
         Ok(api::Empty::default())
@@ -282,7 +285,10 @@ fn verify_cgroup_path_and_return_pod_name(
         return Err(anyhow::anyhow!("cgroup path does not exist: {}", full_path));
     }
     if !scope_dir.is_dir() {
-        return Err(anyhow::anyhow!("cgroup path is not a directory: {}", full_path));
+        return Err(anyhow::anyhow!(
+            "cgroup path is not a directory: {}",
+            full_path
+        ));
     }
 
     let procs_candidates = ["cgroup.procs", "cgroups.procs"]; // accept both just in case
@@ -302,11 +308,7 @@ fn verify_cgroup_path_and_return_pod_name(
                     break;
                 }
                 Err(e) => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to read {}: {}",
-                        p.display(),
-                        e
-                    ));
+                    return Err(anyhow::anyhow!("Failed to read {}: {}", p.display(), e));
                 }
             }
         }
@@ -357,7 +359,13 @@ fn verify_cgroup_path_and_return_pod_name(
 
     // Return the pod name if known
     let pod_name = pod
-        .and_then(|p| if p.name.is_empty() { None } else { Some(p.name.clone()) })
+        .and_then(|p| {
+            if p.name.is_empty() {
+                None
+            } else {
+                Some(p.name.clone())
+            }
+        })
         .unwrap_or_else(|| "<unknown-pod>".to_string());
 
     Ok(pod_name)
