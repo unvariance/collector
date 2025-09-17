@@ -1199,14 +1199,9 @@ mod tests {
 
         // Expect counts 1/1
         timeout(Duration::from_millis(200), async {
-            if let Some(ev) = rx.recv().await {
-                match ev {
-                    PodResctrlEvent::AddOrUpdate(a) => {
-                        assert_eq!(a.total_containers, 1);
-                        assert_eq!(a.reconciled_containers, 1);
-                    }
-                    _ => {}
-                }
+            if let Some(PodResctrlEvent::AddOrUpdate(a)) = rx.recv().await {
+                assert_eq!(a.total_containers, 1);
+                assert_eq!(a.reconciled_containers, 1);
             }
         })
         .await
@@ -1234,14 +1229,9 @@ mod tests {
         .unwrap();
 
         timeout(Duration::from_millis(200), async {
-            if let Some(ev) = rx.recv().await {
-                match ev {
-                    PodResctrlEvent::AddOrUpdate(a) => {
-                        assert_eq!(a.total_containers, 0);
-                        assert_eq!(a.reconciled_containers, 0);
-                    }
-                    _ => {}
-                }
+            if let Some(PodResctrlEvent::AddOrUpdate(a)) = rx.recv().await {
+                assert_eq!(a.total_containers, 0);
+                assert_eq!(a.reconciled_containers, 0);
             }
         })
         .await

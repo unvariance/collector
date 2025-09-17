@@ -18,23 +18,17 @@ use nri::{api, api_ttrpc::Plugin};
 use ttrpc::r#async::TtrpcContext;
 
 // Minimal plugin to capture container create events and run inline verification
+type CheckFn =
+    dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync;
+
 #[derive(Clone)]
 struct EventCapturePlugin {
     tx: mpsc::Sender<String>,
-    check: std::sync::Arc<
-        dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync,
-    >,
+    check: std::sync::Arc<CheckFn>,
 }
 
 impl EventCapturePlugin {
-    fn new(
-        tx: mpsc::Sender<String>,
-        check: std::sync::Arc<
-            dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String>
-                + Send
-                + Sync,
-        >,
-    ) -> Self {
+    fn new(tx: mpsc::Sender<String>, check: std::sync::Arc<CheckFn>) -> Self {
         Self { tx, check }
     }
 }
@@ -101,19 +95,12 @@ impl Plugin for EventCapturePlugin {
         req: api::StateChangeEvent,
     ) -> ttrpc::Result<api::Empty> {
         // Only act on START_CONTAINER events
-        match req.event.enum_value() {
-            Ok(api::Event::START_CONTAINER) => {
-                let container = req
-                    .container
-                    .as_ref()
-                    .map(|c| c.clone())
-                    .unwrap_or_default();
-                let pod = req.pod.as_ref().map(|p| p.clone());
-                if let Ok(pod_name) = (self.check)(&container, pod.as_ref()) {
-                    let _ = self.tx.try_send(pod_name);
-                }
+        if let Ok(api::Event::START_CONTAINER) = req.event.enum_value() {
+            let container = req.container.as_ref().cloned().unwrap_or_default();
+            let pod = req.pod.as_ref().cloned();
+            if let Ok(pod_name) = (self.check)(&container, pod.as_ref()) {
+                let _ = self.tx.try_send(pod_name);
             }
-            _ => {}
         }
         Ok(api::Empty::default())
     }
@@ -395,7 +382,7 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<String>(100);
     let plugin = std::sync::Arc::new(EventCapturePlugin::new(
         tx,
-        std::sync::Arc::new(|c, p| verify_cgroup_path_and_return_pod_name(c, p)),
+        std::sync::Arc::new(verify_cgroup_path_and_return_pod_name),
     ));
 
     // Connect to the NRI socket and register the plugin
