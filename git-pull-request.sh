@@ -42,47 +42,23 @@ determine_upstream_repo() {
   echo "$upstream_repo"
 }
 
-# Determine origin owner for head spec (owner:branch)
-determine_origin_owner() {
-  local origin_owner=""
-  if command -v gh >/dev/null 2>&1; then
-    local o_nwo
-    o_nwo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)
-    if [ -n "$o_nwo" ]; then
-      origin_owner=$(echo "$o_nwo" | cut -d'/' -f1)
-    fi
-  fi
-  if [ -z "$origin_owner" ]; then
-    local origin_url
-    origin_url=$(git remote get-url origin 2>/dev/null || true)
-    if [ -n "$origin_url" ]; then
-      origin_owner=$(echo "$origin_url" \
-        | sed -E 's#^git@[^:]+:##; s#^https?://[^/]+/##; s#\.git$##' \
-        | cut -d'/' -f1)
-    fi
-  fi
-  echo "$origin_owner"
-}
-
 UPSTREAM_REPO=$(determine_upstream_repo)
 if [ -z "$UPSTREAM_REPO" ]; then
   echo "Skipping PR creation: unable to determine upstream repo. Ensure 'upstream' remote exists."
   exit 0
 fi
 
-ORIGIN_OWNER=$(determine_origin_owner)
-
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh not found; skipping draft PR creation. Install GitHub CLI: https://cli.github.com/"
   echo "You can create it manually with:"
-  echo "  gh pr create --repo $UPSTREAM_REPO --base main --head ${ORIGIN_OWNER:-<your-username>}:$BRANCH --title \"$TITLE\" --body \"\" --draft"
+  echo "  gh pr create --repo $UPSTREAM_REPO --base main --title \"$TITLE\" --body \"\" --draft"
   exit 0
 fi
 
 # Ensure gh is authenticated
 if ! gh auth status >/dev/null 2>&1; then
   echo "gh is not authenticated; skipping draft PR creation. Run 'gh auth login' and retry:"
-  echo "  gh pr create --repo $UPSTREAM_REPO --base main --head ${ORIGIN_OWNER:-<your-username>}:$BRANCH --title \"$TITLE\" --body \"\" --draft"
+  echo "  gh pr create --repo $UPSTREAM_REPO --base main --title \"$TITLE\" --body \"\" --draft"
   exit 0
 fi
 
@@ -90,7 +66,6 @@ fi
 if gh pr create \
     --repo "$UPSTREAM_REPO" \
     --base main \
-    --head "${ORIGIN_OWNER:-}:$BRANCH" \
     --title "$TITLE" \
     --body "" \
     --draft; then
