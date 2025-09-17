@@ -17,6 +17,7 @@ on:
     paths:
       - 'crates/resctrl/**'
       - 'crates/nri-resctrl-plugin/**'
+      - '.github/actions/setup-k3s/**'
       - '.github/workflows/test-resctrl.yaml'
       - 'Cargo.toml'
   push:
@@ -26,6 +27,7 @@ on:
     paths:
       - 'crates/resctrl/**'
       - 'crates/nri-resctrl-plugin/**'
+      - '.github/actions/setup-k3s/**'
       - '.github/workflows/test-resctrl.yaml'
       - 'Cargo.toml'
 
@@ -136,7 +138,7 @@ jobs:
           if-no-files-found: error
 
   nri-resctrl-plugin-e2e:
-    name: NRI resctrl plugin full flow (KIND on EC2)
+    name: NRI resctrl plugin full flow (k3s on EC2)
     needs: [setup-runner, build-and-unit-test]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
@@ -144,84 +146,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Podman
-        uses: awalsh128/cache-apt-pkgs-action@v1.5.1
+      - name: Setup k3s
+        uses: ./.github/actions/setup-k3s
         with:
-          packages: |
-            podman
-          version: 2
-
-      - name: Validate Podman installation
-        run: |
-          set -euxo pipefail
-          podman --version
-          podman info
-
-      - name: Install KIND and kubectl
-        run: |
-          # Install KIND
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
-
-          # Install kubectl
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/kubectl
-          kubectl version --client
-
-      - name: Create KIND cluster with NRI support
-        id: kind-cluster
-        env:
-          HOME: /user
-          KIND_EXPERIMENTAL_PROVIDER: podman
-        run: |
-          cat > kind-config.yaml << 'EOF'
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          name: nri-resctrl-plugin-test
-          nodes:
-          - role: control-plane
-            extraMounts:
-            - hostPath: /tmp/nri
-              containerPath: /var/run/nri
-            - hostPath: /tmp/nri-conf
-              containerPath: /etc/nri/conf.d
-            - hostPath: /tmp/nri-plugins
-              containerPath: /opt/nri/plugins
-          containerdConfigPatches:
-          - |-
-            [plugins."io.containerd.nri.v1.nri"]
-              disable = false
-              disable_connections = false
-              socket_path = "/var/run/nri/nri.sock"
-              plugin_config_path = "/etc/nri/conf.d"
-              plugin_path = "/opt/nri/plugins"
-          EOF
-
-          sudo mkdir -p /tmp/nri /tmp/nri-conf /tmp/nri-plugins
-          sudo chmod 777 /tmp/nri /tmp/nri-conf /tmp/nri-plugins
-
-          # Ensure HOME exists for kubeconfig
-          sudo mkdir -p "$HOME"
-          sudo chmod 755 "$HOME"
-          sudo chown "$USER":"$USER" "$HOME"
-          mkdir -p "$HOME/.kube"
-
-          kind create cluster --config kind-config.yaml --wait 300s
-          kubectl cluster-info --context kind-nri-resctrl-plugin-test
-          echo "kubeconfig=$HOME/.kube/config" >> "$GITHUB_OUTPUT"
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          wait_kube_system: false
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
 
       - name: Verify NRI socket
         run: |
-          for i in {1..30}; do
-            if sudo test -S "/tmp/nri/nri.sock"; then
-              echo "NRI socket found"; ls -la /tmp/nri/nri.sock; break
+          set -euo pipefail
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
+          for i in $(seq 1 90); do
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✓ NRI socket present"
+              sudo ls -la /var/run/nri/nri.sock
+              break
             fi
-            echo "Waiting for NRI socket ($i/30)"; sleep 2
+            sleep 1
           done
-          sudo test -S "/tmp/nri/nri.sock" || { echo "NRI socket missing"; exit 1; }
+          if ! sudo test -S /var/run/nri/nri.sock; then
+            echo "✗ NRI socket not found after enabling on k3s"
+            sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
 
       - name: Download nri-resctrl-plugin e2e binary
         uses: actions/download-artifact@v4
@@ -235,28 +187,25 @@ jobs:
 
       - name: Run plugin integration tests (excluding capacity retry)
         env:
-          NRI_SOCKET_PATH: /tmp/nri/nri.sock
+          NRI_SOCKET_PATH: /var/run/nri/nri.sock
           RUST_LOG: info
-          KUBECONFIG: ${{ steps.kind-cluster.outputs.kubeconfig }}
-          HOME: /root
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: |
           echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
-          NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1 --skip test_capacity_retry_e2e
+          NRI_SOCKET_PATH="/var/run/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1 --skip test_capacity_retry_e2e
 
       - name: Run plugin integration test (capacity retry)
         env:
-          NRI_SOCKET_PATH: /tmp/nri/nri.sock
+          NRI_SOCKET_PATH: /var/run/nri/nri.sock
           RUST_LOG: info
-          KUBECONFIG: ${{ steps.kind-cluster.outputs.kubeconfig }}
-          HOME: /root
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: |
           echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
-          NRI_SOCKET_PATH="/tmp/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e test_capacity_retry_e2e --include-ignored --nocapture --test-threads=1
-
-      - name: Cleanup KIND
+          NRI_SOCKET_PATH="/var/run/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e test_capacity_retry_e2e --include-ignored --nocapture --test-threads=1
+      - name: Cleanup k3s
         if: always()
         run: |
-          kind delete cluster --name nri-resctrl-plugin-test || true
+          sudo /usr/local/bin/k3s-uninstall.sh || true
 
 
   setup-runner:
