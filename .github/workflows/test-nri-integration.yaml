@@ -5,6 +5,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/nri/**'
+      - '.github/actions/setup-k3s/**'
       - '.github/workflows/test-nri-integration.yaml'
   push:
     branches:
@@ -12,6 +13,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/nri/**'
+      - '.github/actions/setup-k3s/**'
       - '.github/workflows/test-nri-integration.yaml'
 
 permissions:
@@ -28,107 +30,21 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Docker
-        run: |
-          # Ensure Docker is running (should already be on ubuntu-latest)
-          sudo systemctl start docker
-          sudo systemctl enable docker
-          docker --version
-          
-          # Add current user to docker group to avoid sudo
-          sudo usermod -aG docker $USER
-          # Note: In GitHub Actions, this change takes effect in subsequent steps
+      - name: Setup k3s
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          wait_kube_system: false
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
 
-      - name: Install KIND and kubectl
+      - name: Copy kubeconfig for non-root use
         run: |
-          # Install KIND
-          [ $(uname -m) = x86_64 ] && curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-          kind version
-          
-          # Install kubectl
-          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          sudo mv kubectl /usr/local/bin/kubectl
-          kubectl version --client
-
-      - name: Create KIND cluster with NRI support
-        run: |
-          # Create KIND cluster config with NRI support
-          cat > kind-config.yaml << 'EOF'
-          kind: Cluster
-          apiVersion: kind.x-k8s.io/v1alpha4
-          name: nri-test
-          nodes:
-          - role: control-plane
-            extraMounts:
-            - hostPath: /tmp/nri
-              containerPath: /var/run/nri
-            - hostPath: /tmp/nri-conf
-              containerPath: /etc/nri/conf.d
-            - hostPath: /tmp/nri-plugins
-              containerPath: /opt/nri/plugins
-          containerdConfigPatches:
-          - |-
-            [plugins."io.containerd.nri.v1.nri"]
-              disable = false
-              disable_connections = false
-              socket_path = "/var/run/nri/nri.sock"
-              plugin_config_path = "/etc/nri/conf.d"
-              plugin_path = "/opt/nri/plugins"
-          EOF
-          
-          # Create directories for NRI on host that will be mounted
-          sudo mkdir -p /tmp/nri /tmp/nri-conf /tmp/nri-plugins
-          sudo chmod 777 /tmp/nri /tmp/nri-conf /tmp/nri-plugins
-          
-          echo "=== Creating KIND cluster with NRI support ==="
-          kind create cluster --config kind-config.yaml --wait 300s
-          
-          echo "=== Cluster created, checking status ==="
-          kubectl cluster-info --context kind-nri-test
-          kubectl get nodes
-          kubectl get pods -A
-
-      - name: Verify NRI setup
-        run: |
-          echo "=== Verifying NRI socket and configuration ==="
-          
-          # Check if NRI socket exists in the mounted directory
-          for i in {1..30}; do
-            if sudo test -S "/tmp/nri/nri.sock"; then
-              echo "✅ NRI socket found at /tmp/nri/nri.sock"
-              ls -la /tmp/nri/nri.sock
-              break
-            else
-              echo "Waiting for NRI socket... (attempt $i/30)"
-              sleep 2
-            fi
-          done
-          
-          if ! sudo test -S "/tmp/nri/nri.sock"; then
-            echo "❌ NRI socket not found after waiting"
-            echo "Checking KIND container logs..."
-            docker logs nri-test-control-plane 2>&1 | grep -i nri || echo "No NRI logs found"
-            
-            echo "Checking containerd config in KIND container..."
-            docker exec nri-test-control-plane cat /etc/containerd/config.toml
-            
-            echo "Checking if containerd is running with NRI..."
-            docker exec nri-test-control-plane ps aux | grep containerd
-            
-            echo "NRI socket is required for integration tests to work properly"
-            exit 1
-          fi
-          
-          echo "=== Verifying cluster readiness ==="
-          kubectl wait --for=condition=Ready nodes --all --timeout=300s
-          kubectl wait --namespace kube-system --for=condition=Ready pods --all --timeout=300s
-          
-          echo "=== Final cluster status ==="
-          kubectl get nodes -o wide
-          kubectl get pods -A
+          mkdir -p ~/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+          sudo chown $(id -u):$(id -g) ~/.kube/config
 
       - name: Install Rust
         run: |
@@ -139,8 +55,7 @@ jobs:
           echo "=== Rust version info ==="
           rustc --version
           cargo --version
-          echo "=== Adding MUSL target ==="
-          rustup target add x86_64-unknown-linux-musl
+          
 
       - name: Capture rustc version
         id: rustc_version
@@ -163,20 +78,18 @@ jobs:
       - name: Install build dependencies (APT)
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: clang libelf-dev build-essential pkg-config musl-tools
+          packages: clang libelf-dev build-essential pkg-config
           version: 1.0
 
-      - name: Build NRI integration test (musl static)
+      - name: Build NRI integration test
         run: |
           source ~/.cargo/env
           
-          echo "=== Building NRI integration test (x86_64-unknown-linux-musl) ==="
-          export RUSTFLAGS="-C target-feature=+crt-static"
-          # Build the nri-resctrl-plugin integration test for MUSL target to avoid glibc mismatch
-          cargo test --package nri-resctrl-plugin --test integration_test --no-run --target x86_64-unknown-linux-musl --verbose
+          echo "=== Building NRI integration test ==="
+          cargo test --package nri --test integration_test --no-run --verbose
           
           # Find the test binary
-          TEST_BIN=$(find target/x86_64-unknown-linux-musl/debug/deps -name "integration_test-*" -type f -executable | head -1)
+          TEST_BIN=$(find target/debug/deps -name "integration_test-*" -type f -executable | head -1)
           
           if [ -z "$TEST_BIN" ]; then
             echo "Error: Could not find integration test binary."
@@ -185,98 +98,57 @@ jobs:
           fi
           
           echo "Found test binary at: $TEST_BIN"
-          echo "Binary type:"
-          file "$TEST_BIN" || true
           echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
 
-      - name: Run NRI Integration Test (inside KIND node)
+      - name: Verify NRI socket
+        run: |
+          set -euo pipefail
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
+          for i in $(seq 1 90); do
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✓ NRI socket present"
+              sudo ls -la /var/run/nri/nri.sock
+              break
+            fi
+            sleep 1
+          done
+          if ! sudo test -S /var/run/nri/nri.sock; then
+            echo "✗ NRI socket not found after enabling on k3s"
+            sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
+
+      - name: Run NRI Integration Test (host)
         run: |
           source ~/.cargo/env
-          
-          echo "=== Running NRI Integration Test inside KIND control-plane container ==="
-          # Keep host-side kube access for visibility
-          # Note: 'kind get kubeconfig-path' is deprecated in newer kind; kubeconfig is auto-configured on host.
           export RUST_LOG=debug
-          export HOST_NRI_SOCKET_PATH=/tmp/nri/nri.sock
-          export NODE_NRI_SOCKET_PATH=/var/run/nri/nri.sock
+          export NRI_SOCKET_PATH=/var/run/nri/nri.sock
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
           
-          echo "Test binary (host): $TEST_BINARY_PATH"
-          echo "Host socket path: $HOST_NRI_SOCKET_PATH"
-          echo "Node socket path: $NODE_NRI_SOCKET_PATH"
-          
-          echo "=== Pre-test environment check (host) ==="
-          echo "User: $(whoami)"
+          echo "=== Running NRI Integration Test on host ==="
+          echo "Test binary: $TEST_BINARY_PATH"
+          echo "KUBECONFIG: $KUBECONFIG"
+          echo "Socket path: $NRI_SOCKET_PATH"
           kubectl get nodes
           kubectl get pods -A
-          
-          if sudo test -S "$HOST_NRI_SOCKET_PATH"; then
-            echo "✅ NRI socket exists on host - proceeding"
-            echo "Host NRI socket permissions:"
-            ls -la "$HOST_NRI_SOCKET_PATH"
-          else
-            echo "❌ NRI socket missing on host - cannot run NRI integration test"
-            echo "This indicates that NRI is not properly configured in KIND"
-            echo "Checking system state:"
-            echo "- KIND container status:"
-            docker ps | grep nri-test
-            echo "- KIND logs:"
-            docker logs nri-test-control-plane 2>&1 | tail -50
-            echo "- NRI directory contents (host):"
-            ls -la /tmp/nri/ || echo "NRI directory not found"
-            echo "- Containerd config in KIND:"
-            docker exec nri-test-control-plane cat /etc/containerd/config.toml
-            echo "=== Skipping NRI integration test due to missing NRI socket ==="
-            exit 1
-          fi
-          
-          echo "=== Copying test binary into KIND control-plane container ==="
-          set -e
-          DEST_IN_CONTAINER=/root/integration_test
-          # Ensure destination directory exists inside the node
-          docker exec nri-test-control-plane /bin/sh -lc "mkdir -p \"$(dirname '$DEST_IN_CONTAINER')\"" || true
-          # Try docker cp first
-          docker cp "$TEST_BINARY_PATH" nri-test-control-plane:"$DEST_IN_CONTAINER" || true
-          # If not present after cp, fallback to streaming
-          if ! docker exec nri-test-control-plane /bin/sh -lc "test -e '$DEST_IN_CONTAINER'"; then
-            echo "docker cp did not place file; falling back to streaming copy"
-            cat "$TEST_BINARY_PATH" | docker exec -i nri-test-control-plane /bin/sh -lc "cat > '$DEST_IN_CONTAINER'" || {
-              echo "Failed to stream binary into container";
-              exit 1;
-            }
-          fi
-          # Verify file exists then chmod
-          docker exec nri-test-control-plane /bin/sh -lc "ls -l '$DEST_IN_CONTAINER' || true; chmod +x '$DEST_IN_CONTAINER'; ls -l '$DEST_IN_CONTAINER'"
-          
-          echo "=== Verifying NRI socket inside KIND node ==="
-          docker exec nri-test-control-plane /bin/sh -lc "test -S '$NODE_NRI_SOCKET_PATH' && ls -la '$NODE_NRI_SOCKET_PATH'" || {
-            echo "❌ NRI socket not found inside node at $NODE_NRI_SOCKET_PATH"
-            echo "Containerd config:"; docker exec nri-test-control-plane cat /etc/containerd/config.toml || true
-            echo "Recent container logs:"; docker logs nri-test-control-plane 2>&1 | tail -100 || true
-            exit 1
-          }
-          
-          echo "=== Executing integration test inside KIND node ==="
-          docker exec \
-            -e NRI_SOCKET_PATH="$NODE_NRI_SOCKET_PATH" \
-            -e RUST_LOG="$RUST_LOG" \
-            -e KUBECONFIG=/etc/kubernetes/kubelet.conf \
-            nri-test-control-plane \
-            "$DEST_IN_CONTAINER" --ignored --nocapture --test-threads=1 || {
-              echo "=== Test failed, checking KIND node logs ==="
-              docker logs nri-test-control-plane 2>&1 | tail -200 || true
+          if sudo test -S "$NRI_SOCKET_PATH"; then
+            echo "✅ NRI socket exists - running test"
+            sudo -E "$TEST_BINARY_PATH" --ignored --nocapture --test-threads=1 || {
+              echo "=== Test failed; showing k3s logs ==="
+              sudo journalctl -u k3s --no-pager -n 200 || true
               exit 1
             }
-          
-          echo "=== Verifying test pods cleanup (host) ==="
-          kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
-          
+          else
+            echo "❌ NRI socket missing at $NRI_SOCKET_PATH"
+            exit 1
+          fi
+          echo "=== Verifying test pods cleanup ==="
+          kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing|nri-cgroup-path-test)" || echo "No leftover test pods"
           echo "=== NRI Integration Test Complete ==="
 
       - name: Cleanup
         if: always()
         run: |
-          echo "=== Cleaning up KIND cluster ==="
-          kind delete cluster --name nri-test || true
-          
-          echo "=== Cleaning up NRI directories ==="
-          sudo rm -rf /tmp/nri /tmp/nri-conf /tmp/nri-plugins || true
+          echo "=== Uninstalling k3s ==="
+          sudo /usr/local/bin/k3s-uninstall.sh || true
