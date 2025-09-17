@@ -300,6 +300,9 @@ impl<P: FsProvider> Resctrl<P> {
     /// PIDs returned by `pid_source`, assigning only the missing ones. The loop runs
     /// up to `max_passes` times or until convergence (no missing tasks) is reached.
     ///
+    /// If `pid_source` returns an empty set for any pass, reconciliation fails with
+    /// `Error::EmptyPidSet` and no further passes are attempted.
+    ///
     /// Returns `AssignmentResult { assigned, missing }` where
     /// - `assigned` is the total number of successful task assignments across passes
     /// - `missing` is the number of desired PIDs still not present in the group after
