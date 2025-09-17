@@ -80,7 +80,7 @@ impl Default for ResctrlPluginConfig {
             cleanup_on_start: true,
             max_reconcile_passes: 10,
             concurrency_limit: 1,
-            auto_mount: false,
+            auto_mount: true,
         }
     }
 }
@@ -792,7 +792,7 @@ mod tests {
         assert!(cfg.cleanup_on_start);
         assert_eq!(cfg.max_reconcile_passes, 10);
         assert_eq!(cfg.concurrency_limit, 1);
-        assert!(!cfg.auto_mount);
+        assert!(cfg.auto_mount);
     }
 
     #[tokio::test]

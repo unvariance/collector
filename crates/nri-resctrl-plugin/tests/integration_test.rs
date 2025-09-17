@@ -478,10 +478,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     // Build plugin with an externally provided channel
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
     let plugin = std::sync::Arc::new(ResctrlPlugin::new(
-        ResctrlPluginConfig {
-            auto_mount: true,
-            ..Default::default()
-        },
+        ResctrlPluginConfig::default(),
         tx,
     ));
 
@@ -637,7 +634,6 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
         ResctrlPluginConfig {
             group_prefix: "test_e2e_".into(),
             cleanup_on_start: true,
-            auto_mount: true,
             ..Default::default()
         },
         tx,
@@ -763,7 +759,6 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     let plugin = std::sync::Arc::new(ResctrlPlugin::new(
         ResctrlPluginConfig {
             cleanup_on_start: false,
-            auto_mount: true,
             ..Default::default()
         },
         tx,
