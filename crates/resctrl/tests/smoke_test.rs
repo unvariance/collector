@@ -138,7 +138,7 @@ fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()
     }
 
     // Read the number of RMIDs available.
-    let num_rmids_path = "/sys/fs/resctrl/info/K3_MON/num_rmids";
+    let num_rmids_path = "/sys/fs/resctrl/info/L3_MON/num_rmids";
     let num_rmids_str = std::fs::read_to_string(num_rmids_path).map_err(|e| {
         anyhow::anyhow!(
             "failed to read {}: {} (ensure resctrl is supported and mounted)",
