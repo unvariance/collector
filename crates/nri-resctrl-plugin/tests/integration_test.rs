@@ -369,6 +369,7 @@ async fn wait_for_pod_update(
                 )
             }
         };
+        eprintln!("[integration_test] saw event: {:?}", ev);
         match ev {
             PodResctrlEvent::AddOrUpdate(add) if add.pod_uid == pod_uid => {
                 if add.total_containers == expected_total
@@ -399,6 +400,7 @@ async fn wait_for_pod_removed(
             Some(rem) if !rem.is_zero() => rem,
             _ => bail!("timed out waiting for Removed event for pod {}", pod_uid),
         };
+        eprintln!("[integration_test] saw event: {:?}", ev);
         let ev = match tokio::time::timeout(remaining, rx.recv()).await {
             Ok(Some(ev)) => ev,
             Ok(None) => bail!("event channel closed while waiting for removal of {pod_uid}"),
