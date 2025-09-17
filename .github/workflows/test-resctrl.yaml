@@ -152,7 +152,25 @@ jobs:
 
       - name: Validate Docker installation
         run: |
-          sudo systemctl start docker || true
+          set -euxo pipefail
+          # Ensure Docker service is up
+          sudo systemctl enable --now docker || true
+          # Wait up to 10s for the Docker daemon to be ready
+          ready=0
+          for i in {1..10}; do
+            if docker ps >/dev/null 2>&1; then
+              echo "Docker is ready"
+              ready=1
+              break
+            fi
+            echo "Waiting for Docker daemon ($i/10) ..."
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo "Docker daemon did not become ready in time" >&2
+            sudo systemctl status docker || true
+            exit 1
+          fi
           docker --version
 
       - name: Install KIND, kubectl, and crictl
