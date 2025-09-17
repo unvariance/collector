@@ -784,7 +784,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|limit| *limit > 0)
-        .unwrap_or(32);
+        .unwrap_or(1024);
     let filler_budget = num_rmids_limit.saturating_add(2);
     for idx in 0..filler_budget {
         let dir = root.join(format!("{}{}", filler_prefix, idx));
