@@ -94,8 +94,7 @@ impl NRI {
         let runtime_client = RuntimeClient::new(ttrpc::r#async::Client::new(runtime_socket));
 
         // Create the plugin service (server side)
-        let plugin_service = plugin.clone();
-        let service_map = api_ttrpc::create_plugin(plugin_service);
+        let service_map = api_ttrpc::create_plugin(plugin);
         let mut server = ttrpc::r#async::Server::new().register_service(service_map);
 
         // Open plugin socket for the server
