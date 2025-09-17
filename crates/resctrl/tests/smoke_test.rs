@@ -1,29 +1,6 @@
 use resctrl::{AssignmentResult, Config, Error, Resctrl};
 use std::process::Command;
 
-fn try_mount_resctrl() -> std::io::Result<()> {
-    // Attempt to mount the resctrl filesystem if not mounted
-    let status = Command::new("mount")
-        .args(["-t", "resctrl", "resctrl", "/sys/fs/resctrl"])
-        .status()?;
-    if status.success() {
-        return Ok(());
-    }
-    let out = Command::new("mount")
-        .arg("-v")
-        .args(["-t", "resctrl", "resctrl", "/sys/fs/resctrl"])
-        .output()?;
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    if stderr.to_lowercase().contains("busy") || stderr.to_lowercase().contains("mounted") {
-        return Ok(());
-    }
-    Err(std::io::Error::other(format!(
-        "mount resctrl failed: status {:?}, err: {}",
-        status.code(),
-        stderr
-    )))
-}
-
 fn try_umount_resctrl() -> std::io::Result<()> {
     // Attempt to unmount resctrl; treat "not mounted" as success
     let status = Command::new("umount").arg("/sys/fs/resctrl").status()?;
