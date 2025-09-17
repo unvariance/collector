@@ -145,9 +145,11 @@ impl BpfLoader {
 
         // Reuse the sync timer bitmap map by borrowing the FD from SyncTimer.
         let borrowed_fd = sync_timer.borrowed_map_fd();
-        if let Err(e) = open_skel.maps.sync_timer_bitmap.reuse_fd(borrowed_fd) {
-            return Err(anyhow!("failed to reuse sync timer map fd: {}", e));
-        }
+        open_skel
+            .maps
+            .sync_timer_bitmap
+            .reuse_fd(borrowed_fd)
+            .with_context(|| "failed to reuse sync timer map fd")?;
 
         // Set const global before load so it becomes a constant in the program
         open_skel.maps.rodata_data.collector_sync_timer_id = subscriber_id as u64;
