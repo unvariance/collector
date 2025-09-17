@@ -299,7 +299,11 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
                             Some(ft) if ft.is_symlink() => "@",
                             _ => "",
                         };
-                        eprintln!("  {}{}", path.file_name().unwrap().to_string_lossy(), marker);
+                        eprintln!(
+                            "  {}{}",
+                            path.file_name().unwrap().to_string_lossy(),
+                            marker
+                        );
                     }
                 }
                 Err(err) => {
@@ -307,7 +311,9 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
                 }
             }
 
-            if dir == cgroup_root { break; }
+            if dir == cgroup_root {
+                break;
+            }
             current = dir.parent();
         }
         assert!(scope_dir.exists(), "cgroup path should exist");
@@ -327,7 +333,11 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
             break;
         }
     }
-    assert!(procs_found, "cgroup procs file not found under {}", full_path);
+    assert!(
+        procs_found,
+        "cgroup procs file not found under {}",
+        full_path
+    );
 
     // Cleanup: delete pod and close NRI connection
     info!("Deleting test pod: {}", pod_name);

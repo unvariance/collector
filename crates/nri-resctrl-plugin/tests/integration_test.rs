@@ -477,10 +477,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
 
     // Build plugin with an externally provided channel
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
-    let plugin = std::sync::Arc::new(ResctrlPlugin::new(
-        ResctrlPluginConfig::default(),
-        tx,
-    ));
+    let plugin = std::sync::Arc::new(ResctrlPlugin::new(ResctrlPluginConfig::default(), tx));
 
     // Start NRI server for plugin and register
     let (nri, join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
