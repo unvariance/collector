@@ -56,7 +56,7 @@ pub struct BpfLoader {
 
 impl BpfLoader {
     /// Create a new BPF loader with initialized skeleton
-    pub fn new(perf_ring_pages: u32, sync_timer: &SyncTimer, subscriber_id: u8) -> Result<Self> {
+    pub fn new(perf_ring_pages: u32, sync_timer: &mut SyncTimer) -> Result<Self> {
         fn print_to_log(level: PrintLevel, msg: String) {
             match level {
                 PrintLevel::Debug => log::debug!("{}", msg),
@@ -68,14 +68,14 @@ impl BpfLoader {
         set_print(Some((PrintLevel::Debug, print_to_log)));
 
         // Load BPF program (non-verbose, use the log crate to print errors)
-        let mut skel = match Self::load_skel(false, sync_timer, subscriber_id) {
+        let mut skel = match Self::load_skel(false, sync_timer) {
             Ok(skel) => skel,
             Err(e) => {
                 log::error!("Failed to load BPF program: {}", e);
                 log::error!("Reloading with debug flag, for more information");
 
                 // Reload with debug flag (verbose, to always print the error to stderr)
-                let _ = Self::load_skel(true, sync_timer, subscriber_id);
+                let _ = Self::load_skel(true, sync_timer);
                 return Err(e);
             }
         };
@@ -124,11 +124,7 @@ impl BpfLoader {
         })
     }
 
-    fn load_skel(
-        verbose: bool,
-        sync_timer: &SyncTimer,
-        subscriber_id: u8,
-    ) -> Result<bpf::CollectorSkel<'static>> {
+    fn load_skel(verbose: bool, sync_timer: &mut SyncTimer) -> Result<bpf::CollectorSkel<'static>> {
         let mut skel_builder = bpf::CollectorSkelBuilder::default();
         if verbose {
             skel_builder.obj_builder.debug(true);
@@ -151,7 +147,10 @@ impl BpfLoader {
             .reuse_fd(borrowed_fd)
             .with_context(|| "failed to reuse sync timer map fd")?;
 
-        // Set const global before load so it becomes a constant in the program
+        // Allocate a subscriber ID from the sync timer and set it as a const global
+        let subscriber_id = sync_timer
+            .assign_id()
+            .map_err(|e| anyhow!("failed to assign sync timer subscriber id: {}", e))?;
         open_skel.maps.rodata_data.collector_sync_timer_id = subscriber_id as u64;
 
         let skel = open_skel

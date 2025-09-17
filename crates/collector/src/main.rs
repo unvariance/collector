@@ -313,11 +313,8 @@ async fn main() -> Result<()> {
     };
     let mut sync_timer = SyncTimer::start(SYNC_TIMER_INTERVAL_NS)
         .map_err(|e| anyhow!("failed to start sync timer: {}", e))?;
-    let subscriber_id = sync_timer
-        .assign_id()
-        .map_err(|e| anyhow!("failed to assign sync timer subscriber id: {}", e))?;
 
-    let mut bpf_loader = BpfLoader::new(perf_ring_pages, &sync_timer, subscriber_id)?;
+    let mut bpf_loader = BpfLoader::new(perf_ring_pages, &mut sync_timer)?;
 
     // Create PerfEventProcessor with the appropriate mode
     let processor = PerfEventProcessor::new(&mut bpf_loader, num_cpus, processor_mode);
