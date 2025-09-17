@@ -125,3 +125,98 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     rc.delete_group(&group)?;
     Ok(())
 }
+
+#[test]
+fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()> {
+    // Only run on explicit opt-in (hardware E2E). Otherwise skip.
+    if std::env::var("RESCTRL_E2E").ok().as_deref() != Some("1") {
+        eprintln!("RESCTRL_E2E not set; skipping RMID capacity test");
+        return Ok(());
+    }
+
+    // Ensure resctrl is mounted and writable.
+    let rc = Resctrl::new(Config::default());
+    rc.ensure_mounted(true)?;
+    let info = rc.detect_support()?;
+    if !info.mounted || !info.writable {
+        eprintln!(
+            "resctrl not mounted/writable (mounted={}, writable={}); skipping",
+            info.mounted, info.writable
+        );
+        return Ok(());
+    }
+
+    // Read the number of RMIDs available.
+    let num_rmids_path = "/sys/fs/resctrl/info/num_rmids";
+    let num_rmids_str = match std::fs::read_to_string(num_rmids_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "failed to read {}: {}; skipping RMID capacity test",
+                num_rmids_path, e
+            );
+            return Ok(());
+        }
+    };
+    let num_rmids: usize = match num_rmids_str.trim().parse() {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!(
+                "failed to parse {} contents '{}': {}; skipping",
+                num_rmids_path,
+                num_rmids_str.trim(),
+                e
+            );
+            return Ok(());
+        }
+    };
+    if num_rmids <= 1 {
+        eprintln!(
+            "num_rmids={} too small for capacity test; skipping",
+            num_rmids
+        );
+        return Ok(());
+    }
+
+    // Try to create (num_rmids - 1) groups; this should NOT hit capacity.
+    let mut created: Vec<String> = Vec::new();
+    let run_id = format!("sat_{}", uuid::Uuid::new_v4());
+    for i in 0..(num_rmids - 1) {
+        let uid = format!("{}_{i}", run_id);
+        match rc.create_group(&uid) {
+            Ok(path) => created.push(path),
+            Err(Error::Capacity { .. }) => {
+                // Unexpected saturation before num_rmids-1 groups created.
+                // Cleanup what we created and then fail the test.
+                for p in &created {
+                    let _ = rc.delete_group(p);
+                }
+                return Err(anyhow::anyhow!(
+                    "unexpected resctrl capacity exhaustion creating group {} of {} (num_rmids={})",
+                    i + 1,
+                    num_rmids - 1,
+                    num_rmids
+                ));
+            }
+            Err(Error::NotMounted { .. }) => {
+                // Try to mount and retry once.
+                try_mount_resctrl()?;
+                let path = rc.create_group(&uid)?;
+                created.push(path);
+            }
+            Err(e) => {
+                // For other errors, clean up and bubble.
+                for p in &created {
+                    let _ = rc.delete_group(p);
+                }
+                return Err(anyhow::anyhow!("create_group failed: {e}"));
+            }
+        }
+    }
+
+    // Cleanup created groups.
+    for p in &created {
+        let _ = rc.delete_group(p);
+    }
+    Ok(())
+}
