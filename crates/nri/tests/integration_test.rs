@@ -108,7 +108,7 @@ impl Plugin for EventCapturePlugin {
         req: api::StateChangeEvent,
     ) -> ttrpc::Result<api::Empty> {
         // Only act on START_CONTAINER events
-        if req.event() == api::Event::START_CONTAINER {
+        if req.event == api::Event::START_CONTAINER {
             let container = req
                 .container
                 .as_ref()
