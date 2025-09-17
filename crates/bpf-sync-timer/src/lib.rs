@@ -109,6 +109,9 @@ pub enum SyncTimerError {
 
     #[error("Failed to duplicate timer map file descriptor")]
     MapFdDupFailed(#[source] io::Error),
+
+    #[error("interval_ns too small: {requested} (minimum 1000 ns = 1µs)")]
+    IntervalTooSmall { requested: u64 },
 }
 
 const TIMER_MIGRATION_SYSCTL_PATH: &str = "/proc/sys/kernel/timer_migration";
@@ -131,7 +134,14 @@ impl SyncTimer {
 
         set_print(Some((PrintLevel::Debug, print_to_log)));
 
-        let interval = interval_ns.max(1);
+        // Sanity check: 1µs is the minimum supported interval
+        if interval_ns < 1_000 {
+            return Err(SyncTimerError::IntervalTooSmall {
+                requested: interval_ns,
+            });
+        }
+
+        let interval = interval_ns;
 
         let skel_builder = bpf::SyncTimerSkelBuilder::default();
         let obj_ref = Box::leak(Box::new(MaybeUninit::<OpenObject>::uninit()));
