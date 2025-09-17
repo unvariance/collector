@@ -282,7 +282,36 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
     // Basic sanity checks
     assert!(full_path.starts_with("/sys/fs/cgroup"));
     let scope_dir = std::path::Path::new(&full_path);
-    assert!(scope_dir.exists(), "cgroup path should exist");
+    if !scope_dir.exists() {
+        eprintln!("cgroup path does not exist: {}", full_path);
+        // Walk up parents and list directory contents until /sys/fs/cgroup
+        let cgroup_root = std::path::Path::new("/sys/fs/cgroup");
+        let mut current = scope_dir.parent();
+        while let Some(dir) = current {
+            eprintln!("\nListing for {}:", dir.display());
+            match std::fs::read_dir(dir) {
+                Ok(entries) => {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        let file_type = entry.file_type().ok();
+                        let marker = match file_type {
+                            Some(ft) if ft.is_dir() => "/",
+                            Some(ft) if ft.is_symlink() => "@",
+                            _ => "",
+                        };
+                        eprintln!("  {}{}", path.file_name().unwrap().to_string_lossy(), marker);
+                    }
+                }
+                Err(err) => {
+                    eprintln!("  <failed to read_dir: {}>", err);
+                }
+            }
+
+            if dir == cgroup_root { break; }
+            current = dir.parent();
+        }
+        assert!(scope_dir.exists(), "cgroup path should exist");
+    }
     assert!(scope_dir.is_dir(), "cgroup path should be a directory");
 
     // Check the procs file exists and is readable (cgroup v2 is cgroup.procs)
