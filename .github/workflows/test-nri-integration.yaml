@@ -209,7 +209,7 @@ jobs:
             ls -la "$NRI_SOCKET_PATH"
             
             # Run the integration test with sudo (NRI requires root permissions)
-            sudo -E $TEST_BINARY_PATH --ignored --nocapture || {
+            sudo -E $TEST_BINARY_PATH --ignored --nocapture --test-threads=1 || {
               echo "=== Test failed, checking logs ==="
               echo "KIND container logs:"
               docker logs nri-test-control-plane 2>&1 | tail -100
