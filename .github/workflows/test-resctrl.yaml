@@ -144,12 +144,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Podman
-        uses: awalsh128/cache-apt-pkgs-action@v1
+        uses: awalsh128/cache-apt-pkgs-action@v1.5.1
         with:
           packages: |
             podman
-          version: 1
-          execute_install_scripts: true
+          version: 2
 
       - name: Validate Podman installation
         run: |
