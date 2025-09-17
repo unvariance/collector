@@ -1000,7 +1000,9 @@ mod tests {
         .expect("Should receive event within timeout");
 
         // Verify the directory for the resctrl group was created
-        assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u789")));
+        assert!(
+            fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789"))
+        );
 
         // Now remove the pod and verify removal event + directory deletion
         let state_req = StateChangeEvent {
@@ -1026,7 +1028,9 @@ mod tests {
         .await
         .expect("Should receive removal event within timeout");
 
-        assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u789")));
+        assert!(
+            !fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789"))
+        );
     }
 
     #[tokio::test]
@@ -1052,7 +1056,8 @@ mod tests {
         );
 
         // Configure ENOSPC for the pod's group dir
-        let group_path = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
+        let group_path =
+            std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_u1");
         fs.set_nospace_dir(&group_path);
 
         // Define pod and container
@@ -1143,7 +1148,9 @@ mod tests {
         fs.clear_nospace_dir(&group_path);
         let st = plugin.retry_group_creation("u1").expect("retry ok");
         match st {
-            ResctrlGroupState::Exists(p) => assert!(p.ends_with("/sys/fs/resctrl/pod_u1")),
+            ResctrlGroupState::Exists(p) => {
+                assert!(p.ends_with("/sys/fs/resctrl/mon_groups/pod_u1"))
+            }
             _ => panic!("expected Exists"),
         }
         let ev = timeout(Duration::from_millis(100), rx.recv())
@@ -1172,7 +1179,7 @@ mod tests {
 
         let rc = Resctrl::with_provider(fs.clone(), resctrl::Config::default());
 
-        let gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_u1");
+        let gp = std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_u1");
         fs.add_dir(&gp);
         fs.add_file(&gp.join("tasks"), "");
 
@@ -1330,10 +1337,10 @@ mod tests {
         );
 
         // uA: Failed pod due to ENOSPC
-        let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uA");
+        let u_a_gp = std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_uA");
         fs.set_nospace_dir(&u_a_gp);
         // uB: Existing group and one Partial container
-        let u_b_gp = std::path::PathBuf::from("/sys/fs/resctrl/pod_uB");
+        let u_b_gp = std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_uB");
         fs.add_dir(&u_b_gp);
         fs.add_file(&u_b_gp.join("tasks"), "");
         fs.set_missing_pid(222);
