@@ -140,6 +140,24 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Capture rustc version
+        id: rustc_version
+        run: |
+          source ~/.cargo/env
+          echo "version=$(rustc -V | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Cargo registry, git, and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ steps.rustc_version.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ steps.rustc_version.outputs.version }}-
+            ${{ runner.os }}-cargo-
+
       - name: Install build dependencies (APT)
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
