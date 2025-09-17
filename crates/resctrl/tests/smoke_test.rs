@@ -133,7 +133,8 @@ fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()
     if !info.mounted || !info.writable {
         return Err(anyhow::anyhow!(
             "resctrl not mounted/writable (mounted={}, writable={})",
-            info.mounted, info.writable
+            info.mounted,
+            info.writable
         ));
     }
 
