@@ -5,7 +5,7 @@ use nix::unistd::Pid;
 use std::fs;
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd};
 use thiserror::Error;
 
 mod bpf {
