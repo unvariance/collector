@@ -220,6 +220,24 @@ runs:
           exit 1
         fi
 
+    - name: Wait for default service account
+      shell: bash
+      run: |
+        set -euo pipefail
+        export KUBECONFIG="${{ inputs.kubeconfig_path }}"
+        echo "Waiting for default service account in 'default' namespace (timeout=30s)"
+        END=$((SECONDS + 30))
+        until kubectl get serviceaccount default -n default >/dev/null 2>&1; do
+          if [ $SECONDS -ge $END ]; then
+            echo "Timed out waiting for default service account"
+            echo "=== service accounts (default ns) ==="; kubectl get sa -n default || true
+            echo "=== events (default ns) ==="; kubectl -n default get events --sort-by=.lastTimestamp | tail -n 100 || true
+            exit 1
+          fi
+          sleep 1
+        done
+        echo "Default service account is present"
+
     - name: Capture node name
       id: capture-node
       shell: bash
