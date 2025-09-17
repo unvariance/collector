@@ -14,6 +14,7 @@ API Overview
 - Construct with defaults:
   - root: /sys/fs/resctrl
   - group_prefix: "pod_"
+ - create_group() creates measurement groups under `<root>/mon_groups`
 
 Example
 ```rust
