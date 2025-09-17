@@ -919,7 +919,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         tasks_pids, expected,
         "group tasks should equal container cgroup PIDs"
     );
-    assert!(tasks_pids.len() >= 1, "at least one PID expected in group");
+    assert!(!tasks_pids.is_empty(), "at least one PID expected in group");
 
     // Cleanup: delete pod cap-a and ensure its group is removed.
     delete_pod_if_exists(&pods, "cap-a").await?;
