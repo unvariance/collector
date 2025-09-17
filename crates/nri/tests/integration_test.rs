@@ -286,14 +286,19 @@ fn verify_cgroup_path_and_return_pod_name(
     }
 
     let procs_candidates = ["cgroup.procs", "cgroups.procs"]; // accept both just in case
-    let mut procs_found = false;
+    let mut pids: Vec<String> = Vec::new();
     for fname in procs_candidates {
         let p = scope_dir.join(fname);
         if p.exists() {
             // Try to open and read the file (might be empty)
             match std::fs::read_to_string(&p) {
-                Ok(_content) => {
-                    procs_found = true;
+                Ok(content) => {
+                    for line in content.lines() {
+                        let l = line.trim();
+                        if !l.is_empty() {
+                            pids.push(l.to_string());
+                        }
+                    }
                     break;
                 }
                 Err(e) => {
@@ -306,11 +311,48 @@ fn verify_cgroup_path_and_return_pod_name(
             }
         }
     }
-    if !procs_found {
+    if pids.is_empty() {
         return Err(anyhow::anyhow!(
-            "Neither cgroup.procs nor cgroups.procs found in {}",
+            "No PIDs listed in cgroup.procs under {}",
             full_path
         ));
+    }
+
+    // Log details for each PID we found to aid auditing
+    for pid in &pids {
+        let proc_dir = std::path::Path::new("/proc").join(pid);
+        let cmdline_path = proc_dir.join("cmdline");
+        let comm_path = proc_dir.join("comm");
+
+        let cmdline_str = match std::fs::read(&cmdline_path) {
+            Ok(bytes) => {
+                if bytes.is_empty() {
+                    String::from("")
+                } else {
+                    // /proc/<pid>/cmdline is NUL-separated
+                    let parts: Vec<String> = bytes
+                        .split(|b| *b == 0)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| String::from_utf8_lossy(s).to_string())
+                        .collect();
+                    parts.join(" ")
+                }
+            }
+            Err(e) => format!("<error reading cmdline: {}>", e),
+        };
+
+        let comm_str = match std::fs::read_to_string(&comm_path) {
+            Ok(s) => s.trim().to_string(),
+            Err(e) => format!("<error reading comm: {}>", e),
+        };
+
+        info!(
+            pid = %pid,
+            cmdline = %cmdline_str,
+            comm = %comm_str,
+            scope_dir = %scope_dir.display(),
+            "Process in cgroup"
+        );
     }
 
     // Return the pod name if known
