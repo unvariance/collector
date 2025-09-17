@@ -44,7 +44,7 @@ impl Plugin for EventCapturePlugin {
         _req: api::ConfigureRequest,
     ) -> ttrpc::Result<api::ConfigureResponse> {
         let mut events = nri::events_mask::EventMask::new();
-        events.set(&[api::Event::CREATE_CONTAINER]);
+        events.set(&[api::Event::CREATE_CONTAINER, api::Event::START_CONTAINER]);
         Ok(api::ConfigureResponse {
             events: events.raw_value(),
             special_fields: protobuf::SpecialFields::default(),
@@ -98,8 +98,28 @@ impl Plugin for EventCapturePlugin {
         &self,
         _ctx: &TtrpcContext,
         _req: api::UpdatePodSandboxRequest,
-    ) -> ttrpc::Result<api::UpdatePodSandboxResponse> {
+        ) -> ttrpc::Result<api::UpdatePodSandboxResponse> {
         Ok(api::UpdatePodSandboxResponse::default())
+    }
+
+    async fn state_change(
+        &self,
+        _ctx: &TtrpcContext,
+        req: api::StateChangeEvent,
+    ) -> ttrpc::Result<api::Empty> {
+        // Only act on START_CONTAINER events
+        if req.event() == api::Event::START_CONTAINER {
+            let container = req
+                .container
+                .as_ref()
+                .map(|c| c.clone())
+                .unwrap_or_default();
+            let pod = req.pod.as_ref().map(|p| p.clone());
+            if let Ok(pod_name) = (self.check)(&container, pod.as_ref()) {
+                let _ = self.tx.try_send(pod_name);
+            }
+        }
+        Ok(api::Empty::default())
     }
 
     async fn shutdown(&self, _ctx: &TtrpcContext, _req: api::Empty) -> ttrpc::Result<api::Empty> {
