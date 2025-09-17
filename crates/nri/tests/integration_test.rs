@@ -275,7 +275,7 @@ async fn test_metadata_plugin_with_kubernetes() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel(100);
 
     // Create metadata plugin
-    let plugin = MetadataPlugin::new(tx);
+    let plugin = std::sync::Arc::new(MetadataPlugin::new(tx));
 
     // Path to the NRI socket - this would be the actual socket in a real environment
     // For testing, we might need to mock this or use a real socket if testing in a container

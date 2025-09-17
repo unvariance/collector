@@ -475,7 +475,7 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
 
     // Build plugin with an externally provided channel
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
-    let plugin = ResctrlPlugin::new(ResctrlPluginConfig::default(), tx);
+    let plugin = std::sync::Arc::new(ResctrlPlugin::new(ResctrlPluginConfig::default(), tx));
 
     // Start NRI server for plugin and register
     let (nri, join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
@@ -743,7 +743,6 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
 
     // Clean slate pods for this test
     delete_pod_if_exists(&pods, "cap-a").await?;
-    delete_pod_if_exists(&pods, "cap-b").await?;
 
     // Connect the plugin to the NRI runtime socket so it listens to containerd events directly.
     let socket_path = std::env::var("NRI_SOCKET_PATH")?;
@@ -753,15 +752,15 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
 
     // Build plugin and register via NRI
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
-    let plugin = ResctrlPlugin::new(
+    let plugin = std::sync::Arc::new(ResctrlPlugin::new(
         ResctrlPluginConfig {
             cleanup_on_start: false,
             auto_mount: true,
             ..Default::default()
         },
         tx,
-    );
-    let (nri, _join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
+    ));
+    let (nri, _join_handle) = NRI::new(socket, plugin.clone(), "resctrl-plugin", "10").await?;
     nri.register().await?;
 
     // Wait for initial synchronization: drain events until channel is quiet for 1s
@@ -851,93 +850,6 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
 
     // When the container starts, expect totals to increase but still Failed and not reconciled.
     let ids_a = wait_for_container_ids(&pods, "cap-a", 1, Duration::from_secs(120)).await?;
-    let _pids_a = resolve_container_pids(&ids_a).await?; // We won't find tasks yet since group creation failed
-    let ev_a1 = wait_for_pod_update(&mut rx, &pod_a_uid, 1, 0, Duration::from_secs(90)).await?;
-    match ev_a1.group_state {
-        ResctrlGroupState::Failed => {}
-        _ => bail!("expected Failed group state for cap-a after container start"),
-    }
-
-    // Free one placeholder group to make capacity available.
-    fs::remove_dir(&freed_dir)?;
-
-    // Create a second pod after capacity is freed → expect successful group and PID reconciliation.
-    let pod_b = create_sleep_pod(&pods, "cap-b").await?;
-    let pod_b_uid = pod_b
-        .metadata
-        .uid
-        .clone()
-        .context("pod cap-b missing metadata.uid")?;
-    let _running_b = wait_for_pod_running(&pods, "cap-b", Duration::from_secs(120)).await?;
-
-    // Initial event for cap-b should indicate group Exists.
-    let ev_b0 = wait_for_pod_update(&mut rx, &pod_b_uid, 0, 0, Duration::from_secs(60)).await?;
-    let group_path_b = match ev_b0.group_state {
-        ResctrlGroupState::Exists(ref p) => p.clone(),
-        ResctrlGroupState::Failed => bail!("expected group to exist for cap-b after freeing capacity"),
-    };
-
-    // Wait for container IDs and PIDs; expect reconciliation to reach all containers.
-    let ids_b = wait_for_container_ids(&pods, "cap-b", 1, Duration::from_secs(120)).await?;
-    let pids_b = resolve_container_pids(&ids_b).await?;
-    let _ev_b1 = wait_for_pod_update(
-        &mut rx,
-        &pod_b_uid,
-        ids_b.len(),
-        ids_b.len(),
-        Duration::from_secs(120),
-    )
-    .await?;
-    let _ = wait_for_tasks_with_pids(&group_path_b, &pids_b, Duration::from_secs(60)).await?;
-
-    // Cleanup: delete pods and ensure cap-b group is removed.
-    delete_pod_if_exists(&pods, "cap-a").await?;
-    let _ = wait_for_pod_removed(&mut rx, &pod_a_uid, Duration::from_secs(60)).await;
-    delete_pod_if_exists(&pods, "cap-b").await?;
-    let _ = wait_for_pod_removed(&mut rx, &pod_b_uid, Duration::from_secs(60)).await;
-    let _ = wait_for_group_absent(&group_path_b, Duration::from_secs(30)).await;
-
-    // Cleanup filler dirs.
-    for path in filler_dirs.into_iter().rev() {
-        let _ = fs::remove_dir(path);
-    }
-
-    Ok(())
-}
-        }
-    }
-
-    if !enospc_hit {
-        for path in filler_dirs.iter().rev() {
-            let _ = fs::remove_dir(path);
-        }
-        eprintln!("resctrl capacity not exhausted; skipping capacity retry test");
-        return Ok(());
-    }
-
-    // Keep one directory to free later to simulate capacity becoming available.
-    let freed_dir = filler_dirs
-        .pop()
-        .context("at least one filler dir expected")?;
-
-    // Create a pod while capacity is exhausted → expect Failed group state and no reconciliation.
-    let pod_a = create_sleep_pod(&pods, "cap-a").await?;
-    let pod_a_uid = pod_a
-        .metadata
-        .uid
-        .clone()
-        .context("pod cap-a missing metadata.uid")?;
-    let _running_a = wait_for_pod_running(&pods, "cap-a", Duration::from_secs(120)).await?;
-
-    // First event for pod creation should indicate Failed group state, 0/0 containers.
-    let ev_a0 = wait_for_pod_update(&mut rx, &pod_a_uid, 0, 0, Duration::from_secs(60)).await?;
-    match ev_a0.group_state {
-        ResctrlGroupState::Failed => {}
-        _ => bail!("expected Failed group state for cap-a on capacity exhaustion"),
-    }
-
-    // When the container starts, expect totals to increase but still Failed and not reconciled.
-    let ids_a = wait_for_container_ids(&pods, "cap-a", 1, Duration::from_secs(120)).await?;
     let pids_a = resolve_container_pids(&ids_a).await?; // We won't find tasks yet since group creation failed
     let ev_a1 = wait_for_pod_update(&mut rx, &pod_a_uid, 1, 0, Duration::from_secs(90)).await?;
     match ev_a1.group_state {
@@ -958,7 +870,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     let mut group_path_a: Option<String> = None;
     while Instant::now() < deadline && !(got_exists && got_reconciled) {
         // Trigger a single retry pass
-        let _ = plugin_inner.retry_all_once();
+        let _ = plugin.retry_all_once();
 
         // Drain events for up to 1s
         loop {
@@ -1001,7 +913,10 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     tasks_pids.sort_unstable();
     let mut expected = pids_a.clone();
     expected.sort_unstable();
-    assert_eq!(tasks_pids, expected, "group tasks should equal container cgroup PIDs");
+    assert_eq!(
+        tasks_pids, expected,
+        "group tasks should equal container cgroup PIDs"
+    );
 
     // Cleanup: delete pod cap-a and ensure its group is removed.
     delete_pod_if_exists(&pods, "cap-a").await?;

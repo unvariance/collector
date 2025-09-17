@@ -1140,12 +1140,8 @@ mod tests {
             .unwrap()
             .set_pids(full_cg, vec![7777]);
 
-        let plugin = ResctrlPlugin::with_pid_source(
-            ResctrlPluginConfig::default(),
-            rc,
-            tx,
-            pid_src,
-        );
+        let plugin =
+            ResctrlPlugin::with_pid_source(ResctrlPluginConfig::default(), rc, tx, pid_src);
         // Send RUN_POD_SANDBOX via state_change
         let ctx = TtrpcContext {
             mh: ttrpc::MessageHeader::default(),

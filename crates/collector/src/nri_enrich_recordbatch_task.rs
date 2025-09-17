@@ -77,7 +77,7 @@ impl NRIEnrichRecordBatchTask {
     async fn init_nri_with_sender(
         metadata_tx: mpsc::Sender<MetadataMessage>,
     ) -> Result<Option<(NRI, tokio::task::JoinHandle<Result<()>>)>> {
-        let plugin = MetadataPlugin::new(metadata_tx);
+        let plugin = std::sync::Arc::new(MetadataPlugin::new(metadata_tx));
 
         // Determine socket path
         let socket_path = std::env::var("NRI_SOCKET_PATH")

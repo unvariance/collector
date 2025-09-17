@@ -37,7 +37,7 @@ impl NRI {
     /// # Arguments
     ///
     /// * `socket` - Socket to connect to
-    /// * `plugin` - Plugin implementation
+    /// * `plugin` - Plugin implementation wrapped in `Arc`
     /// * `plugin_name` - Name of the plugin
     /// * `plugin_idx` - Index of the plugin (for ordering)
     ///
@@ -57,7 +57,7 @@ impl NRI {
     ///     let (tx, rx) = mpsc::channel(100);
     ///
     ///     // Create metadata plugin
-    ///     let plugin = MetadataPlugin::new(tx);
+    ///     let plugin = std::sync::Arc::new(MetadataPlugin::new(tx));
     ///
     ///     // Connect to the socket first
     ///     let socket = tokio::net::UnixStream::connect("/var/run/nri/nri.sock").await?;
@@ -65,7 +65,7 @@ impl NRI {
     ///     // Create NRI instance and get join handle
     ///     let (nri, mut join_handle) = NRI::new(
     ///         socket,
-    ///         plugin,
+    ///         plugin.clone(),
     ///         "metadata-plugin",
     ///         "10",
     ///     ).await?;
@@ -81,7 +81,7 @@ impl NRI {
     /// ```
     pub async fn new<P: Plugin + Send + Sync + 'static>(
         socket: impl tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + 'static,
-        plugin: P,
+        plugin: std::sync::Arc<P>,
         plugin_name: &str,
         plugin_idx: &str,
     ) -> Result<(Self, JoinHandle<Result<()>>)> {
@@ -94,7 +94,7 @@ impl NRI {
         let runtime_client = RuntimeClient::new(ttrpc::r#async::Client::new(runtime_socket));
 
         // Create the plugin service (server side)
-        let plugin_service = std::sync::Arc::new(plugin);
+        let plugin_service = plugin.clone();
         let service_map = api_ttrpc::create_plugin(plugin_service);
         let mut server = ttrpc::r#async::Server::new().register_service(service_map);
 

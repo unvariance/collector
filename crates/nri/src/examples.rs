@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 use crate::api::{
     ConfigureRequest, ConfigureResponse, UpdateContainerRequest, UpdateContainerResponse,
@@ -71,7 +72,7 @@ pub async fn example_plugin_server() -> Result<()> {
     let stream = tokio::net::UnixStream::connect(socket_path).await?;
 
     // Create your plugin implementation
-    let plugin = ExamplePlugin {};
+    let plugin = Arc::new(ExamplePlugin {});
 
     // Start the plugin server and get an NRI handle
     let (nri, _join) = crate::NRI::new(stream, plugin, "example-plugin", "10").await?;

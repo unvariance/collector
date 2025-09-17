@@ -317,7 +317,7 @@ async fn test_nri_creation() -> Result<()> {
     let (_runtime_stream, plugin_stream) = tokio::io::duplex(1024);
 
     // Create an NRI instance using CounterPlugin
-    let plugin = CounterPlugin::new();
+    let plugin = std::sync::Arc::new(CounterPlugin::new());
     let (_nri, _join_handle) = NRI::new(plugin_stream, plugin, "test-plugin", "5").await?;
 
     Ok(())
@@ -329,7 +329,7 @@ async fn test_counter_plugin_with_nri() -> Result<()> {
     let (runtime_stream, plugin_stream) = tokio::io::duplex(1024);
 
     // Create the counter plugin
-    let plugin = CounterPlugin::new();
+    let plugin = std::sync::Arc::new(CounterPlugin::new());
 
     // Save references to the counters
     let configure_count = plugin.configure_count.clone();
@@ -364,7 +364,8 @@ async fn test_counter_plugin_with_nri() -> Result<()> {
     });
 
     // Create an NRI instance with the counter plugin
-    let (nri, mut join_handle) = NRI::new(plugin_stream, plugin, "counter-plugin", "10").await?;
+    let (nri, mut join_handle) =
+        NRI::new(plugin_stream, plugin.clone(), "counter-plugin", "10").await?;
 
     // Register the plugin
     nri.register().await?;
@@ -505,7 +506,7 @@ async fn test_nri_connection_error_handling() -> Result<()> {
     let (runtime_stream, plugin_stream) = tokio::io::duplex(1024);
 
     // Create an NRI instance using CounterPlugin
-    let plugin = CounterPlugin::new();
+    let plugin = std::sync::Arc::new(CounterPlugin::new());
     let (nri, mut join_handle) = NRI::new(plugin_stream, plugin, "test-plugin", "5").await?;
 
     // Close the runtime end of the connection to simulate a connection failure
