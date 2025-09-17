@@ -551,9 +551,9 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
 
     // Pod removal: delete both pods and ensure Removed events plus cleanup.
     delete_pod_if_exists(&pods, "e2e-a").await?;
-    delete_pod_if_exists(&pods, "e2e-b").await?;
     wait_for_pod_removed(&mut rx, &pod_a_uid, Duration::from_secs(120)).await?;
     wait_for_group_absent(&group_path_a, Duration::from_secs(60)).await?;
+    delete_pod_if_exists(&pods, "e2e-b").await?;
     wait_for_pod_removed(&mut rx, &pod_b_uid, Duration::from_secs(120)).await?;
     wait_for_group_absent(&group_path_b, Duration::from_secs(60)).await?;
 
