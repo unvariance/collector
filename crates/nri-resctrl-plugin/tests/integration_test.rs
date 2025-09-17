@@ -562,6 +562,11 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     join_handle.await??;
     println!("[integration_test] Plugin shutdown completed");
 
+    let fs = resctrl::RealFs;
+    let report = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "pod_")?;
+    println!("[integration_test] Cleanup report (pod_): {:?}", report);
+    println!("[integration_test] Cleanup complete");
+
     Ok(())
 }
 
@@ -712,6 +717,17 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
             }
         }
     }
+
+    let fs = resctrl::RealFs;
+    let report_e2e =
+        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "test_e2e_")?;
+    println!(
+        "[integration_test] Cleanup report (test_e2e_): {:?}",
+        report_e2e
+    );
+    let report_np = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "np_")?;
+    println!("[integration_test] Cleanup report (np_): {:?}", report_np);
+    println!("[integration_test] Cleanup complete");
 
     Ok(())
 }
@@ -930,6 +946,17 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     for path in filler_dirs.into_iter().rev() {
         let _ = fs::remove_dir(path);
     }
+
+    let fs = resctrl::RealFs;
+    let report_pod = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "pod_")?;
+    println!("[integration_test] Cleanup report (pod_): {:?}", report_pod);
+    let report_capfill =
+        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), filler_prefix)?;
+    println!(
+        "[integration_test] Cleanup report ({}): {:?}",
+        filler_prefix, report_capfill
+    );
+    println!("[integration_test] Cleanup complete");
 
     Ok(())
 }
