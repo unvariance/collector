@@ -168,7 +168,19 @@ jobs:
           done
           if [ "$ready" -ne 1 ]; then
             echo "Docker daemon did not become ready in time" >&2
+            # Collect detailed diagnostics to understand dependency failures
+            echo "---- systemctl status docker ----" || true
             sudo systemctl status docker || true
+            echo "---- systemctl status docker.socket ----" || true
+            sudo systemctl status docker.socket || true
+            echo "---- systemctl status containerd ----" || true
+            sudo systemctl status containerd || true
+            echo "---- systemctl list-dependencies docker ----" || true
+            sudo systemctl list-dependencies docker || true
+            echo "---- journalctl (docker, docker.socket, containerd) last 200 lines ----" || true
+            sudo journalctl -b --no-pager -n 200 -u docker -u docker.socket -u containerd || true
+            echo "---- dmesg tail (possible kernel/container runtime issues) ----" || true
+            dmesg | tail -n 200 || true
             exit 1
           fi
           docker --version
