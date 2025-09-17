@@ -14,6 +14,89 @@ use tracing::*;
 
 use nri::metadata::{ContainerMetadata, MetadataMessage, MetadataPlugin};
 use nri::NRI;
+use nri::{api, api_ttrpc::Plugin};
+use ttrpc::r#async::TtrpcContext;
+
+// Minimal plugin to capture container create events and forward raw NRI objects
+#[derive(Clone)]
+struct EventCapturePlugin {
+    tx: mpsc::Sender<(api::Container, Option<api::PodSandbox>)>,
+}
+
+impl EventCapturePlugin {
+    fn new(tx: mpsc::Sender<(api::Container, Option<api::PodSandbox>)>) -> Self {
+        Self { tx }
+    }
+}
+
+#[async_trait::async_trait]
+impl Plugin for EventCapturePlugin {
+    async fn configure(
+        &self,
+        _ctx: &TtrpcContext,
+        _req: api::ConfigureRequest,
+    ) -> ttrpc::Result<api::ConfigureResponse> {
+        let mut events = nri::events_mask::EventMask::new();
+        events.set(&[api::Event::CREATE_CONTAINER]);
+        Ok(api::ConfigureResponse {
+            events: events.raw_value(),
+            special_fields: protobuf::SpecialFields::default(),
+        })
+    }
+
+    async fn synchronize(
+        &self,
+        _ctx: &TtrpcContext,
+        _req: api::SynchronizeRequest,
+    ) -> ttrpc::Result<api::SynchronizeResponse> {
+        // We don't need initial state for this test
+        Ok(api::SynchronizeResponse::default())
+    }
+
+    async fn create_container(
+        &self,
+        _ctx: &TtrpcContext,
+        req: api::CreateContainerRequest,
+    ) -> ttrpc::Result<api::CreateContainerResponse> {
+        // Forward raw container and pod to the test via channel
+        let container = req
+            .container
+            .as_ref()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let pod = req.pod.as_ref().map(|p| p.clone());
+        let _ = self.tx.try_send((container, pod));
+        Ok(api::CreateContainerResponse::default())
+    }
+
+    async fn update_container(
+        &self,
+        _ctx: &TtrpcContext,
+        _req: api::UpdateContainerRequest,
+    ) -> ttrpc::Result<api::UpdateContainerResponse> {
+        Ok(api::UpdateContainerResponse::default())
+    }
+
+    async fn stop_container(
+        &self,
+        _ctx: &TtrpcContext,
+        _req: api::StopContainerRequest,
+    ) -> ttrpc::Result<api::StopContainerResponse> {
+        Ok(api::StopContainerResponse::default())
+    }
+
+    async fn update_pod_sandbox(
+        &self,
+        _ctx: &TtrpcContext,
+        _req: api::UpdatePodSandboxRequest,
+    ) -> ttrpc::Result<api::UpdatePodSandboxResponse> {
+        Ok(api::UpdatePodSandboxResponse::default())
+    }
+
+    async fn shutdown(&self, _ctx: &TtrpcContext, _req: api::Empty) -> ttrpc::Result<api::Empty> {
+        Ok(api::Empty::default())
+    }
+}
 
 // Helper function to create a test pod
 async fn create_test_pod(
@@ -124,6 +207,108 @@ async fn delete_pod(api: &Api<Pod>, name: &str) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+#[tokio::test]
+#[ignore] // Requires a real Kubernetes cluster and NRI socket
+async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
+    // Initialize tracing
+    let _ = tracing_subscriber::fmt::try_init();
+
+    // Check NRI socket first; skip if not present
+    let socket_path =
+        std::env::var("NRI_SOCKET_PATH").unwrap_or_else(|_| "/var/run/nri/nri.sock".to_string());
+    if !Path::new(&socket_path).exists() {
+        info!("NRI socket not found at {}, skipping test", socket_path);
+        return Ok(());
+    }
+
+    // Connect to Kubernetes
+    let client = Client::try_default().await?;
+    let pods: Api<Pod> = Api::default_namespaced(client.clone());
+    let namespace = "default".to_string();
+    info!("Using namespace: {}", namespace);
+
+    // Create a channel to receive raw container events
+    let (tx, mut rx) = mpsc::channel::<(api::Container, Option<api::PodSandbox>)>(100);
+    let plugin = std::sync::Arc::new(EventCapturePlugin::new(tx));
+
+    // Connect to the NRI socket and register the plugin
+    info!("Connecting to NRI socket at {}", socket_path);
+    let socket = tokio::net::UnixStream::connect(&socket_path).await?;
+    let (nri, join_handle) = NRI::new(socket, plugin, "cgroup-path-test-plugin", "10").await?;
+    nri.register().await?;
+
+    // Create a new pod to trigger a CreateContainer event
+    let pod_name = format!(
+        "nri-cgroup-path-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    info!("Creating test pod: {}", pod_name);
+    let _pod = create_test_pod(&pods, &pod_name, None, None).await?;
+    let _running_pod = wait_for_pod_running(&pods, &pod_name).await?;
+
+    // Wait for the corresponding container event
+    let timeout_duration = Duration::from_secs(60);
+    let (container, pod) = match timeout(timeout_duration, async {
+        loop {
+            if let Some((container, pod)) = rx.recv().await {
+                if let Some(p) = &pod {
+                    if p.name == pod_name {
+                        break Ok((container, pod));
+                    }
+                }
+            } else {
+                break Err(anyhow::anyhow!("Event channel closed"));
+            }
+        }
+    })
+    .await
+    {
+        Ok(res) => res?,
+        Err(_) => Err(anyhow::anyhow!(
+            "Timeout waiting for container event for pod {}",
+            pod_name
+        ))?,
+    };
+
+    // Compute the full cgroup path and validate it
+    let full_path = nri::compute_full_cgroup_path(&container, pod.as_ref());
+    info!("Computed cgroup path: {}", full_path);
+
+    // Basic sanity checks
+    assert!(full_path.starts_with("/sys/fs/cgroup"));
+    let scope_dir = std::path::Path::new(&full_path);
+    assert!(scope_dir.exists(), "cgroup path should exist");
+    assert!(scope_dir.is_dir(), "cgroup path should be a directory");
+
+    // Check the procs file exists and is readable (cgroup v2 is cgroup.procs)
+    let procs_candidates = ["cgroup.procs", "cgroups.procs"]; // accept both just in case
+    let mut procs_found = false;
+    for fname in procs_candidates {
+        let p = scope_dir.join(fname);
+        if p.exists() {
+            let contents = std::fs::read_to_string(&p)?;
+            // It may be empty transiently; existence and readability suffice
+            info!("Read {} ({} bytes)", p.display(), contents.len());
+            procs_found = true;
+            break;
+        }
+    }
+    assert!(procs_found, "cgroup procs file not found under {}", full_path);
+
+    // Cleanup: delete pod and close NRI connection
+    info!("Deleting test pod: {}", pod_name);
+    delete_pod(&pods, &pod_name).await?;
+
+    info!("Closing NRI connection");
+    nri.close().await?;
+    join_handle.await??;
+
+    Ok(())
 }
 
 // Helper function to find a container in the metadata receiver by pod name
