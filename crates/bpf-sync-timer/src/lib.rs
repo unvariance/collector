@@ -5,7 +5,7 @@ use nix::unistd::Pid;
 use std::fs;
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use thiserror::Error;
 
 mod bpf {
@@ -139,7 +139,8 @@ impl SyncTimer {
             .open(obj_ref)
             .map_err(SyncTimerError::SkeletonOpenFailed)?;
 
-        open_skel.maps.data_data.sync_timer_interval_ns = interval;
+        // Set the interval constant prior to load so it becomes immutable in BPF
+        open_skel.maps.rodata_data.sync_timer_interval_ns = interval;
 
         let skel = open_skel
             .load()
@@ -158,15 +159,11 @@ impl SyncTimer {
         self.interval_ns
     }
 
-    pub fn duplicate_map_fd(&self) -> Result<OwnedFd, SyncTimerError> {
-        let fd = self.skel.maps.sync_timer_bitmap.as_fd().as_raw_fd();
-        let dup = unsafe { libc::dup(fd) };
-        if dup < 0 {
-            return Err(SyncTimerError::MapFdDupFailed(io::Error::last_os_error()));
-        }
-        // SAFETY: dup returns a new owned file descriptor on success
-        let owned = unsafe { OwnedFd::from_raw_fd(dup) };
-        Ok(owned)
+    /// Return a borrowed file descriptor to the sync timer bitmap map.
+    /// libbpf will duplicate the FD inside `bpf_map__reuse_fd`, so there's no
+    /// need for us to create a new owned FD here.
+    pub fn borrowed_map_fd(&self) -> BorrowedFd<'_> {
+        self.skel.maps.sync_timer_bitmap.as_fd()
     }
 
     pub fn assign_id(&mut self) -> Result<u8, AssignIdError> {

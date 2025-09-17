@@ -5,15 +5,6 @@
 /* Define AF_INET constant for BPF context */
 #define AF_INET 2
 
-#define SYNC_TIMER_DEFAULT_INTERVAL_NS 1000000ULL
-
-extern volatile __u64 sync_timer_interval_ns;
-
-static __always_inline __u64 __sync_timer_effective_interval()
-{
-    return sync_timer_interval_ns ? sync_timer_interval_ns : SYNC_TIMER_DEFAULT_INTERVAL_NS;
-}
-
 /* Timer initialization modes */
 enum sync_timer_mode {
     SYNC_TIMER_MODE_MODERN = 0,      // CPU pinning + absolute time (kernel 6.7+)
@@ -83,7 +74,7 @@ static __always_inline int __sync_timer_shared_callback(
     void (*callback_func)(__u32)  // Modified to pass expected CPU ID
 ) {
     __u64 now = bpf_ktime_get_ns();
-    __u64 interval = state->interval_ns ? state->interval_ns : __sync_timer_effective_interval();
+    __u64 interval = state->interval_ns;
     __u64 expected_tick = now / interval;
     __u64 actual_tick = state->last_tick + 1;
     __u64 delta;
@@ -116,7 +107,8 @@ static __always_inline int __sync_timer_shared_callback(
 static __always_inline int __sync_timer_shared_init(
     void *timer_states_map,
     int (*timer_callback)(void *, int *, struct sync_timer_state *),
-    __u8 init_mode
+    __u8 init_mode,
+    __u64 interval_ns
 ) {
     __u32 cpu = bpf_get_smp_processor_id();
     struct sync_timer_state *state;
@@ -165,10 +157,9 @@ static __always_inline int __sync_timer_shared_init(
 
     /* Initialize timer */
     now = bpf_ktime_get_ns();
-    __u64 interval = __sync_timer_effective_interval();
-    state->interval_ns = interval;
-    state->last_tick = now / interval;
-    state->next_expected = __sync_timer_align_to_interval(now + interval, interval);
+    state->interval_ns = interval_ns;
+    state->last_tick = now / interval_ns;
+    state->next_expected = __sync_timer_align_to_interval(now + interval_ns, interval_ns);
     
     ret = bpf_timer_init(&state->timer, timer_states_map, CLOCK_MONOTONIC);
     if (ret < 0) {
@@ -191,7 +182,7 @@ static __always_inline int __sync_timer_shared_init(
 }
 
 /* Macro to define a complete sync timer implementation */
-#define DEFINE_SYNC_TIMER(timer_name, callback_func) \
+#define DEFINE_SYNC_TIMER(timer_name, callback_func, interval_ns_param) \
 \
 /* Timer state map */ \
 struct { \
@@ -217,5 +208,8 @@ int sync_timer_init_##timer_name(struct bpf_sock_addr *ctx) \
         /* Use the first byte of user_ip4 as the mode parameter */ \
         init_mode = (__u8)(ctx->user_ip4 & 0xFF); \
     } \
-    return __sync_timer_shared_init(&sync_timer_states_##timer_name, sync_timer_callback_##timer_name, init_mode); \
+    return __sync_timer_shared_init(&sync_timer_states_##timer_name, \
+                                   sync_timer_callback_##timer_name, \
+                                   init_mode, \
+                                   (interval_ns_param)); \
 } 

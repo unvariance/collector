@@ -5,7 +5,6 @@ use libbpf_rs::skel::{OpenSkel, Skel, SkelBuilder};
 use libbpf_rs::{set_print, OpenObject, PrintLevel};
 use perf_events::{Dispatcher, HardwareCounter, PerfMapReader};
 use std::mem::MaybeUninit;
-use std::os::fd::{BorrowedFd, IntoRawFd};
 use std::time::Duration;
 
 /// Get the current monotonic time in nanoseconds
@@ -144,22 +143,18 @@ impl BpfLoader {
 
         let mut open_skel = skel_builder.open(obj_ref)?;
 
-        let map_fd = sync_timer
-            .duplicate_map_fd()
-            .map_err(|e| anyhow!("failed to duplicate sync timer map fd: {}", e))?;
-        let raw_fd = map_fd.into_raw_fd();
-        let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
+        // Reuse the sync timer bitmap map by borrowing the FD from SyncTimer.
+        let borrowed_fd = sync_timer.borrowed_map_fd();
         if let Err(e) = open_skel.maps.sync_timer_bitmap.reuse_fd(borrowed_fd) {
-            // SAFETY: raw_fd was produced by OwnedFd::into_raw_fd and hasn't been consumed yet
-            unsafe { libc::close(raw_fd) };
             return Err(anyhow!("failed to reuse sync timer map fd: {}", e));
         }
+
+        // Set const global before load so it becomes a constant in the program
+        open_skel.maps.rodata_data.collector_sync_timer_id = subscriber_id as u64;
 
         let skel = open_skel
             .load()
             .with_context(|| "Failed to load BPF program")?;
-
-        skel.maps.bss_data.collector_sync_timer_id = subscriber_id as u64;
 
         Ok(skel)
     }

@@ -34,6 +34,7 @@ page_size = "0.5"
 libc = "0.2"
 perf-event-open-sys = "5.0" 
 anyhow = "1.0"
+nix = { version = "0.27.1", features = ["sched"] }
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"]}
 clap = { version = "4.5.37", default-features = false, features = ["std", "derive", "help", "usage"] }
 arrow-array = "55.0"

@@ -6,7 +6,8 @@
 #include "sync_timer.bpf.h"
 #include "sync_timer_bitmap.bpf.h"
 
-volatile __u64 sync_timer_interval_ns = SYNC_TIMER_DEFAULT_INTERVAL_NS;
+/* Provided by userspace before load; becomes constant at load time */
+const volatile __u64 sync_timer_interval_ns;
 
 struct {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -26,6 +27,6 @@ static __always_inline void sync_timer_update_bitmap(__u32 expected_cpu)
     entry->trigger_mask = ~0ull;
 }
 
-DEFINE_SYNC_TIMER(shared, sync_timer_update_bitmap);
+DEFINE_SYNC_TIMER(shared, sync_timer_update_bitmap, sync_timer_interval_ns);
 
 char LICENSE[] SEC("license") = "GPL";

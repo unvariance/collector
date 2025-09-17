@@ -37,7 +37,7 @@ struct {
 } sync_timer_bitmap SEC(".maps");
 
 // Subscriber ID assigned by userspace for the collector handler
-volatile __u64 collector_sync_timer_id;
+const volatile __u64 collector_sync_timer_id;
 
 // Declare the perf event arrays for hardware counters
 struct {
