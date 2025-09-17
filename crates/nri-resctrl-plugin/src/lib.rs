@@ -981,7 +981,7 @@ mod tests {
         use crate::pid_source::test_support::MockCgroupPidSource;
         use tokio::time::{timeout, Duration};
 
-        let fs = TestFs::default();
+        let fs = MockFs::default();
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
@@ -1270,7 +1270,7 @@ mod tests {
     #[tokio::test]
     async fn test_preexisting_pod_removal_cleans_up() {
         // Setup resctrl root and plugin
-        let fs = TestFs::default();
+        let fs = MockFs::default();
         fs.add_dir(std::path::Path::new("/sys"));
         fs.add_dir(std::path::Path::new("/sys/fs"));
         fs.add_dir(std::path::Path::new("/sys/fs/resctrl"));
