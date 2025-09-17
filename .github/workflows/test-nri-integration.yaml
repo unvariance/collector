@@ -227,18 +227,20 @@ jobs:
           set -e
           DEST_IN_CONTAINER=/tmp/integration_test
           # Try docker cp first
-          if ! docker cp "$TEST_BINARY_PATH" nri-test-control-plane:"$DEST_IN_CONTAINER"; then
-            echo "docker cp failed; falling back to streaming copy"
+          docker cp "$TEST_BINARY_PATH" nri-test-control-plane:"$DEST_IN_CONTAINER" || true
+          # If not present after cp, fallback to streaming
+          if ! docker exec nri-test-control-plane /bin/sh -lc "test -e '$DEST_IN_CONTAINER'"; then
+            echo "docker cp did not place file; falling back to streaming copy"
             cat "$TEST_BINARY_PATH" | docker exec -i nri-test-control-plane /bin/sh -lc "cat > '$DEST_IN_CONTAINER'" || {
               echo "Failed to stream binary into container";
               exit 1;
             }
           fi
           # Verify file exists then chmod
-          docker exec nri-test-control-plane /bin/sh -lc "ls -l '$DEST_IN_CONTAINER' && chmod +x '$DEST_IN_CONTAINER' && ls -l '$DEST_IN_CONTAINER'"
+          docker exec nri-test-control-plane /bin/sh -lc "ls -l '$DEST_IN_CONTAINER' || true; chmod +x '$DEST_IN_CONTAINER'; ls -l '$DEST_IN_CONTAINER'"
           
           echo "=== Verifying NRI socket inside KIND node ==="
-          docker exec nri-test-control-plane bash -lc "test -S '$NODE_NRI_SOCKET_PATH' && ls -la '$NODE_NRI_SOCKET_PATH'" || {
+          docker exec nri-test-control-plane /bin/sh -lc "test -S '$NODE_NRI_SOCKET_PATH' && ls -la '$NODE_NRI_SOCKET_PATH'" || {
             echo "❌ NRI socket not found inside node at $NODE_NRI_SOCKET_PATH"
             echo "Containerd config:"; docker exec nri-test-control-plane cat /etc/containerd/config.toml || true
             echo "Recent container logs:"; docker logs nri-test-control-plane 2>&1 | tail -100 || true
@@ -249,6 +251,7 @@ jobs:
           docker exec \
             -e NRI_SOCKET_PATH="$NODE_NRI_SOCKET_PATH" \
             -e RUST_LOG="$RUST_LOG" \
+            -e KUBECONFIG=/etc/kubernetes/kubelet.conf \
             nri-test-control-plane \
             /tmp/integration_test --ignored --nocapture --test-threads=1 || {
               echo "=== Test failed, checking KIND node logs ==="
