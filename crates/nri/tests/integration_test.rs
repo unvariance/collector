@@ -17,15 +17,22 @@ use nri::NRI;
 use nri::{api, api_ttrpc::Plugin};
 use ttrpc::r#async::TtrpcContext;
 
-// Minimal plugin to capture container create events and forward raw NRI objects
+// Minimal plugin to capture container create events and run inline verification
 #[derive(Clone)]
 struct EventCapturePlugin {
-    tx: mpsc::Sender<(api::Container, Option<api::PodSandbox>)>,
+    tx: mpsc::Sender<String>,
+    check:
+        std::sync::Arc<dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync>,
 }
 
 impl EventCapturePlugin {
-    fn new(tx: mpsc::Sender<(api::Container, Option<api::PodSandbox>)>) -> Self {
-        Self { tx }
+    fn new(
+        tx: mpsc::Sender<String>,
+        check: std::sync::Arc<
+            dyn Fn(&api::Container, Option<&api::PodSandbox>) -> anyhow::Result<String> + Send + Sync,
+        >,
+    ) -> Self {
+        Self { tx, check }
     }
 }
 
@@ -58,14 +65,16 @@ impl Plugin for EventCapturePlugin {
         _ctx: &TtrpcContext,
         req: api::CreateContainerRequest,
     ) -> ttrpc::Result<api::CreateContainerResponse> {
-        // Forward raw container and pod to the test via channel
+        // Run inline verification and notify test which pod was verified
         let container = req
             .container
             .as_ref()
             .map(|c| c.clone())
             .unwrap_or_default();
         let pod = req.pod.as_ref().map(|p| p.clone());
-        let _ = self.tx.try_send((container, pod));
+        if let Ok(pod_name) = (self.check)(&container, pod.as_ref()) {
+            let _ = self.tx.try_send(pod_name);
+        }
         Ok(api::CreateContainerResponse::default())
     }
 
@@ -209,82 +218,24 @@ async fn delete_pod(api: &Api<Pod>, name: &str) -> anyhow::Result<()> {
     }
 }
 
-#[tokio::test]
-#[ignore] // Requires a real Kubernetes cluster and NRI socket
-async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
-    // Initialize tracing
-    let _ = tracing_subscriber::fmt::try_init();
-
-    // Check NRI socket first; skip if not present
-    let socket_path =
-        std::env::var("NRI_SOCKET_PATH").unwrap_or_else(|_| "/var/run/nri/nri.sock".to_string());
-    if !Path::new(&socket_path).exists() {
-        info!("NRI socket not found at {}, skipping test", socket_path);
-        return Ok(());
-    }
-
-    // Connect to Kubernetes
-    let client = Client::try_default().await?;
-    let pods: Api<Pod> = Api::default_namespaced(client.clone());
-    let namespace = "default".to_string();
-    info!("Using namespace: {}", namespace);
-
-    // Create a channel to receive raw container events
-    let (tx, mut rx) = mpsc::channel::<(api::Container, Option<api::PodSandbox>)>(100);
-    let plugin = std::sync::Arc::new(EventCapturePlugin::new(tx));
-
-    // Connect to the NRI socket and register the plugin
-    info!("Connecting to NRI socket at {}", socket_path);
-    let socket = tokio::net::UnixStream::connect(&socket_path).await?;
-    let (nri, join_handle) = NRI::new(socket, plugin, "cgroup-path-test-plugin", "10").await?;
-    nri.register().await?;
-
-    // Create a new pod to trigger a CreateContainer event
-    let pod_name = format!(
-        "nri-cgroup-path-test-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    );
-    info!("Creating test pod: {}", pod_name);
-    let _pod = create_test_pod(&pods, &pod_name, None, None).await?;
-    let _running_pod = wait_for_pod_running(&pods, &pod_name).await?;
-
-    // Wait for the corresponding container event
-    let timeout_duration = Duration::from_secs(60);
-    let (container, pod) = match timeout(timeout_duration, async {
-        loop {
-            if let Some((container, pod)) = rx.recv().await {
-                if let Some(p) = &pod {
-                    if p.name == pod_name {
-                        break Ok((container, pod));
-                    }
-                }
-            } else {
-                break Err(anyhow::anyhow!("Event channel closed"));
-            }
-        }
-    })
-    .await
-    {
-        Ok(res) => res?,
-        Err(_) => Err(anyhow::anyhow!(
-            "Timeout waiting for container event for pod {}",
-            pod_name
-        ))?,
-    };
-
-    // Compute the full cgroup path and validate it
-    let full_path = nri::compute_full_cgroup_path(&container, pod.as_ref());
+// Check function executed inside the plugin for each container event.
+// Returns the verified pod name on success.
+fn verify_cgroup_path_and_return_pod_name(
+    container: &nri::api::Container,
+    pod: Option<&nri::api::PodSandbox>,
+) -> anyhow::Result<String> {
+    let full_path = nri::compute_full_cgroup_path(container, pod);
     info!("Computed cgroup path: {}", full_path);
 
-    // Basic sanity checks
-    assert!(full_path.starts_with("/sys/fs/cgroup"));
+    if !full_path.starts_with("/sys/fs/cgroup") {
+        return Err(anyhow::anyhow!(
+            "cgroup path does not start with /sys/fs/cgroup: {}",
+            full_path
+        ));
+    }
+
     let scope_dir = std::path::Path::new(&full_path);
     if !scope_dir.exists() {
-        eprintln!("cgroup path does not exist: {}", full_path);
-        // Walk up parents and list directory contents until /sys/fs/cgroup
         let cgroup_root = std::path::Path::new("/sys/fs/cgroup");
         let mut current = scope_dir.parent();
         while let Some(dir) = current {
@@ -310,34 +261,119 @@ async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
                     eprintln!("  <failed to read_dir: {}>", err);
                 }
             }
-
             if dir == cgroup_root {
                 break;
             }
             current = dir.parent();
         }
-        assert!(scope_dir.exists(), "cgroup path should exist");
+        return Err(anyhow::anyhow!("cgroup path does not exist: {}", full_path));
     }
-    assert!(scope_dir.is_dir(), "cgroup path should be a directory");
+    if !scope_dir.is_dir() {
+        return Err(anyhow::anyhow!("cgroup path is not a directory: {}", full_path));
+    }
 
-    // Check the procs file exists and is readable (cgroup v2 is cgroup.procs)
     let procs_candidates = ["cgroup.procs", "cgroups.procs"]; // accept both just in case
     let mut procs_found = false;
     for fname in procs_candidates {
         let p = scope_dir.join(fname);
         if p.exists() {
-            let contents = std::fs::read_to_string(&p)?;
-            // It may be empty transiently; existence and readability suffice
-            info!("Read {} ({} bytes)", p.display(), contents.len());
-            procs_found = true;
-            break;
+            // Try to open and read the file (might be empty)
+            match std::fs::read_to_string(&p) {
+                Ok(_content) => {
+                    procs_found = true;
+                    break;
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to read {}: {}",
+                        p.display(),
+                        e
+                    ));
+                }
+            }
         }
     }
-    assert!(
-        procs_found,
-        "cgroup procs file not found under {}",
-        full_path
+    if !procs_found {
+        return Err(anyhow::anyhow!(
+            "Neither cgroup.procs nor cgroups.procs found in {}",
+            full_path
+        ));
+    }
+
+    // Return the pod name if known
+    let pod_name = pod
+        .and_then(|p| if p.name.is_empty() { None } else { Some(p.name.clone()) })
+        .unwrap_or_else(|| "<unknown-pod>".to_string());
+
+    Ok(pod_name)
+}
+
+#[tokio::test]
+#[ignore] // Requires a real Kubernetes cluster and NRI socket
+async fn test_compute_full_cgroup_path_kubernetes() -> anyhow::Result<()> {
+    // Initialize tracing
+    let _ = tracing_subscriber::fmt::try_init();
+
+    // Check NRI socket first; skip if not present
+    let socket_path =
+        std::env::var("NRI_SOCKET_PATH").unwrap_or_else(|_| "/var/run/nri/nri.sock".to_string());
+    if !Path::new(&socket_path).exists() {
+        info!("NRI socket not found at {}, skipping test", socket_path);
+        return Ok(());
+    }
+
+    // Connect to Kubernetes
+    let client = Client::try_default().await?;
+    let pods: Api<Pod> = Api::default_namespaced(client.clone());
+    let namespace = "default".to_string();
+    info!("Using namespace: {}", namespace);
+
+    // Create a channel to receive pod verifications
+    let (tx, mut rx) = mpsc::channel::<String>(100);
+    let plugin = std::sync::Arc::new(EventCapturePlugin::new(
+        tx,
+        std::sync::Arc::new(|c, p| verify_cgroup_path_and_return_pod_name(c, p)),
+    ));
+
+    // Connect to the NRI socket and register the plugin
+    info!("Connecting to NRI socket at {}", socket_path);
+    let socket = tokio::net::UnixStream::connect(&socket_path).await?;
+    let (nri, join_handle) = NRI::new(socket, plugin, "cgroup-path-test-plugin", "10").await?;
+    nri.register().await?;
+
+    // Create a new pod to trigger a CreateContainer event
+    let pod_name = format!(
+        "nri-cgroup-path-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
     );
+    info!("Creating test pod: {}", pod_name);
+    let _pod = create_test_pod(&pods, &pod_name, None, None).await?;
+    let _running_pod = wait_for_pod_running(&pods, &pod_name).await?;
+
+    // Wait for the plugin to verify our pod inline with the event
+    let timeout_duration = Duration::from_secs(60);
+    match timeout(timeout_duration, async {
+        loop {
+            if let Some(verified) = rx.recv().await {
+                if verified == pod_name {
+                    break Ok(());
+                }
+            } else {
+                break Err(anyhow::anyhow!("Verification channel closed"));
+            }
+        }
+    })
+    .await
+    {
+        Ok(res) => res?,
+        Err(_) => Err(anyhow::anyhow!(
+            "Timeout waiting for verification for pod {}",
+            pod_name
+        ))?,
+    };
 
     // Cleanup: delete pod and close NRI connection
     info!("Deleting test pod: {}", pod_name);
