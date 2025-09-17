@@ -156,7 +156,7 @@ jobs:
           podman --version
           podman info
 
-      - name: Install KIND, kubectl, and crictl
+      - name: Install KIND and kubectl
         run: |
           # Install KIND
           curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-amd64
@@ -169,13 +169,6 @@ jobs:
           chmod +x kubectl
           sudo mv kubectl /usr/local/bin/kubectl
           kubectl version --client
-
-          # Install crictl
-          VERSION="v1.34.0"
-          curl -LO https://github.com/kubernetes-sigs/cri-tools/releases/download/$VERSION/crictl-$VERSION-linux-amd64.tar.gz
-          sudo tar zxvf crictl-$VERSION-linux-amd64.tar.gz -C /usr/local/bin
-          rm -f crictl-$VERSION-linux-amd64.tar.gz
-
 
       - name: Create KIND cluster with NRI support
         id: kind-cluster

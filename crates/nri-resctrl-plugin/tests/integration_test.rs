@@ -904,3 +904,114 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
 
     Ok(())
 }
+        }
+    }
+
+    if !enospc_hit {
+        for path in filler_dirs.iter().rev() {
+            let _ = fs::remove_dir(path);
+        }
+        eprintln!("resctrl capacity not exhausted; skipping capacity retry test");
+        return Ok(());
+    }
+
+    // Keep one directory to free later to simulate capacity becoming available.
+    let freed_dir = filler_dirs
+        .pop()
+        .context("at least one filler dir expected")?;
+
+    // Create a pod while capacity is exhausted → expect Failed group state and no reconciliation.
+    let pod_a = create_sleep_pod(&pods, "cap-a").await?;
+    let pod_a_uid = pod_a
+        .metadata
+        .uid
+        .clone()
+        .context("pod cap-a missing metadata.uid")?;
+    let _running_a = wait_for_pod_running(&pods, "cap-a", Duration::from_secs(120)).await?;
+
+    // First event for pod creation should indicate Failed group state, 0/0 containers.
+    let ev_a0 = wait_for_pod_update(&mut rx, &pod_a_uid, 0, 0, Duration::from_secs(60)).await?;
+    match ev_a0.group_state {
+        ResctrlGroupState::Failed => {}
+        _ => bail!("expected Failed group state for cap-a on capacity exhaustion"),
+    }
+
+    // When the container starts, expect totals to increase but still Failed and not reconciled.
+    let ids_a = wait_for_container_ids(&pods, "cap-a", 1, Duration::from_secs(120)).await?;
+    let pids_a = resolve_container_pids(&ids_a).await?; // We won't find tasks yet since group creation failed
+    let ev_a1 = wait_for_pod_update(&mut rx, &pod_a_uid, 1, 0, Duration::from_secs(90)).await?;
+    match ev_a1.group_state {
+        ResctrlGroupState::Failed => {}
+        _ => bail!("expected Failed group state for cap-a after container start"),
+    }
+
+    // Free one placeholder group to make capacity available.
+    fs::remove_dir(&freed_dir)?;
+
+    // Perform retry_all_once() every second until we observe:
+    //  - an AddOrUpdate for cap-a with group_state = Exists
+    //  - another AddOrUpdate for cap-a with reconciled_containers = 1
+    // Timeout after 30 seconds.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut got_exists = false;
+    let mut got_reconciled = false;
+    let mut group_path_a: Option<String> = None;
+    while Instant::now() < deadline && !(got_exists && got_reconciled) {
+        // Trigger a single retry pass
+        let _ = plugin_inner.retry_all_once();
+
+        // Drain events for up to 1s
+        loop {
+            match tokio::time::timeout(Duration::from_secs(1), rx.recv()).await {
+                Ok(Some(PodResctrlEvent::AddOrUpdate(add))) if add.pod_uid == pod_a_uid => {
+                    if !got_exists {
+                        if let ResctrlGroupState::Exists(ref p) = add.group_state {
+                            got_exists = true;
+                            group_path_a = Some(p.clone());
+                        }
+                    }
+                    if add.reconciled_containers == 1 {
+                        got_reconciled = true;
+                    }
+                    if got_exists && got_reconciled {
+                        break;
+                    }
+                }
+                Ok(Some(_)) => {
+                    // unrelated event; keep draining within this 1s window
+                    continue;
+                }
+                Ok(None) => break,
+                Err(_) => break, // no messages for a full second
+            }
+        }
+    }
+
+    if !(got_exists && got_reconciled) {
+        bail!("timed out waiting for retry events for cap-a");
+    }
+
+    // Verify: group exists and its PIDs equal the cgroup's PIDs
+    let group_path_a = group_path_a.expect("group path for cap-a after retry");
+    let tasks_contents = tokio::fs::read_to_string(Path::new(&group_path_a).join("tasks")).await?;
+    let mut tasks_pids: Vec<i32> = tasks_contents
+        .lines()
+        .filter_map(|l| l.trim().parse::<i32>().ok())
+        .collect();
+    tasks_pids.sort_unstable();
+    let mut expected = pids_a.clone();
+    expected.sort_unstable();
+    assert_eq!(tasks_pids, expected, "group tasks should equal container cgroup PIDs");
+
+    // Cleanup: delete pod cap-a and ensure its group is removed.
+    delete_pod_if_exists(&pods, "cap-a").await?;
+    let _ = wait_for_pod_removed(&mut rx, &pod_a_uid, Duration::from_secs(60)).await;
+    let _ = wait_for_group_absent(&group_path_a, Duration::from_secs(30)).await;
+
+    // Cleanup filler dirs.
+    for path in filler_dirs.into_iter().rev() {
+        let _ = fs::remove_dir(path);
+    }
+
+    Ok(())
+}
