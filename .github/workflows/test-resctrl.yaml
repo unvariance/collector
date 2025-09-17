@@ -149,6 +149,7 @@ jobs:
           packages: |
             docker.io
           version: 1
+          execute_install_scripts: true
 
       - name: Validate Docker installation
         run: |
