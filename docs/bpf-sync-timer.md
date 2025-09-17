@@ -28,18 +28,16 @@ lifetime of your collector.
 ## Reusing the timer bitmap in another skeleton
 
 `SyncTimer` exposes the bitmap map file descriptor so that other skeletons can
-reuse it before they are loaded.
+reuse it before they are loaded. You can pass a borrowed FD — libbpf will
+duplicate it internally on `reuse_fd`.
 
 ```rust
-let bitmap_fd = sync_timer.duplicate_map_fd()?;
-let raw_fd = bitmap_fd.into_raw_fd();
-
 let mut open = skel_builder.open(obj_buf)?;
-let borrowed = unsafe { std::os::fd::BorrowedFd::borrow_raw(raw_fd) };
+let borrowed = sync_timer.borrowed_map_fd();
 open.maps.sync_timer_bitmap.reuse_fd(borrowed)?;
+// Set as const before load so it's baked into the program
+open.maps.rodata_data.my_timer_subscriber_id = subscriber_id as u64;
 let mut skel = open.load()?;
-
-skel.maps.bss_data.my_timer_subscriber_id = subscriber_id as u64;
 ```
 
 The bitmap map is not pinned anywhere; all programs hold references directly to
@@ -59,11 +57,11 @@ struct {
     __type(value, struct sync_timer_bitmap_entry);
 } sync_timer_bitmap SEC(".maps");
 
-volatile __u64 my_sync_timer_id;
+const volatile __u64 my_sync_timer_id;
 ```
 
 Inside the `tracepoint/timer/hrtimer_expire_exit` handler call the helper to
-check whether the current subscriber bit is set and clear it atomically:
+check whether the current subscriber bit is set and clear it:
 
 ```c
 SEC("tracepoint/timer/hrtimer_expire_exit")
