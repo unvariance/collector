@@ -1000,9 +1000,7 @@ mod tests {
         .expect("Should receive event within timeout");
 
         // Verify the directory for the resctrl group was created
-        assert!(
-            fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789"))
-        );
+        assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789")));
 
         // Now remove the pod and verify removal event + directory deletion
         let state_req = StateChangeEvent {
@@ -1028,9 +1026,7 @@ mod tests {
         .await
         .expect("Should receive removal event within timeout");
 
-        assert!(
-            !fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789"))
-        );
+        assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u789")));
     }
 
     #[tokio::test]
@@ -1056,8 +1052,7 @@ mod tests {
         );
 
         // Configure ENOSPC for the pod's group dir
-        let group_path =
-            std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_u1");
+        let group_path = std::path::PathBuf::from("/sys/fs/resctrl/mon_groups/pod_u1");
         fs.set_nospace_dir(&group_path);
 
         // Define pod and container
