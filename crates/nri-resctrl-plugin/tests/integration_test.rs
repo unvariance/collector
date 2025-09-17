@@ -808,7 +808,9 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         .unwrap_or(1024);
     let filler_budget = num_rmids_limit.saturating_add(2);
     for idx in 0..filler_budget {
-        let dir = root.join("mon_groups").join(format!("{}{}", filler_prefix, idx));
+        let dir = root
+            .join("mon_groups")
+            .join(format!("{}{}", filler_prefix, idx));
         match fs::create_dir(&dir) {
             Ok(()) => filler_dirs.push(dir),
             Err(e) if e.raw_os_error() == Some(libc::ENOSPC) => {
