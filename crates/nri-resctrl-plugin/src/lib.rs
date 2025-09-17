@@ -442,14 +442,15 @@ impl<P: FsProvider> ResctrlPlugin<P> {
         let pid_source = self.pid_source.clone();
         let pid_resolver =
             move || -> resctrl::Result<Vec<i32>> { pid_source.pids_for_path(&cgroup_path) };
-        let res = self
+        let new_state = match self
             .resctrl
             .reconcile_group(&group_path, pid_resolver, passes)
-            .map_err(PluginError::from)?;
-        let new_state = if res.missing == 0 {
-            ContainerSyncState::Reconciled
-        } else {
-            ContainerSyncState::Partial
+        {
+            Ok(res) if res.missing == 0 => ContainerSyncState::Reconciled,
+            Ok(_) => ContainerSyncState::Partial,
+            // Treat empty PID set as a non-fatal partial reconcile
+            Err(resctrl::Error::EmptyPidSet) => ContainerSyncState::Partial,
+            Err(e) => return Err(PluginError::from(e)),
         };
 
         // Re-acquire lock and update counters/state conditionally.

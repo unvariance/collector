@@ -318,6 +318,9 @@ impl<P: FsProvider> Resctrl<P> {
         for _ in 0..max_passes {
             // Desired tasks for this pass
             let desired_vec = pid_source()?;
+            if desired_vec.is_empty() {
+                return Err(Error::EmptyPidSet);
+            }
             last_desired = desired_vec.into_iter().collect();
 
             // Current tasks in the group
@@ -1060,6 +1063,40 @@ mod tests {
             1,
             "Expected 1 iteration for already-present PIDs"
         );
+    }
+
+    #[test]
+    fn test_reconcile_group_fails_on_empty_pid_source() {
+        let fs = MockFs::default();
+        fs.add_file(
+            Path::new("/proc/mounts"),
+            "resctrl /sys/fs/resctrl resctrl rw 0 0\n",
+        );
+        let root = PathBuf::from("/sys/fs/resctrl");
+        fs.add_dir(&root);
+
+        let group_path = root.join("pod_empty");
+        fs.add_dir(&group_path);
+        let tasks = group_path.join("tasks");
+        fs.add_file(&tasks, "");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config {
+                root: root.clone(),
+                group_prefix: "pod_".into(),
+            },
+        );
+
+        // PID source returns an empty set → should be treated as failure
+        let pid_source = || -> Result<Vec<i32>> { Ok(vec![]) };
+        let err = rc
+            .reconcile_group(group_path.to_str().unwrap(), pid_source, 3)
+            .unwrap_err();
+        match err {
+            Error::EmptyPidSet => {}
+            other => panic!("unexpected error: {:?}", other),
+        }
     }
 
     #[test]
