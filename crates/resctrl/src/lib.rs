@@ -179,7 +179,9 @@ impl<P: FsProvider> Resctrl<P> {
         }
 
         let group_name = group_name(&self.cfg.group_prefix, pod_uid);
-        let path = self.cfg.root.join(&group_name);
+        // Create measurement groups under <root>/mon_groups to avoid consuming
+        // scarce control CLOS IDs; these groups use RMIDs for monitoring.
+        let path = self.cfg.root.join("mon_groups").join(&group_name);
 
         match self.fs.create_dir(&path) {
             Ok(()) => Ok(path.to_string_lossy().into_owned()),
@@ -656,7 +658,7 @@ mod tests {
         };
         let rc = Resctrl::with_provider(fs.clone(), cfg);
         let group = rc.create_group("my-pod:UID").expect("create ok");
-        assert!(group.contains("/sys/fs/resctrl/pod_my-podUID"));
+        assert!(group.contains("/sys/fs/resctrl/mon_groups/pod_my-podUID"));
         // also verify the fs contains the directory
         let p = PathBuf::from(&group);
         assert!(fs.path_exists(&p));
@@ -682,7 +684,7 @@ mod tests {
             root: root.clone(),
             group_prefix: "pod_".into(),
         };
-        let group_path = root.join("pod_abc");
+        let group_path = root.join("mon_groups").join("pod_abc");
         fs.set_nospace_dir(&group_path);
 
         let rc = Resctrl::with_provider(fs, cfg);
