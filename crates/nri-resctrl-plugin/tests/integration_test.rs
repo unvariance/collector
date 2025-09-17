@@ -290,27 +290,27 @@ async fn wait_for_tasks_with_pids(
     expected_pids: &[i32],
     timeout: Duration,
 ) -> anyhow::Result<Vec<i32>> {
-    let tasks_path = Path::new(group_path).join("tasks");
     let deadline = Instant::now() + timeout;
+    let rc = resctrl::Resctrl::default();
     loop {
-        match tokio::fs::read_to_string(&tasks_path).await {
-            Ok(contents) => {
-                let pids: Vec<i32> = contents
-                    .lines()
-                    .filter_map(|l| l.trim().parse::<i32>().ok())
-                    .collect();
+        match rc.list_group_tasks(group_path) {
+            Ok(pids) => {
                 if expected_pids.iter().all(|pid| pids.contains(pid)) {
                     return Ok(pids);
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(resctrl::Error::Io { path: _, source })
+                if source.kind() == std::io::ErrorKind::NotFound =>
+            {
+                // Group or tasks file not found yet; keep waiting until timeout
+            }
             Err(e) => return Err(e.into()),
         }
 
         if Instant::now() >= deadline {
             bail!(
-                "timed out waiting for tasks file {} to include {:?}",
-                tasks_path.display(),
+                "timed out waiting for resctrl group {} to include {:?}",
+                group_path,
                 expected_pids
             );
         }
