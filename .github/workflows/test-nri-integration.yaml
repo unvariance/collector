@@ -183,57 +183,70 @@ jobs:
           echo "Found test binary at: $TEST_BIN"
           echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
 
-      - name: Run NRI Integration Test
+      - name: Run NRI Integration Test (inside KIND node)
         run: |
           source ~/.cargo/env
           
-          echo "=== Running NRI Integration Test ==="
-          export KUBECONFIG="$(kind get kubeconfig-path --name nri-test)"
-          export NRI_SOCKET_PATH=/tmp/nri/nri.sock
+          echo "=== Running NRI Integration Test inside KIND control-plane container ==="
+          # Keep host-side kube access for visibility
+          # Note: 'kind get kubeconfig-path' is deprecated in newer kind; kubeconfig is auto-configured on host.
           export RUST_LOG=debug
+          export HOST_NRI_SOCKET_PATH=/tmp/nri/nri.sock
+          export NODE_NRI_SOCKET_PATH=/var/run/nri/nri.sock
           
-          echo "Test binary: $TEST_BINARY_PATH"
-          echo "Socket path: $NRI_SOCKET_PATH"
-          echo "Kubernetes config: $KUBECONFIG"
+          echo "Test binary (host): $TEST_BINARY_PATH"
+          echo "Host socket path: $HOST_NRI_SOCKET_PATH"
+          echo "Node socket path: $NODE_NRI_SOCKET_PATH"
           
-          echo "=== Pre-test environment check ==="
+          echo "=== Pre-test environment check (host) ==="
           echo "User: $(whoami)"
           kubectl get nodes
           kubectl get pods -A
           
-          if sudo test -S "$NRI_SOCKET_PATH"; then
-            echo "✅ NRI socket exists - proceeding with NRI integration test"
-            
-            # Check socket permissions
-            echo "NRI socket permissions:"
-            ls -la "$NRI_SOCKET_PATH"
-            
-            # Run the integration test with sudo (NRI requires root permissions)
-            sudo -E $TEST_BINARY_PATH --ignored --nocapture --test-threads=1 || {
-              echo "=== Test failed, checking logs ==="
-              echo "KIND container logs:"
-              docker logs nri-test-control-plane 2>&1 | tail -100
-              echo "=== End of logs ==="
-              exit 1
-            }
+          if sudo test -S "$HOST_NRI_SOCKET_PATH"; then
+            echo "✅ NRI socket exists on host - proceeding"
+            echo "Host NRI socket permissions:"
+            ls -la "$HOST_NRI_SOCKET_PATH"
           else
-            echo "❌ NRI socket missing - cannot run NRI integration test"
+            echo "❌ NRI socket missing on host - cannot run NRI integration test"
             echo "This indicates that NRI is not properly configured in KIND"
             echo "Checking system state:"
             echo "- KIND container status:"
             docker ps | grep nri-test
             echo "- KIND logs:"
             docker logs nri-test-control-plane 2>&1 | tail -50
-            echo "- NRI directory contents:"
+            echo "- NRI directory contents (host):"
             ls -la /tmp/nri/ || echo "NRI directory not found"
             echo "- Containerd config in KIND:"
             docker exec nri-test-control-plane cat /etc/containerd/config.toml
-            
             echo "=== Skipping NRI integration test due to missing NRI socket ==="
             exit 1
           fi
           
-          echo "=== Verifying test pods cleanup ==="
+          echo "=== Copying test binary into KIND control-plane container ==="
+          docker cp "$TEST_BINARY_PATH" nri-test-control-plane:/tmp/integration_test
+          docker exec nri-test-control-plane chmod +x /tmp/integration_test
+          
+          echo "=== Verifying NRI socket inside KIND node ==="
+          docker exec nri-test-control-plane bash -lc "test -S '$NODE_NRI_SOCKET_PATH' && ls -la '$NODE_NRI_SOCKET_PATH'" || {
+            echo "❌ NRI socket not found inside node at $NODE_NRI_SOCKET_PATH"
+            echo "Containerd config:"; docker exec nri-test-control-plane cat /etc/containerd/config.toml || true
+            echo "Recent container logs:"; docker logs nri-test-control-plane 2>&1 | tail -100 || true
+            exit 1
+          }
+          
+          echo "=== Executing integration test inside KIND node ==="
+          docker exec \
+            -e NRI_SOCKET_PATH="$NODE_NRI_SOCKET_PATH" \
+            -e RUST_LOG="$RUST_LOG" \
+            nri-test-control-plane \
+            /tmp/integration_test --ignored --nocapture --test-threads=1 || {
+              echo "=== Test failed, checking KIND node logs ==="
+              docker logs nri-test-control-plane 2>&1 | tail -200 || true
+              exit 1
+            }
+          
+          echo "=== Verifying test pods cleanup (host) ==="
           kubectl get pods --all-namespaces | grep -E "(nri-test|nri-pre-existing)" || echo "No test pods found (good - they were cleaned up)"
           
           echo "=== NRI Integration Test Complete ==="
