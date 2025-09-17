@@ -85,15 +85,7 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     rc_auto.ensure_mounted(true)?;
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
-    let group = match rc.create_group(&uid) {
-        Ok(p) => p,
-        Err(resctrl::Error::NotMounted { .. }) => {
-            try_mount_resctrl()?;
-            let rc2 = Resctrl::default();
-            rc2.create_group(&uid)?
-        }
-        Err(e) => return Err(anyhow::anyhow!("create_group failed: {e}")),
-    };
+    let group = rc.create_group(&uid)?;
 
     let pid = std::process::id() as i32;
     let AssignmentResult { assigned, missing } = rc.assign_tasks(&group, &[pid])?;
@@ -139,43 +131,34 @@ fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()
     rc.ensure_mounted(true)?;
     let info = rc.detect_support()?;
     if !info.mounted || !info.writable {
-        eprintln!(
-            "resctrl not mounted/writable (mounted={}, writable={}); skipping",
+        return Err(anyhow::anyhow!(
+            "resctrl not mounted/writable (mounted={}, writable={})",
             info.mounted, info.writable
-        );
-        return Ok(());
+        ));
     }
 
     // Read the number of RMIDs available.
     let num_rmids_path = "/sys/fs/resctrl/info/num_rmids";
-    let num_rmids_str = match std::fs::read_to_string(num_rmids_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "failed to read {}: {}; skipping RMID capacity test",
-                num_rmids_path, e
-            );
-            return Ok(());
-        }
-    };
-    let num_rmids: usize = match num_rmids_str.trim().parse() {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!(
-                "failed to parse {} contents '{}': {}; skipping",
-                num_rmids_path,
-                num_rmids_str.trim(),
-                e
-            );
-            return Ok(());
-        }
-    };
+    let num_rmids_str = std::fs::read_to_string(num_rmids_path).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to read {}: {} (ensure resctrl is supported and mounted)",
+            num_rmids_path,
+            e
+        )
+    })?;
+    let num_rmids: usize = num_rmids_str.trim().parse().map_err(|e| {
+        anyhow::anyhow!(
+            "failed to parse {} contents '{}': {}",
+            num_rmids_path,
+            num_rmids_str.trim(),
+            e
+        )
+    })?;
     if num_rmids <= 1 {
-        eprintln!(
-            "num_rmids={} too small for capacity test; skipping",
+        return Err(anyhow::anyhow!(
+            "num_rmids={} too small for capacity test",
             num_rmids
-        );
-        return Ok(());
+        ));
     }
 
     // Try to create (num_rmids - 1) groups; this should NOT hit capacity.
@@ -197,12 +180,6 @@ fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()
                     num_rmids - 1,
                     num_rmids
                 ));
-            }
-            Err(Error::NotMounted { .. }) => {
-                // Try to mount and retry once.
-                try_mount_resctrl()?;
-                let path = rc.create_group(&uid)?;
-                created.push(path);
             }
             Err(e) => {
                 // For other errors, clean up and bubble.
