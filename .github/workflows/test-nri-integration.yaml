@@ -225,7 +225,9 @@ jobs:
           
           echo "=== Copying test binary into KIND control-plane container ==="
           set -e
-          DEST_IN_CONTAINER=/tmp/integration_test
+          DEST_IN_CONTAINER=/root/integration_test
+          # Ensure destination directory exists inside the node
+          docker exec nri-test-control-plane /bin/sh -lc "mkdir -p \"$(dirname '$DEST_IN_CONTAINER')\"" || true
           # Try docker cp first
           docker cp "$TEST_BINARY_PATH" nri-test-control-plane:"$DEST_IN_CONTAINER" || true
           # If not present after cp, fallback to streaming
@@ -253,7 +255,7 @@ jobs:
             -e RUST_LOG="$RUST_LOG" \
             -e KUBECONFIG=/etc/kubernetes/kubelet.conf \
             nri-test-control-plane \
-            /tmp/integration_test --ignored --nocapture --test-threads=1 || {
+            "$DEST_IN_CONTAINER" --ignored --nocapture --test-threads=1 || {
               echo "=== Test failed, checking KIND node logs ==="
               docker logs nri-test-control-plane 2>&1 | tail -200 || true
               exit 1
