@@ -965,7 +965,7 @@ mod tests {
         }
 
         // Verify tasks file now includes the PIDs from both containers
-        let group_path = "/sys/fs/resctrl/pod_u123";
+        let group_path = "/sys/fs/resctrl/mon_groups/pod_u123";
         let pids = plugin
             .resctrl
             .list_group_tasks(group_path)
@@ -1208,7 +1208,7 @@ mod tests {
         // Verify the tasks file includes the seeded PID
         let pids = plugin
             .resctrl
-            .list_group_tasks("/sys/fs/resctrl/pod_u789")
+            .list_group_tasks("/sys/fs/resctrl/mon_groups/pod_u789")
             .expect("list tasks");
         assert!(pids.contains(&7777));
 
@@ -1308,7 +1308,7 @@ mod tests {
             .ok();
 
         // Verify group exists
-        assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u-pre")));
+        assert!(fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u-pre")));
 
         // Now remove the pod and expect Removed + cleanup
         let _ = Plugin::state_change(
@@ -1335,7 +1335,7 @@ mod tests {
             _ => panic!("expected Removed event"),
         }
         // Group cleaned up
-        assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/pod_u-pre")));
+        assert!(!fs.exists(std::path::Path::new("/sys/fs/resctrl/mon_groups/pod_u-pre")));
     }
 
     #[tokio::test]
