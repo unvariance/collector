@@ -143,48 +143,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Docker
+      - name: Install Podman
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
           packages: |
-            docker.io
+            podman
           version: 1
           execute_install_scripts: true
 
-      - name: Validate Docker installation
+      - name: Validate Podman installation
         run: |
           set -euxo pipefail
-          # Ensure Docker service is up
-          sudo systemctl enable --now docker || true
-          # Wait up to 10s for the Docker daemon to be ready
-          ready=0
-          for i in {1..10}; do
-            if docker ps >/dev/null 2>&1; then
-              echo "Docker is ready"
-              ready=1
-              break
-            fi
-            echo "Waiting for Docker daemon ($i/10) ..."
-            sleep 1
-          done
-          if [ "$ready" -ne 1 ]; then
-            echo "Docker daemon did not become ready in time" >&2
-            # Collect detailed diagnostics to understand dependency failures
-            echo "---- systemctl status docker ----" || true
-            sudo systemctl status docker || true
-            echo "---- systemctl status docker.socket ----" || true
-            sudo systemctl status docker.socket || true
-            echo "---- systemctl status containerd ----" || true
-            sudo systemctl status containerd || true
-            echo "---- systemctl list-dependencies docker ----" || true
-            sudo systemctl list-dependencies docker || true
-            echo "---- journalctl (docker, docker.socket, containerd) last 200 lines ----" || true
-            sudo journalctl -b --no-pager -n 200 -u docker -u docker.socket -u containerd || true
-            echo "---- dmesg tail (possible kernel/container runtime issues) ----" || true
-            dmesg | tail -n 200 || true
-            exit 1
-          fi
-          docker --version
+          podman --version
+          podman info
 
       - name: Install KIND, kubectl, and crictl
         run: |
@@ -211,6 +182,7 @@ jobs:
         id: kind-cluster
         env:
           HOME: /user
+          KIND_EXPERIMENTAL_PROVIDER: podman
         run: |
           cat > kind-config.yaml << 'EOF'
           kind: Cluster
