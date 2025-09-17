@@ -139,6 +139,8 @@ jobs:
           echo "=== Rust version info ==="
           rustc --version
           cargo --version
+          echo "=== Adding MUSL target ==="
+          rustup target add x86_64-unknown-linux-musl
 
       - name: Capture rustc version
         id: rustc_version
@@ -161,18 +163,20 @@ jobs:
       - name: Install build dependencies (APT)
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: clang libelf-dev build-essential pkg-config
+          packages: clang libelf-dev build-essential pkg-config musl-tools
           version: 1.0
 
-      - name: Build NRI integration test
+      - name: Build NRI integration test (musl static)
         run: |
           source ~/.cargo/env
           
-          echo "=== Building NRI integration test ==="
-          cargo test --package nri --test integration_test --no-run --verbose
+          echo "=== Building NRI integration test (x86_64-unknown-linux-musl) ==="
+          export RUSTFLAGS="-C target-feature=+crt-static"
+          # Build the nri-resctrl-plugin integration test for MUSL target to avoid glibc mismatch
+          cargo test --package nri-resctrl-plugin --test integration_test --no-run --target x86_64-unknown-linux-musl --verbose
           
           # Find the test binary
-          TEST_BIN=$(find target/debug/deps -name "integration_test-*" -type f -executable | head -1)
+          TEST_BIN=$(find target/x86_64-unknown-linux-musl/debug/deps -name "integration_test-*" -type f -executable | head -1)
           
           if [ -z "$TEST_BIN" ]; then
             echo "Error: Could not find integration test binary."
@@ -181,6 +185,8 @@ jobs:
           fi
           
           echo "Found test binary at: $TEST_BIN"
+          echo "Binary type:"
+          file "$TEST_BIN" || true
           echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
 
       - name: Run NRI Integration Test (inside KIND node)
