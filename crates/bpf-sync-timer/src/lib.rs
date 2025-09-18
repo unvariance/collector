@@ -236,24 +236,6 @@ fn write_timer_migration_sysctl(value: u8) -> Result<(), SyncTimerError> {
 /// - BPF timer setup (init, callback, start)
 /// - BPF map operations
 /// - Sysctl operations for intermediate/legacy fallback
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use bpf::BpfLoader;
-/// use log::{error, info};
-///
-/// // Create loader with number of perf ring pages
-/// let mut loader = BpfLoader::new(256).expect("Failed to create BpfLoader");
-///
-/// match loader.start_sync_timer() {
-///     Ok(()) => info!("Sync timer initialized successfully"),
-///     Err(e) => {
-///         error!("Sync timer initialization failed: {}", e);
-///         std::process::exit(1);
-///     }
-/// }
-/// ```
 fn initialize_sync_timer(timer_init_prog: &libbpf_rs::ProgramMut) -> Result<(), SyncTimerError> {
     info!("Initializing synchronized timer on all cores...");
 
