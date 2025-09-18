@@ -99,7 +99,7 @@ Below is a quick inventory of all workflows in `.github/workflows/` with focus o
 11) build-collector.yaml
 - Build only (no tests): multi-arch images for `collector` and `nri-init` using current separate Dockerfiles; manifest push
 - Runners: GH-hosted (amd64 + arm64)
-- Notes: Will be updated to use unified multi-stage Containerfile targets.
+- Notes: Runs on `main` only; will be updated to use unified multi-stage Containerfile targets.
 
 12) build-component-artifacts.yaml (reusable)
 - Build only (no tests): builds `collector` or `nri-init`, can upload image tar and binary
@@ -152,11 +152,11 @@ Below is a quick inventory of all workflows in `.github/workflows/` with focus o
   - Take inputs for: artifact names, image/tag, test level (machine type), and duration class (short/long)
   - Consume the artifacts built once by a single upstream “Build Artifacts” job
   - Optionally provision a self-hosted runner via `.github/actions/aws-runner`
-- Main “CI Orchestrator” workflow:
-  - Job A: Build builder/container + component artifacts (collector + nri-init) and publish artifacts
-  - Job B: Fast checks (fmt/clippy/units/helm-lint) in parallel, in container
-  - Job C: GH-hosted integrations (short)
-  - Job D: Conditional heavy workflows, parameterized by test level
+- Main “CI Orchestrator” workflow (sections; each may include multiple GitHub Actions jobs):
+  - Build: Build builder/container + component artifacts (collector + nri-init) and publish artifacts
+  - Fast checks: fmt/clippy/units/helm-lint in parallel, in container
+  - GH-hosted integrations (short)
+  - Heavy workflows (conditional), parameterized by test level
 
 4) Test-level knobs and scheduling
 - Levels (inputs/labels):
@@ -210,7 +210,6 @@ Phase 4: Orchestrator + policy
  Phase 5: Cleanup + docs
 - [ ] Retire redundant setup in existing workflows.
 - [ ] Document knobs (levels/durations) and when heavy tests run.
-- [ ] Tune cargo-chef stages and cache scopes as needed.
 
 ---
 
