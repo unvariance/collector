@@ -1,0 +1,129 @@
+name: ci-orchestrator
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'charts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Containerfile'
+      - '.github/workflows/**'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      level:
+        description: Test level to run (cheap-short|perf-short|full-short|full-long)
+        required: false
+        default: cheap-short
+        type: choice
+        options:
+          - cheap-short
+          - perf-short
+          - full-short
+          - full-long
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  actions: write
+
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    outputs:
+      short-sha: ${{ steps.sha.outputs.SHORT_SHA }}
+      is-pr: ${{ github.event_name == 'pull_request' }}
+      level: ${{ steps.level.outputs.level }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Compute short SHA
+        id: sha
+        run: |
+          SHORT_SHA=$(git rev-parse --short=7 ${{ github.sha }})
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+      - name: Select level
+        id: level
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "level=${{ github.event.inputs.level }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "level=cheap-short" >> $GITHUB_OUTPUT
+          else
+            # merges to main: run full-long
+            echo "level=full-long" >> $GITHUB_OUTPUT
+          fi
+
+  build-collector:
+    name: Build collector (amd64)
+    needs: [context]
+    uses: ./.github/workflows/build-component-artifacts.yaml
+    with:
+      runner: ubuntu-latest
+      component: collector
+      push: ${{ github.event_name != 'pull_request' }}
+      image-repository: ghcr.io/${{ github.repository }}/collector
+      image-tag: main-${{ needs.context.outputs.short-sha }}
+      upload-image-artifact: true
+      upload-binary-artifact: true
+
+  build-nri-init:
+    name: Build nri-init (amd64)
+    needs: [context]
+    uses: ./.github/workflows/build-component-artifacts.yaml
+    with:
+      runner: ubuntu-latest
+      component: nri-init
+      push: ${{ github.event_name != 'pull_request' }}
+      image-repository: ghcr.io/${{ github.repository }}/nri-init
+      image-tag: main-${{ needs.context.outputs.short-sha }}
+      upload-image-artifact: true
+      upload-binary-artifact: true
+
+  fast:
+    name: Fast checks
+    needs: [context]
+    uses: ./.github/workflows/ci-fast.yaml
+
+  nri-gh-hosted:
+    name: NRI integration (GH-hosted)
+    needs: [fast]
+    uses: ./.github/workflows/reusable/test-nri.yaml
+
+  collector-heavy:
+    if: needs.context.outputs.level != 'cheap-short'
+    name: Collector heavy tests
+    needs: [build-collector, fast]
+    uses: ./.github/workflows/reusable/test-collector.yaml
+    secrets: inherit
+    with:
+      level: ${{ needs.context.outputs.level }}
+      collector-binary-artifact: collector-binary
+      instance-type: ${{ needs.context.outputs.level == 'perf-short' && 'c5.9xlarge' || 'm7i.metal-24xl' }}
+
+  resctrl:
+    if: needs.context.outputs.level == 'full-short' || needs.context.outputs.level == 'full-long'
+    name: Resctrl e2e
+    needs: [fast]
+    uses: ./.github/workflows/reusable/test-resctrl.yaml
+    secrets: inherit
+    with:
+      level: ${{ needs.context.outputs.level }}
+
+  helm-e2e:
+    if: needs.context.outputs.level != 'cheap-short'
+    name: Helm Chart E2E
+    needs: [build-collector, build-nri-init, fast]
+    uses: ./.github/workflows/reusable/test-helm.yaml
+    secrets: inherit
+    with:
+      image-repository: ghcr.io/${{ github.repository }}/collector
+      image-tag: main-${{ needs.context.outputs.short-sha }}
+      nri-init-repository: ghcr.io/${{ github.repository }}/nri-init
+      nri-init-tag: main-${{ needs.context.outputs.short-sha }}
+      instance-type: m7i.xlarge
+

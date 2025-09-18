@@ -1,0 +1,98 @@
+name: ci-fast
+
+on:
+  workflow_call:
+    inputs: {}
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'charts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Containerfile'
+      - '.github/workflows/ci-fast.yaml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/**'
+      - 'charts/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Containerfile'
+      - '.github/workflows/ci-fast.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  fast-checks:
+    name: Fast checks (fmt, clippy, unit, helm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute local tag
+        id: meta
+        run: |
+          SHORT_SHA=$(git rev-parse --short=7 ${{ github.sha }})
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "tag=local/ci-builder:${SHORT_SHA}-${{ github.run_id }}" >> $GITHUB_OUTPUT
+
+      - name: Build devtools (builder) image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          target: builder
+          tags: ${{ steps.meta.outputs.tag }}
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: cargo fmt --check
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            -e CARGO_HOME=/usr/local/cargo \
+            -e RUSTUP_HOME=/usr/local/rustup \
+            ${{ steps.meta.outputs.tag }} \
+            bash -lc 'cargo fmt --all -- --check'
+
+      - name: cargo clippy (deny warnings)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            -e CARGO_HOME=/usr/local/cargo \
+            -e RUSTUP_HOME=/usr/local/rustup \
+            ${{ steps.meta.outputs.tag }} \
+            bash -lc 'cargo clippy --workspace --all-targets --all-features -- -D warnings'
+
+      - name: cargo test (unit only)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            -e CARGO_HOME=/usr/local/cargo \
+            -e RUSTUP_HOME=/usr/local/rustup \
+            ${{ steps.meta.outputs.tag }} \
+            bash -lc 'RUST_TEST_THREADS=1 cargo test --workspace --all-features -- --nocapture --test-threads=1'
+
+      - name: Helm lint and template (collector)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            ${{ steps.meta.outputs.tag }} \
+            bash -lc '
+              helm version || true;
+              helm lint charts/collector || exit 1;
+              helm template charts/collector > /dev/null
+            '

@@ -71,12 +71,14 @@ jobs:
           case "$comp" in
             collector)
               image_name="collector"
-              dockerfile="Dockerfile.collector"
+              dockerfile="Containerfile"
+              target="collector"
               binary_path="/usr/local/bin/collector"
               ;;
             nri-init)
               image_name="nri-init"
-              dockerfile="Dockerfile.nri-init"
+              dockerfile="Containerfile"
+              target="nri-init"
               binary_path="/usr/local/bin/nri-init"
               ;;
             *)
@@ -91,6 +93,7 @@ jobs:
           echo "local_image=$local_image" >> "$GITHUB_OUTPUT"
           echo "dockerfile=$dockerfile" >> "$GITHUB_OUTPUT"
           echo "binary_path=$binary_path" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
 
           # Publish target (if push=true)
           if [ -n "${{ inputs.image-repository }}" ]; then
@@ -118,6 +121,7 @@ jobs:
         with:
           context: .
           file: ${{ steps.meta.outputs.dockerfile }}
+          target: ${{ steps.meta.outputs.target }}
           tags: ${{ steps.meta.outputs.local_image }}
           load: true
           cache-from: type=gha

@@ -1,0 +1,346 @@
+name: reusable-test-collector
+
+on:
+  workflow_call:
+    inputs:
+      level:
+        description: Test level (cheap-short|perf-short|full-short|full-long)
+        required: true
+        type: string
+      collector-binary-artifact:
+        description: Name of the collector binary artifact to consume
+        required: false
+        default: collector-binary
+        type: string
+      instance-type:
+        description: EC2 instance type for heavy tests
+        required: false
+        default: m7i.metal-24xl
+        type: string
+    secrets:
+      AWS_ROLE_ARN:
+        required: false
+      REPO_ADMIN_TOKEN:
+        required: false
+      AWS_REGION:
+        required: false
+      S3_ACCESS_KEY_ID:
+        required: false
+      S3_SECRET_ACCESS_KEY:
+        required: false
+
+jobs:
+  bpf-cgroup-inode-test:
+    name: BPF cgroup inode assumptions (GH-hosted)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev unzip
+          version: 1.0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Test cgroup inode assumptions
+        run: |
+          cargo test --package bpf --test cgroup_inode_test --no-run --verbose
+          TEST_BIN=$(find target/debug -name "cgroup_inode_test-*" -type f -executable | head -1)
+          if [ -z "$TEST_BIN" ]; then echo "Missing test bin"; exit 1; fi
+          sudo "$TEST_BIN"
+
+  setup-runner:
+    if: inputs.level != 'cheap-short'
+    name: Start EC2 runner (heavy tests)
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          iam-role-name: github-actions-runner
+          instance-type: ${{ inputs.instance-type }}
+          image-type: ubuntu-24.04
+          market-type: spot
+
+  test-ebpf:
+    if: inputs.level != 'cheap-short'
+    name: Collector local run (parquet verification)
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 10
+    steps:
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./
+
+      - name: Make collector executable
+        run: chmod +x ./collector
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+
+      - name: Run eBPF collector (local)
+        run: |
+          sudo ./collector -d 10 --storage-type local --prefix "/tmp/metrics-"
+
+      - name: Verify parquet output
+        run: |
+          parquet_file=$(find /tmp -name "metrics-*.parquet" | head -n1)
+          test -n "$parquet_file" || { echo "No parquet output found"; exit 1; }
+          echo "Parquet file: $parquet_file"
+          pqrs cat --csv "$parquet_file" | head -n 20 || true
+
+  test-ebpf-s3:
+    if: inputs.level != 'cheap-short'
+    name: Collector run + S3 validation
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      IRSA_BUCKET: "unvariance-collector-test-irsa"
+      KEY_AUTH_BUCKET: "unvariance-collector-test-key-auth"
+      AWSCLI: "/usr/local/bin/aws"
+    steps:
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./
+
+      - name: Make collector executable
+        run: chmod +x ./collector
+
+      - name: Install awscli
+        run: |
+          set -eux; 
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; 
+          python3 -m zipfile -e awscliv2.zip .; 
+          sudo ./aws/install; 
+          /usr/local/bin/aws --version || true
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+
+      - name: Test S3 with IAM Role Authentication
+        run: |
+          IRSA_PREFIX=$(python3 -c "import uuid; print(uuid.uuid4())")
+          echo "Using IRSA prefix: $IRSA_PREFIX"
+          sudo -E AWS_BUCKET_NAME=${IRSA_BUCKET} RUST_LOG=debug ./collector -d 10 --storage-type s3 --prefix "${IRSA_PREFIX}/"
+          $AWSCLI s3 ls "s3://${IRSA_BUCKET}/${IRSA_PREFIX}/"
+          FIRST_FILE=$($AWSCLI s3 ls "s3://${IRSA_BUCKET}/${IRSA_PREFIX}/" --recursive | awk '{print $4}' | head -n1)
+          test -n "$FIRST_FILE" || { echo "No file uploaded"; exit 1; }
+          $AWSCLI s3 cp "s3://${IRSA_BUCKET}/${FIRST_FILE}" /tmp/irsa-test.parquet
+          pqrs cat --csv /tmp/irsa-test.parquet | head -n 5 || true
+
+      - name: Test S3 with Access Key Authentication
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          KEY_PREFIX=$(python3 -c "import uuid; print(uuid.uuid4())")
+          echo "Using Key Auth prefix: $KEY_PREFIX"
+          sudo -E AWS_BUCKET_NAME=${KEY_AUTH_BUCKET} RUST_LOG=debug ./collector -d 10 --storage-type s3 --prefix "${KEY_PREFIX}/"
+          $AWSCLI s3 ls "s3://${KEY_AUTH_BUCKET}/${KEY_PREFIX}/"
+          FIRST_FILE=$($AWSCLI s3 ls "s3://${KEY_AUTH_BUCKET}/${KEY_PREFIX}/" --recursive | awk '{print $4}' | head -n1)
+          test -n "$FIRST_FILE" || { echo "No file uploaded"; exit 1; }
+          $AWSCLI s3 cp "s3://${KEY_AUTH_BUCKET}/${FIRST_FILE}" /tmp/key-auth-test.parquet
+          pqrs cat --csv /tmp/key-auth-test.parquet | head -n 5 || true
+
+  test-multi-kernel:
+    if: inputs.level == 'full-long'
+    name: Test on multiple kernels (LVH)
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./artifacts
+
+      - name: Install pqrs on host and copy to tools
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          mkdir -p tools
+          cp -f pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs tools/
+          chmod +x tools/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+
+      - name: Provision LVH VM
+        uses: yonch/little-vm-helper@main
+        with:
+          test-name: collector-kernel-matrix
+          image: 'complexity-test'
+          image-version: '6.6-20250507.063028'
+          host-mount: ./
+          images-folder-parent: "/tmp"
+          cpu: 2
+          mem: 2G
+          cpu-kind: 'host,pmu=on'
+          lvh-version: "v0.0.23"
+          install-dependencies: 'true'
+          verbose: 'true'
+          cmd: |
+            uname -a
+            mount
+
+      - name: Run collector inside LVH guest
+        uses: yonch/little-vm-helper@main
+        with:
+          provision: 'false'
+          cmd: |
+            cd /host
+            chmod +x ./artifacts/collector
+            mkdir -p /tmp/test-output
+            RUST_LOG=debug ./artifacts/collector -d 5 --storage-type local --prefix "/tmp/test-output/metrics-" --verbose || exit_code=$?
+            echo "Collector exit: ${exit_code:-0}"
+            if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
+              /host/tools/pqrs cat --csv /tmp/test-output/metrics-*.parquet | head -n 10 || true
+            fi
+
+  nri-enrichment-e2e:
+    if: inputs.level == 'full-short' || inputs.level == 'full-long'
+    name: NRI enrichment E2E (k3s)
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 25
+    env:
+      POD_NAME: nri-enrichment-test
+      POD_NAMESPACE: default
+      OUTPUT_PREFIX: /tmp/nri-e2e-
+      NRI_SOCKET_PATH: /var/run/nri/nri.sock
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./
+
+      - name: Make collector executable
+        run: chmod +x ./collector
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+
+      - name: Setup k3s cluster
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          preflight_inotify: true
+          disable_packaged_addons: true
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+
+      - name: Ensure NRI socket exists
+        run: |
+          for i in {1..30}; do
+            if [ -S "/var/run/nri/nri.sock" ]; then
+              ls -la /var/run/nri/nri.sock; break; fi; sleep 2; done
+          test -S /var/run/nri/nri.sock || { echo "NRI socket missing"; exit 1; }
+
+      - name: Deploy test pod
+        run: |
+          cat > pod.yaml << 'EOF'
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: ${POD_NAME}
+            namespace: ${POD_NAMESPACE}
+            labels:
+              app: nri-enrichment-test
+          spec:
+            restartPolicy: Never
+            containers:
+              - name: tester
+                image: busybox:1.36
+                command: ["sh", "-c", "yes > /dev/null & yes > /dev/null & sleep 120"]
+          EOF
+          envsubst < pod.yaml | kubectl apply -f -
+          kubectl wait --for=condition=Ready pod/${POD_NAME} -n ${POD_NAMESPACE} --timeout=120s
+
+      - name: Run collector (binary on host)
+        env:
+          NRI_SOCKET_PATH: ${{ env.NRI_SOCKET_PATH }}
+          RUST_LOG: debug
+        run: |
+          sudo -E ./collector -d 25 --storage-type local --prefix "${OUTPUT_PREFIX}" --verbose
+
+      - name: Verify enrichment fields
+        run: |
+          PARQUET=$(ls -1 ${OUTPUT_PREFIX}*.parquet | head -n1)
+          test -n "$PARQUET" || { echo "No parquet output"; exit 1; }
+          pqrs schema "$PARQUET"
+          for f in pod_name pod_namespace pod_uid container_name container_id process_name cgroup_id; do
+            pqrs schema "$PARQUET" | grep -q "$f" || { echo "Missing $f"; exit 1; }
+          done
+
+  stop-runner:
+    if: always() && inputs.level != 'cheap-short'
+    name: Stop EC2 runner
+    needs: [setup-runner, test-ebpf, test-ebpf-s3, test-multi-kernel, nri-enrichment-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region }}

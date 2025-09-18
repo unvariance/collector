@@ -1,0 +1,148 @@
+name: reusable-test-helm
+
+on:
+  workflow_call:
+    inputs:
+      instance-type:
+        description: EC2 instance type
+        required: false
+        default: m7i.xlarge
+        type: string
+      image-repository:
+        description: Collector image repository (e.g., ghcr.io/owner/repo/collector)
+        required: true
+        type: string
+      image-tag:
+        description: Collector image tag
+        required: true
+        type: string
+      nri-init-repository:
+        description: NRI init image repository
+        required: true
+        type: string
+      nri-init-tag:
+        description: NRI init image tag
+        required: true
+        type: string
+      s3-bucket:
+        description: S3 bucket to validate outputs
+        required: false
+        default: unvariance-collector-test-irsa
+        type: string
+      region:
+        description: AWS region
+        required: false
+        type: string
+    secrets:
+      AWS_ROLE_ARN:
+        required: false
+      REPO_ADMIN_TOKEN:
+        required: false
+      AWS_REGION:
+        required: false
+
+jobs:
+  setup-runner:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          iam-role-name: github-actions-runner
+          instance-type: ${{ inputs.instance-type }}
+          image-type: ubuntu-24.04
+          market-type: spot
+
+  helm-chart-deployment:
+    name: Helm install + S3 smoke
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 25
+    env:
+      RELEASE_NAME: collector-ci
+      S3_BUCKET: ${{ inputs.s3-bucket }}
+      AWS_REGION: ${{ inputs.region || secrets.AWS_REGION }}
+      IMAGE_REPOSITORY: ${{ inputs.image-repository }}
+      IMAGE_TAG: ${{ inputs.image-tag }}
+      NRI_INIT_REPOSITORY: ${{ inputs.nri-init-repository }}
+      NRI_INIT_TAG: ${{ inputs.nri-init-tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          helm version
+
+      - name: Install awscli
+        run: |
+          set -eux; 
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; 
+          python3 -m zipfile -e awscliv2.zip .; 
+          sudo ./aws/install; 
+          /usr/local/bin/aws --version || true
+
+      - name: Configure cluster (k3s)
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          wait_kube_system: false
+
+      - name: Deploy Collector Helm Chart
+        run: |
+          cat > values-override.yaml <<EOF
+          image:
+            repository: "${IMAGE_REPOSITORY}"
+            tag: "${IMAGE_TAG}"
+          nriInit:
+            repository: "${NRI_INIT_REPOSITORY}"
+            tag: "${NRI_INIT_TAG}"
+          collector:
+            storage:
+              type: s3
+              region: "${AWS_REGION}"
+              bucket: "${S3_BUCKET}"
+          EOF
+          helm upgrade --install ${RELEASE_NAME} ./charts/collector -f values-override.yaml
+
+      - name: Wait for Collector Pods to be Ready
+        run: |
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          kubectl wait --for=condition=Ready pods --timeout=120s -l app.kubernetes.io/name=collector || {
+            kubectl describe pods -l app.kubernetes.io/name=collector; exit 1; }
+
+      - name: Uninstall Collector Helm Chart
+        if: always()
+        run: |
+          helm uninstall ${RELEASE_NAME} --wait --timeout=60s || true
+
+  stop-runner:
+    name: Stop EC2 runner
+    needs: [setup-runner, helm-chart-deployment]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region }}
+

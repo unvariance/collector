@@ -1,0 +1,101 @@
+name: reusable-test-nri
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: GitHub runner label
+        required: false
+        default: ubuntu-latest
+        type: string
+    secrets:
+      # No special secrets required
+      dummy:
+        required: false
+
+jobs:
+  nri-gh-hosted:
+    name: NRI integration (k3s on GH-hosted)
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup k3s
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          wait_kube_system: false
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+
+      - name: Copy kubeconfig for non-root use
+        run: |
+          mkdir -p ~/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+          sudo chown $(id -u):$(id -g) ~/.kube/config
+
+      - name: Install Rust
+        run: |
+          echo "=== Installing Rust toolchain ==="
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source ~/.cargo/env
+          rustc --version
+          cargo --version
+
+      - name: Cache Cargo registry, git, and target
+        id: cache-cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install build dependencies (APT)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev build-essential pkg-config
+          version: 1.0
+
+      - name: Build NRI integration test
+        run: |
+          source ~/.cargo/env
+          cargo test --package nri --test integration_test --no-run --verbose
+          TEST_BIN=$(find target/debug/deps -name "integration_test-*" -type f -executable | head -1)
+          if [ -z "$TEST_BIN" ]; then
+            echo "Error: Could not find integration test binary."
+            find target -name "*integration_test*" -type f
+            exit 1
+          fi
+          echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
+
+      - name: Verify NRI socket
+        run: |
+          set -euo pipefail
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
+          for i in $(seq 1 90); do
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✓ NRI socket present"; break; fi; sleep 1; done
+          sudo test -S /var/run/nri/nri.sock || { echo "NRI socket missing"; sudo journalctl -u k3s --no-pager -n 200 || true; exit 1; }
+
+      - name: Run NRI Integration Test
+        run: |
+          source ~/.cargo/env
+          export RUST_LOG=debug
+          export NRI_SOCKET_PATH=/var/run/nri/nri.sock
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          sudo -E "$TEST_BINARY_PATH" --ignored --nocapture --test-threads=1 || {
+            sudo journalctl -u k3s --no-pager -n 200 || true; exit 1; }
+
+      - name: Cleanup
+        if: always()
+        run: sudo /usr/local/bin/k3s-uninstall.sh || true
+

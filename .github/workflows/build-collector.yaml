@@ -9,8 +9,7 @@ on:
     paths:
       - 'crates/**'
       - 'Cargo.toml'
-      - 'Dockerfile.collector'
-      - 'Dockerfile.nri-init'
+      - 'Containerfile'
       - '.github/workflows/build-collector.yaml'
 
 permissions:

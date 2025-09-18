@@ -1,0 +1,146 @@
+name: reusable-test-resctrl
+
+on:
+  workflow_call:
+    inputs:
+      level:
+        description: Test level (cheap-short|perf-short|full-short|full-long)
+        required: true
+        type: string
+      instance-type:
+        description: EC2 instance type for resctrl-capable host
+        required: false
+        default: m7i.metal-24xl
+        type: string
+    secrets:
+      AWS_ROLE_ARN:
+        required: false
+      REPO_ADMIN_TOKEN:
+        required: false
+
+jobs:
+  build-and-unit-test:
+    name: Build + unit tests (GH-hosted)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache cargo registry and git index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-resctrl-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-resctrl-cargo-
+
+      - name: Cache cargo build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-resctrl-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-resctrl-target-
+
+      - name: Install Rust toolchain
+        run: |
+          rustc -V || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "source $HOME/.cargo/env" >> $HOME/.profile
+          source $HOME/.cargo/env
+          rustc -V
+          cargo -V
+
+      - name: Run unit tests (resctrl)
+        run: |
+          source $HOME/.cargo/env
+          RUST_TEST_THREADS=1 cargo test -p resctrl --release -- --nocapture --test-threads=1
+
+      - name: Run unit tests (nri-resctrl-plugin)
+        run: |
+          source $HOME/.cargo/env
+          RUST_TEST_THREADS=1 cargo test -p nri-resctrl-plugin --release -- --nocapture --test-threads=1
+
+      - name: Build smoke test binary (no-run)
+        run: |
+          source $HOME/.cargo/env
+          cargo test -p resctrl --test smoke_test --release --no-run
+
+      - name: Collect smoke test binary
+        run: |
+          set -euxo pipefail
+          BIN=$(find target/release/deps -maxdepth 1 -type f -executable -name 'smoke_test-*' | head -n 1)
+          test -n "$BIN" || { echo "smoke test bin not found"; exit 1; }
+          cp "$BIN" resctrl-smoke
+          chmod +x resctrl-smoke
+
+      - name: Upload resctrl smoke binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: resctrl-smoke-bin
+          path: resctrl-smoke
+          if-no-files-found: error
+
+  setup-runner:
+    if: inputs.level == 'full-short' || inputs.level == 'full-long'
+    name: Start EC2 runner (resctrl-capable)
+    needs: [build-and-unit-test]
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          iam-role-name: github-actions-runner
+          instance-type: ${{ inputs.instance-type }}
+          image-type: ubuntu-24.04
+          market-type: spot
+
+  resctrl-e2e-smoke:
+    if: inputs.level == 'full-short' || inputs.level == 'full-long'
+    name: Run resctrl smoke test
+    needs: [build-and-unit-test, setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    env:
+      HOME: /root
+    steps:
+      - name: Prepare HOME
+        run: mkdir -p "$HOME"
+      - name: Download smoke binary
+        uses: actions/download-artifact@v4
+        with:
+          name: resctrl-smoke-bin
+          path: ./
+      - name: Run resctrl smoke test (hardware)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN=./resctrl-smoke
+          chmod +x "$BIN" || true
+          RESCTRL_E2E=1 "$BIN" --nocapture --test-threads=1
+
+  stop-runner:
+    if: always() && (inputs.level == 'full-short' || inputs.level == 'full-long')
+    name: Stop EC2 runner
+    needs: [setup-runner, resctrl-e2e-smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+
