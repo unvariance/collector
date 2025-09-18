@@ -67,6 +67,7 @@ fn get_cgroup_inode(cgroup_path: &str) -> Result<u64> {
 }
 
 #[test]
+#[ignore = "requires BPF + raised memlock; run with --ignored"]
 fn test_cgroup_id_matches_inode() -> Result<()> {
     // Build and load the BPF program
     let skel_builder = CgroupInodeTestSkelBuilder::default();

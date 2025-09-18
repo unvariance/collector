@@ -64,7 +64,8 @@ jobs:
           cargo test --package bpf --test cgroup_inode_test --no-run --verbose
           TEST_BIN=$(find target/debug -name "cgroup_inode_test-*" -type f -executable | head -1)
           if [ -z "$TEST_BIN" ]; then echo "Missing test bin"; exit 1; fi
-          sudo "$TEST_BIN"
+          # Run ignored tests since this one requires BPF privileges
+          sudo "$TEST_BIN" --ignored
 
   setup-runner:
     if: inputs.level != 'cheap-short'
