@@ -92,13 +92,13 @@ jobs:
   nri-gh-hosted:
     name: NRI integration (GH-hosted)
     needs: [fast]
-    uses: ./.github/workflows/reusable/test-nri.yaml
+    uses: ./.github/workflows/reusable-test-nri.yaml
 
   collector-heavy:
     if: needs.context.outputs.level != 'cheap-short'
     name: Collector heavy tests
     needs: [build-collector, fast]
-    uses: ./.github/workflows/reusable/test-collector.yaml
+    uses: ./.github/workflows/reusable-test-collector.yaml
     secrets: inherit
     with:
       level: ${{ needs.context.outputs.level }}
@@ -109,7 +109,7 @@ jobs:
     if: needs.context.outputs.level == 'full-short' || needs.context.outputs.level == 'full-long'
     name: Resctrl e2e
     needs: [fast]
-    uses: ./.github/workflows/reusable/test-resctrl.yaml
+    uses: ./.github/workflows/reusable-test-resctrl.yaml
     secrets: inherit
     with:
       level: ${{ needs.context.outputs.level }}
@@ -118,7 +118,7 @@ jobs:
     if: needs.context.outputs.level != 'cheap-short'
     name: Helm Chart E2E
     needs: [build-collector, build-nri-init, fast]
-    uses: ./.github/workflows/reusable/test-helm.yaml
+    uses: ./.github/workflows/reusable-test-helm.yaml
     secrets: inherit
     with:
       image-repository: ghcr.io/${{ github.repository }}/collector
@@ -126,4 +126,3 @@ jobs:
       nri-init-repository: ghcr.io/${{ github.repository }}/nri-init
       nri-init-tag: main-${{ needs.context.outputs.short-sha }}
       instance-type: m7i.xlarge
-

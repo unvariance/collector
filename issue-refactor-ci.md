@@ -196,10 +196,10 @@ Phase 2: Fast checks inside container
 - [ ] Make these jobs the required checks on PRs.
 
 Phase 3: Reusable integrations
-- [ ] Extract eBPF collector tests into `reusable/test-collector.yaml` (workflow_call), parameterized by level and artifact names.
-- [ ] Extract resctrl tests into `reusable/test-resctrl.yaml` (workflow_call), parameterized similarly.
-- [ ] Extract helm e2e into `reusable/test-helm.yaml` (workflow_call).
-- [ ] Extract NRI integration matrices into `reusable/test-nri.yaml` (workflow_call).
+- [ ] Extract eBPF collector tests into `reusable-test-collector.yaml` (workflow_call), parameterized by level and artifact names.
+- [ ] Extract resctrl tests into `reusable-test-resctrl.yaml` (workflow_call), parameterized similarly.
+- [ ] Extract helm e2e into `reusable-test-helm.yaml` (workflow_call).
+- [ ] Extract NRI integration matrices into `reusable-test-nri.yaml` (workflow_call).
 
 Phase 4: Orchestrator + policy
 - [ ] Add `ci-orchestrator.yaml` that builds artifacts then calls the reusable integrations based on:
