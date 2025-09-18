@@ -1,4 +1,4 @@
-name: ci-orchestrator
+name: ci
 
 on:
   pull_request:
