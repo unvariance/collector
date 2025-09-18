@@ -87,7 +87,7 @@ jobs:
   fast:
     name: Fast checks
     needs: [context]
-    uses: ./.github/workflows/ci-fast.yaml
+    uses: ./.github/workflows/reusable-fast.yaml
 
   nri-gh-hosted:
     name: NRI integration (GH-hosted)

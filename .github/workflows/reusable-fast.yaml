@@ -1,26 +1,8 @@
-name: ci-fast
+name: reusable-fast
 
 on:
   workflow_call:
     inputs: {}
-  pull_request:
-    paths:
-      - 'crates/**'
-      - 'charts/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'Containerfile'
-      - '.github/workflows/ci-fast.yaml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'crates/**'
-      - 'charts/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'Containerfile'
-      - '.github/workflows/ci-fast.yaml'
 
 permissions:
   contents: read
