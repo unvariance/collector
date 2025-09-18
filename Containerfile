@@ -40,7 +40,7 @@ RUN cargo chef cook --release --recipe-path /app/recipe.json
 ############################
 # Collector build stage
 ############################
-FROM builder-base AS collector-build
+FROM builder AS collector-build
 COPY . /app
 WORKDIR /app
 RUN cargo build --release --bin collector
@@ -63,7 +63,7 @@ ENTRYPOINT ["/usr/local/bin/collector"]
 ############################
 # nri-init build stage
 ############################
-FROM builder-base AS nri-init-build
+FROM builder AS nri-init-build
 COPY . /app
 WORKDIR /app
 RUN cargo build --release -p nri-init
