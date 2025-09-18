@@ -1,0 +1,6 @@
+# Exclude everything by default to minimize context size
+**
+
+# Allow the packaging Containerfile and prebuilt binaries only
+!Containerfile
+!dist/**
