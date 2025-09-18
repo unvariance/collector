@@ -5,6 +5,12 @@ FROM rust:1.86-slim-bookworm AS base
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# Ensure cargo is always on PATH for all subsequent stages
+ENV PATH="/usr/local/cargo/bin:${PATH}"
+
+# Use a consistent working directory across all build stages
+WORKDIR /app
+
 RUN apt-get update && apt-get install -y \
     clang-19 \
     libelf-dev \
@@ -21,20 +27,20 @@ RUN apt-get update && apt-get install -y \
 RUN rustup component add rustfmt clippy && \
     cargo install cargo-chef --locked
 
-WORKDIR /app
-
 ############################
 # Planner stage (cargo-chef)
 ############################
 FROM base AS planner
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
+# Generate the cargo-chef recipe into /app/recipe.json
+RUN cargo chef prepare --recipe-path /app/recipe.json
 
 ############################
 # Builder base (cached deps)
 ############################
 FROM base AS builder
 COPY --from=planner /app/recipe.json /app/recipe.json
+# Pre-build dependency layer using cargo-chef to speed up subsequent builds
 RUN cargo chef cook --release --recipe-path /app/recipe.json
 
 ############################
@@ -42,7 +48,6 @@ RUN cargo chef cook --release --recipe-path /app/recipe.json
 ############################
 FROM builder AS collector-build
 COPY . /app
-WORKDIR /app
 RUN cargo build --release --bin collector
 
 ############################
@@ -65,7 +70,6 @@ ENTRYPOINT ["/usr/local/bin/collector"]
 ############################
 FROM builder AS nri-init-build
 COPY . /app
-WORKDIR /app
 RUN cargo build --release -p nri-init
 
 ############################
@@ -81,4 +85,3 @@ COPY --from=nri-init-build /app/target/release/nri-init /usr/local/bin/nri-init
 # Keep a legacy path for compatibility with docs/charts
 RUN ln -sf /usr/local/bin/nri-init /bin/nri-init
 ENTRYPOINT ["/usr/local/bin/nri-init"]
-
