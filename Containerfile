@@ -5,7 +5,7 @@
 ############################
 # Collector runtime image
 ############################
-FROM debian:bookworm-slim AS collector
+FROM debian:trixie-slim AS collector
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     libelf1 \
@@ -21,7 +21,7 @@ ENTRYPOINT ["/usr/local/bin/collector"]
 ############################
 # nri-init runtime image (with nsenter from util-linux)
 ############################
-FROM debian:bookworm-slim AS nri-init
+FROM debian:trixie-slim AS nri-init
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     util-linux \

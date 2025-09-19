@@ -63,7 +63,7 @@ jobs:
     needs: [context]
     uses: ./.github/workflows/build-component-artifacts.yaml
     with:
-      runner: ubuntu-latest
+      runner: ubuntu-24.04
       component: collector
       push: ${{ github.event_name != 'pull_request' }}
       image-repository: ghcr.io/${{ github.repository }}/collector
@@ -76,7 +76,7 @@ jobs:
     needs: [context]
     uses: ./.github/workflows/build-component-artifacts.yaml
     with:
-      runner: ubuntu-22.04 # to get older glibc for compatibility
+      runner: ubuntu-24.04
       component: nri-init
       push: ${{ github.event_name != 'pull_request' }}
       image-repository: ghcr.io/${{ github.repository }}/nri-init
