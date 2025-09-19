@@ -106,17 +106,6 @@ jobs:
         run: | 
           kubectl get all -n kube-system
 
-  install-prerequisites:
-    needs: [setup-runner]
-    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    timeout-minutes: 5
-    env:
-      HOME: /root
-    steps:
-      - name: Create HOME directory
-        run: |
-          mkdir -p $HOME
-
       - name: Install Helm
         run: |
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -125,7 +114,7 @@ jobs:
         uses: ./.github/actions/setup-awscli
 
   helm-chart-deployment:
-    needs: [setup-runner, k3s-deployment, install-prerequisites]
+    needs: [setup-runner, k3s-deployment]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 15
     strategy:
@@ -398,7 +387,7 @@ jobs:
 
   stop-runner:
     name: Stop EC2 runner
-    needs: [setup-runner, k3s-deployment, install-prerequisites, helm-chart-deployment]
+    needs: [setup-runner, k3s-deployment, helm-chart-deployment]
     runs-on: ubuntu-latest
     if: always()  # Run even if previous jobs fail
     steps:
