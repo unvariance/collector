@@ -1,5 +1,4 @@
-[![CI Orchestrator](https://github.com/unvariance/collector/actions/workflows/ci-orchestrator.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/ci-orchestrator.yaml)
-[![Fast Checks](https://github.com/unvariance/collector/actions/workflows/ci-fast.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/ci-fast.yaml)
+[![Tests](https://github.com/unvariance/collector/actions/workflows/ci.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/ci.yaml)
 [![Benchmark](https://github.com/unvariance/collector/actions/workflows/benchmark.yaml/badge.svg)](https://github.com/unvariance/collector/actions/workflows/benchmark.yaml)
 
 
