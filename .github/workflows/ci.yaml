@@ -120,8 +120,10 @@ jobs:
     uses: ./.github/workflows/reusable-test-helm.yaml
     secrets: inherit
     with:
-      image-repository: ghcr.io/${{ github.repository }}/collector
-      image-tag: main-${{ needs.context.outputs.short-sha }}
-      nri-init-repository: ghcr.io/${{ github.repository }}/nri-init
-      nri-init-tag: main-${{ needs.context.outputs.short-sha }}
+      collector-image-repo: ${{ needs.build-collector.outputs.image_repo }}
+      collector-image-tag: ${{ needs.build-collector.outputs.image_tag }}
+      collector-image-artifact: ${{ needs.build-collector.outputs.image_artifact }}
+      nri-init-image-repo: ${{ needs.build-nri-init.outputs.image_repo }}
+      nri-init-tag: ${{ needs.build-nri-init.outputs.image_tag }}
+      nri-init-image-artifact: ${{ needs.build-nri-init.outputs.image_artifact }}
       instance-type: m7i.xlarge

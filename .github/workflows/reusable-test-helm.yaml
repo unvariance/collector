@@ -8,17 +8,29 @@ on:
         required: false
         default: m7i.xlarge
         type: string
-      image-repository:
-        description: Collector image repository (e.g., ghcr.io/owner/repo/collector)
-        required: true
+      collector-image-artifact:
+        description: Name of collector image artifact to use
+        required: false
+        default: collector-image
         type: string
-      image-tag:
+      nri-init-image-artifact:
+        description: Name of nri-init image artifact to use
+        required: false
+        default: nri-init-image
+        type: string
+      collector-image-repo:
+        description: Collector image repository (e.g., local/collector)
+        required: false
+        default: local/collector
+        type: string
+      collector-image-tag:
         description: Collector image tag
         required: true
         type: string
-      nri-init-repository:
-        description: NRI init image repository
-        required: true
+      nri-init-image-repo:
+        description: NRI init image repository (e.g., local/nri-init)
+        required: false
+        default: local/nri-init
         type: string
       nri-init-tag:
         description: NRI init image tag
@@ -125,14 +137,36 @@ jobs:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       HOME: /root
-      # Default to current repo's GHCR path (owner/repo/collector)
-      IMAGE_REPOSITORY: ${{ inputs.image-repository || format('ghcr.io/{0}/collector', github.repository) }}
-      IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
-      NRI_INIT_REPOSITORY: ${{ format('ghcr.io/{0}/nri-init', github.repository) }}
+      # Use provided image repos/tags (defaults are local/*)
+      IMAGE_REPOSITORY: ${{ inputs.collector-image-repo }}
+      IMAGE_TAG: ${{ inputs.collector-image-tag || 'latest' }}
+      NRI_INIT_REPOSITORY: ${{ inputs.nri-init-image-repo }}
+      NRI_INIT_TAG: ${{ inputs.nri-init-tag || 'latest' }}
       TRACE_MODE: ${{ matrix.trace-mode }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download collector image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-image-artifact }}
+          path: collector-image
+
+      - name: Download nri-init image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.nri-init-image-artifact }}
+          path: nri-init-image
+
+      - name: Import images into k3s containerd
+        run: |
+          set -euxo pipefail
+          # Import docker image tars into k3s' containerd
+          k3s ctr images import collector-image/image.tar
+          k3s ctr images import nri-init-image/image.tar
+          # Show images
+          k3s ctr -n k8s.io images ls | sed -n '1,200p'
 
       - name: Generate UUID Prefix
         id: generate-uuid
@@ -168,7 +202,7 @@ jobs:
             init:
               image:
                 repository: "${NRI_INIT_REPOSITORY}"
-                tag: "latest"
+                tag: "${NRI_INIT_TAG}"
           EOF
           
           # Print the values being used

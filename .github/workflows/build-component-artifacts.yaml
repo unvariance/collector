@@ -36,9 +36,12 @@ on:
         default: true
         type: boolean
     outputs:
-      image:
-        description: "Built image reference (local tag)"
-        value: ${{ jobs.build.outputs.image }}
+      image_repo:
+        description: "Image repository to use for tests (local/<component>)"
+        value: ${{ jobs.build.outputs.image_repo }}
+      image_tag:
+        description: "Image tag to use for tests (build-<sha>-<run_id>)"
+        value: ${{ jobs.build.outputs.image_tag }}
       image_artifact:
         description: "Name of the uploaded image artifact"
         value: ${{ jobs.build.outputs.image_artifact }}
@@ -52,7 +55,8 @@ jobs:
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
     outputs:
-      image: ${{ steps.out.outputs.image }}
+      image_repo: ${{ steps.out.outputs.image_repo }}
+      image_tag: ${{ steps.out.outputs.image_tag }}
       image_artifact: ${{ steps.names.outputs.image_artifact }}
       binary_artifact: ${{ steps.names.outputs.binary_artifact }}
     steps:
@@ -177,13 +181,16 @@ jobs:
           echo "image_artifact=$image_artifact" >> "$GITHUB_OUTPUT"
           echo "binary_artifact=$binary_artifact" >> "$GITHUB_OUTPUT"
 
-      - name: Select output image
+      - name: Select output image metadata
         id: out
         shell: bash
         run: |
-          # Prefer publish image when pushing, otherwise use local tag
-          image="${{ inputs.push && steps.meta.outputs.publish_image || steps.meta.outputs.local_image }}"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+          # Always use local repo/tag for tests
+          local_image="${{ steps.meta.outputs.local_image }}"
+          image_repo="${local_image%%:*}"
+          image_tag="${local_image##*:}"
+          echo "image_repo=$image_repo" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
 
       - name: Save image as tar
         if: inputs.upload-image-artifact == true
