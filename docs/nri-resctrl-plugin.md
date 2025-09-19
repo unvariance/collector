@@ -57,7 +57,7 @@ Counters increment whenever a container becomes known, increment again when it r
   - Run on an EC2 runner with a KIND cluster configured for NRI
   - Validates that groups are created, tasks are assigned, counts improve, and cleanup occurs on pod removal
   - Tests are `#[ignore]` by default; CI enables them with `cargo test -- --ignored`
-- CI wiring uses the orchestrator `.github/workflows/ci-orchestrator.yaml`, which invokes the reusable workflow `.github/workflows/reusable-test-resctrl.yaml` to run mocked tests on GitHub-hosted runners and execute the hardware/K3s jobs on EC2 when enabled.
+- CI wiring uses the orchestrator `.github/workflows/ci.yaml`, which invokes the reusable workflow `.github/workflows/reusable-test-resctrl.yaml` to run mocked tests on GitHub-hosted runners and execute the hardware/K3s jobs on EC2 when enabled.
 
 ### Test Inventory and Deltas
 
