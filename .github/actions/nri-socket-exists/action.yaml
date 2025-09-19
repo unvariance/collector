@@ -1,7 +1,7 @@
 name: "nri-socket-exists"
 description: "Wait until the NRI socket exists or fail on timeout"
 inputs:
-  socket-location:
+  socket_path:
     description: "Path to the NRI socket"
     required: false
     default: "/var/run/nri/nri.sock"
@@ -16,7 +16,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        SOCKET_PATH="${{ inputs["socket-location"] }}"
+        SOCKET_PATH="${{ inputs.socket_path }}"
         TIMEOUT_SEC="${{ inputs.timeout }}"
 
         echo "=== Waiting for NRI socket at ${SOCKET_PATH} (timeout: ${TIMEOUT_SEC}s) ==="
