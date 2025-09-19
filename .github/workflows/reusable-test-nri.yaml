@@ -77,18 +77,7 @@ jobs:
           echo "TEST_BINARY_PATH=$TEST_BIN" >> $GITHUB_ENV
 
       - name: Verify NRI socket
-        run: |
-          set -euo pipefail
-          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
-          for i in $(seq 1 90); do
-            if sudo test -S /var/run/nri/nri.sock; then
-              echo "✓ NRI socket present"; break; fi; sleep 1; done
-          if ! sudo test -S /var/run/nri/nri.sock; then
-            echo "✗ NRI socket not found after enabling on k3s"
-            sudo journalctl -u k3s --no-pager -n 200 || true
-            exit 1
-          fi
+        uses: ./.github/actions/nri-socket-exists
 
       - name: Run NRI Integration Test
         run: |
@@ -102,4 +91,3 @@ jobs:
       - name: Cleanup
         if: always()
         run: sudo /usr/local/bin/k3s-uninstall.sh || true
-

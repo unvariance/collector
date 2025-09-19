@@ -1,0 +1,37 @@
+name: "nri-socket-exists"
+description: "Wait until the NRI socket exists or fail on timeout"
+inputs:
+  socket-location:
+    description: "Path to the NRI socket"
+    required: false
+    default: "/var/run/nri/nri.sock"
+  timeout:
+    description: "Timeout in seconds"
+    required: false
+    default: "30"
+runs:
+  using: "composite"
+  steps:
+    - name: Wait for NRI socket
+      shell: bash
+      run: |
+        set -euo pipefail
+        SOCKET_PATH="${{ inputs["socket-location"] }}"
+        TIMEOUT_SEC="${{ inputs.timeout }}"
+
+        echo "=== Waiting for NRI socket at ${SOCKET_PATH} (timeout: ${TIMEOUT_SEC}s) ==="
+        SECS=0
+        while [ "$SECS" -lt "$TIMEOUT_SEC" ]; do
+          if sudo test -S "$SOCKET_PATH"; then
+            echo "✓ NRI socket present: $SOCKET_PATH"
+            sudo ls -la "$SOCKET_PATH" || true
+            exit 0
+          fi
+          sleep 1
+          SECS=$((SECS + 1))
+        done
+
+        echo "✗ NRI socket not found at $SOCKET_PATH after ${TIMEOUT_SEC}s"
+        # Try to provide some helpful logs if k3s is present
+        (sudo journalctl -u k3s --no-pager -n 200 || true)
+        exit 1

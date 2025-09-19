@@ -125,23 +125,7 @@ jobs:
           timeout_node_ready_seconds: 300
 
       - name: Verify NRI socket
-        run: |
-          set -euo pipefail
-          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
-          for i in $(seq 1 90); do
-            if sudo test -S /var/run/nri/nri.sock; then
-              echo "✓ NRI socket present"
-              sudo ls -la /var/run/nri/nri.sock
-              break
-            fi
-            sleep 1
-          done
-          if ! sudo test -S /var/run/nri/nri.sock; then
-            echo "✗ NRI socket not found after enabling on k3s"
-            sudo journalctl -u k3s --no-pager -n 200 || true
-            exit 1
-          fi
+        uses: ./.github/actions/nri-socket-exists
 
       - name: Download nri-resctrl-plugin e2e binary
         uses: actions/download-artifact@v4

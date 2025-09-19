@@ -547,14 +547,7 @@ jobs:
           timeout_node_ready_seconds: 300
 
       - name: Ensure NRI socket exists
-        run: |
-          for i in {1..30}; do
-            if [ -S "/var/run/nri/nri.sock" ]; then
-              ls -la /var/run/nri/nri.sock; break; fi; sleep 2; done
-          if [ ! -S "/var/run/nri/nri.sock" ]; then
-            echo "❌ NRI socket missing; K3s/containerd may not have NRI enabled"
-            exit 1
-          fi
+        uses: ./.github/actions/nri-socket-exists
 
       - name: Install jq
         uses: awalsh128/cache-apt-pkgs-action@v1
