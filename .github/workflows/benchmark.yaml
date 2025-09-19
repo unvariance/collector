@@ -32,18 +32,6 @@ on:
         required: false
         default: 'ghcr.io/unvariance/collector/collector'
         type: string
-  pull_request:
-    paths:
-      - deploy/opentelemetry-demo/values.yaml
-      - .github/workflows/benchmark.yaml
-      - '.github/actions/setup-k3s/**'
-  push:
-    branches:
-      - main
-    paths:
-      - deploy/opentelemetry-demo/values.yaml
-      - .github/workflows/benchmark.yaml
-      - '.github/actions/setup-k3s/**'
 
 permissions:
   id-token: write # Required for requesting the JWT
