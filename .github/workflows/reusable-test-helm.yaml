@@ -61,10 +61,8 @@ jobs:
           iam-role-name: github-actions-runner
           instance-type: ${{ inputs.instance-type }}
           image-type: ubuntu-24.04
-          market-type: spot
 
-  helm-chart-deployment:
-    name: Helm install + S3 smoke
+  k3s-deployment:
     needs: [setup-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 10
