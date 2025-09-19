@@ -1,0 +1,17 @@
+name: setup-awscli
+description: Install AWS CLI v2
+runs:
+  using: composite
+  steps:
+    - name: Install awscli
+      shell: bash
+      run: |
+        set -eux;
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip";
+        python3 -m zipfile -e awscliv2.zip .;
+        chmod u+x ./aws/install
+        sudo ./aws/install
+        echo ls: `ls -l /usr/local/bin/aws` || true
+        chmod +x /usr/local/bin/aws || true
+        echo version: `/usr/local/bin/aws --version` || true
+

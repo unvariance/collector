@@ -146,12 +146,7 @@ jobs:
         run: chmod +x ./collector
 
       - name: Install awscli
-        run: |
-          set -eux; 
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"; 
-          python3 -m zipfile -e awscliv2.zip .; 
-          sudo ./aws/install; 
-          /usr/local/bin/aws --version || true
+        uses: ./.github/actions/setup-awscli
 
       - name: Install pqrs
         run: |
