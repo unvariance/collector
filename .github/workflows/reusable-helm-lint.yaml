@@ -1,12 +1,11 @@
-name: reusable-fast
+name: reusable-helm-lint
 
 on:
   workflow_call:
     inputs: {}
 
 jobs:
-  helm:
-    name: Helm lint + template
+  main:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

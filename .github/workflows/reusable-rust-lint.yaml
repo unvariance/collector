@@ -1,12 +1,11 @@
-name: reusable-lint
+name: reusable-rust-lint
 
 on:
   workflow_call:
     inputs: {}
 
 jobs:
-  fmt_clippy:
-    name: Rust fmt + clippy
+  main:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
