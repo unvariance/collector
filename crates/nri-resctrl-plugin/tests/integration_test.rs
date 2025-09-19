@@ -477,7 +477,15 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
 
     // Build plugin with an externally provided channel
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
-    let plugin = std::sync::Arc::new(ResctrlPlugin::new(ResctrlPluginConfig::default(), tx));
+    // Use a unique group prefix per test run to avoid clashes across tests/CI runs
+    let test_prefix = format!("pod_{}_", uuid::Uuid::new_v4());
+    let plugin = std::sync::Arc::new(ResctrlPlugin::new(
+        ResctrlPluginConfig {
+            group_prefix: test_prefix.clone(),
+            ..Default::default()
+        },
+        tx,
+    ));
 
     // Start NRI server for plugin and register
     let (nri, join_handle) = NRI::new(socket, plugin, "resctrl-plugin", "10").await?;
@@ -563,7 +571,8 @@ async fn test_plugin_full_flow_impl() -> anyhow::Result<()> {
     println!("[integration_test] Plugin shutdown completed");
 
     let fs = resctrl::RealFs;
-    let report = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "pod_")?;
+    let report =
+        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), &test_prefix)?;
     println!("[integration_test] Cleanup report (pod_): {:?}", report);
     println!("[integration_test] Cleanup complete");
 
@@ -602,10 +611,12 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let p_a = root.join("test_e2e_a");
-    let p_b = root.join("test_e2e_b");
+    // Unique test prefix to avoid reuse across sequential runs
+    let test_prefix = format!("test_e2e_{}_", uuid::Uuid::new_v4());
+    let p_a = root.join(format!("{}a", test_prefix));
+    let p_b = root.join(format!("{}b", test_prefix));
     let p_np_c = root.join("np_e2e_c");
-    let mg_m1 = mon_groups.join("test_e2e_m1");
+    let mg_m1 = mon_groups.join(format!("{}m1", test_prefix));
     let mg_np_m2 = mon_groups.join("np_e2e_m2");
 
     // Helper to mkdir if missing
@@ -634,7 +645,7 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(64);
     let plugin = ResctrlPlugin::new(
         ResctrlPluginConfig {
-            group_prefix: "test_e2e_".into(),
+            group_prefix: test_prefix.clone(),
             cleanup_on_start: true,
             ..Default::default()
         },
@@ -699,7 +710,7 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
         let de = entry?;
         if de.file_type()?.is_dir() {
             if let Some(name) = de.file_name().to_str() {
-                if name.starts_with("test_e2e_") {
+                if name.starts_with(&test_prefix) {
                     let _ = fs::remove_dir(de.path());
                 }
             }
@@ -710,7 +721,7 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
             let de = entry?;
             if de.file_type()?.is_dir() {
                 if let Some(name) = de.file_name().to_str() {
-                    if name.starts_with("test_e2e_") {
+                    if name.starts_with(&test_prefix) {
                         let _ = fs::remove_dir(de.path());
                     }
                 }
@@ -719,8 +730,11 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
     }
 
     let fs = resctrl::RealFs;
-    let report_e2e =
-        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "test_e2e_")?;
+    let report_e2e = resctrl::cleanup_prefix(
+        &fs,
+        std::path::Path::new("/sys/fs/resctrl"),
+        &test_prefix,
+    )?;
     println!(
         "[integration_test] Cleanup report (test_e2e_): {:?}",
         report_e2e
@@ -769,8 +783,11 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
 
     // Build plugin and register via NRI
     let (tx, mut rx) = mpsc::channel::<PodResctrlEvent>(256);
+    // Use unique group prefix for this test run
+    let test_prefix = format!("pod_{}_", uuid::Uuid::new_v4());
     let plugin = std::sync::Arc::new(ResctrlPlugin::new(
         ResctrlPluginConfig {
+            group_prefix: test_prefix.clone(),
             cleanup_on_start: false,
             ..Default::default()
         },
@@ -948,7 +965,7 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     }
 
     let fs = resctrl::RealFs;
-    let report_pod = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), "pod_")?;
+    let report_pod = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), &test_prefix)?;
     println!("[integration_test] Cleanup report (pod_): {:?}", report_pod);
     let report_capfill =
         resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), filler_prefix)?;
