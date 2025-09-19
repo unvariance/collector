@@ -10,12 +10,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     libelf1 \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && addgroup --system collector \
-    && adduser --system --ingroup collector collector
+    && rm -rf /var/lib/apt/lists/*
 # Expect a prebuilt binary at dist/collector in the build context
 COPY dist/collector /usr/local/bin/collector
-USER collector:collector
 ENTRYPOINT ["/usr/local/bin/collector"]
 
 ############################
