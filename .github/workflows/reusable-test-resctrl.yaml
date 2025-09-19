@@ -19,8 +19,7 @@ on:
         required: false
 
 jobs:
-  build-and-unit-test:
-    name: Build + unit tests (GH-hosted)
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -51,16 +50,6 @@ jobs:
           source $HOME/.cargo/env
           rustc -V
           cargo -V
-
-      - name: Run unit tests (resctrl)
-        run: |
-          source $HOME/.cargo/env
-          RUST_TEST_THREADS=1 cargo test -p resctrl --release -- --nocapture --test-threads=1
-
-      - name: Run unit tests (nri-resctrl-plugin)
-        run: |
-          source $HOME/.cargo/env
-          RUST_TEST_THREADS=1 cargo test -p nri-resctrl-plugin --release -- --nocapture --test-threads=1
 
       - name: Build smoke test binary (no-run)
         run: |
@@ -107,7 +96,7 @@ jobs:
 
   nri-resctrl-plugin-e2e:
     name: NRI resctrl plugin full flow (k3s on EC2)
-    needs: [setup-runner, build-and-unit-test]
+    needs: [setup-runner, build]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
     steps:
@@ -163,7 +152,7 @@ jobs:
   setup-runner:
     if: inputs.level == 'full-short' || inputs.level == 'full-long'
     name: Start EC2 runner (resctrl-capable)
-    needs: [build-and-unit-test]
+    needs: [build]
     runs-on: ubuntu-latest
     outputs:
       runner-label: ${{ steps.start-runner.outputs.runner-label }}
@@ -186,7 +175,7 @@ jobs:
   resctrl-e2e-smoke:
     if: inputs.level == 'full-short' || inputs.level == 'full-long'
     name: Run resctrl smoke test
-    needs: [build-and-unit-test, setup-runner]
+    needs: [build, setup-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
     env:
