@@ -1,0 +1,21 @@
+name: reusable-fast
+
+on:
+  workflow_call:
+    inputs: {}
+
+jobs:
+  helm:
+    name: Helm lint + template
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+      - name: Helm lint and template (collector)
+        run: |
+          helm version || true
+          helm lint charts/collector || exit 1
+          helm template charts/collector > /dev/null

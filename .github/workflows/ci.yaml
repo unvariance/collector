@@ -84,10 +84,15 @@ jobs:
       upload-image-artifact: true
       upload-binary-artifact: true
 
-  fast:
-    name: Fast checks
+  rust-lint:
     needs: [context]
-    uses: ./.github/workflows/reusable-fast.yaml
+    uses: ./.github/workflows/reusable-rust-lint.yaml
+  unit-tests:
+    needs: [context]
+    uses: ./.github/workflows/reusable-unit-tests.yaml
+  helm-lint:
+    needs: [context]
+    uses: ./.github/workflows/reusable-helm-lint.yaml
 
   test-nri:
     uses: ./.github/workflows/reusable-test-nri.yaml

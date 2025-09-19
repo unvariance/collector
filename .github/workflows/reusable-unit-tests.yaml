@@ -1,0 +1,31 @@
+name: reusable-fast
+
+on:
+  workflow_call:
+    inputs: {}
+
+jobs:
+  test:
+    name: Rust unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install build deps (collector)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev make pkg-config unzip
+          version: 1.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Rust cache (collector build)
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: cargo test (unit only)
+        env:
+          RUST_TEST_THREADS: 1
+        run: cargo test --workspace --all-features -- --nocapture --test-threads=1

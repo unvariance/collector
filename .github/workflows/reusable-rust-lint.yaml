@@ -1,0 +1,33 @@
+name: reusable-lint
+
+on:
+  workflow_call:
+    inputs: {}
+
+jobs:
+  fmt_clippy:
+    name: Rust fmt + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install build deps (collector)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang libelf-dev make pkg-config unzip
+          version: 1.0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Rust cache (collector build)
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
