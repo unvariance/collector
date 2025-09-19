@@ -91,13 +91,12 @@ jobs:
 
   nri-gh-hosted:
     name: NRI integration (GH-hosted)
-    needs: [fast]
     uses: ./.github/workflows/reusable-test-nri.yaml
 
   collector-heavy:
     if: needs.context.outputs.level != 'cheap-short'
     name: Collector heavy tests
-    needs: [build-collector, fast]
+    needs: [build-collector, context]
     uses: ./.github/workflows/reusable-test-collector.yaml
     secrets: inherit
     with:
@@ -108,7 +107,7 @@ jobs:
   resctrl:
     if: needs.context.outputs.level == 'full-short' || needs.context.outputs.level == 'full-long'
     name: Resctrl e2e
-    needs: [fast]
+    needs: [context]
     uses: ./.github/workflows/reusable-test-resctrl.yaml
     secrets: inherit
     with:
@@ -117,7 +116,7 @@ jobs:
   helm-e2e:
     if: needs.context.outputs.level != 'cheap-short'
     name: Helm Chart E2E
-    needs: [build-collector, build-nri-init, fast]
+    needs: [build-collector, build-nri-init, context]
     uses: ./.github/workflows/reusable-test-helm.yaml
     secrets: inherit
     with:
