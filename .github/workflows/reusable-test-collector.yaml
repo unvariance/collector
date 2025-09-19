@@ -565,7 +565,7 @@ jobs:
 
       - name: Deploy test pod (${{ env.POD_NAME }})
         run: |
-          cat > pod.yaml << 'EOF'
+          cat > pod.yaml << EOF
           apiVersion: v1
           kind: Pod
           metadata:
