@@ -76,7 +76,7 @@ jobs:
     needs: [context]
     uses: ./.github/workflows/build-component-artifacts.yaml
     with:
-      runner: ubuntu-latest
+      runner: ubuntu-22.04 # to get older glibc for compatibility
       component: nri-init
       push: ${{ github.event_name != 'pull_request' }}
       image-repository: ghcr.io/${{ github.repository }}/nri-init
@@ -89,13 +89,11 @@ jobs:
     needs: [context]
     uses: ./.github/workflows/reusable-fast.yaml
 
-  nri-gh-hosted:
-    name: NRI integration (GH-hosted)
+  test-nri:
     uses: ./.github/workflows/reusable-test-nri.yaml
 
-  collector-heavy:
+  test-collector:
     if: needs.context.outputs.level != 'cheap-short'
-    name: Collector heavy tests
     needs: [build-collector, context]
     uses: ./.github/workflows/reusable-test-collector.yaml
     secrets: inherit
@@ -104,18 +102,16 @@ jobs:
       collector-binary-artifact: collector-binary
       instance-type: ${{ needs.context.outputs.level == 'perf-short' && 'c5.9xlarge' || 'm7i.metal-24xl' }}
 
-  resctrl:
+  test-resctrl:
     if: needs.context.outputs.level == 'full-short' || needs.context.outputs.level == 'full-long'
-    name: Resctrl e2e
     needs: [context]
     uses: ./.github/workflows/reusable-test-resctrl.yaml
     secrets: inherit
     with:
       level: ${{ needs.context.outputs.level }}
 
-  helm-e2e:
+  test-helm:
     if: needs.context.outputs.level != 'cheap-short'
-    name: Helm Chart E2E
     needs: [build-collector, build-nri-init, context]
     uses: ./.github/workflows/reusable-test-helm.yaml
     secrets: inherit
