@@ -124,6 +124,7 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: ${{ inputs.component }}
           cache-on-failure: true
 
       - name: Build release binary
