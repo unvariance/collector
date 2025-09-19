@@ -213,10 +213,24 @@ jobs:
 
       - name: Wait for Collector Pods to be Ready
         run: |
+          # Allow the wait to fail so we can dump diagnostics
+          set +e
           kubectl wait --for=condition=Ready pods --timeout=60s -l app.kubernetes.io/name=collector
-          if [ $? -ne 0 ]; then
-            echo "Collector pods are not ready after timeout"
-            kubectl describe pods -l app.kubernetes.io/name=collector
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Collector pods are not ready after timeout. Dumping diagnostics..."
+            echo "\n==> kubectl get pods (all)"
+            kubectl get pods -o wide || true
+            echo "\n==> kubectl describe pods (collector-labeled)"
+            kubectl describe pods -l app.kubernetes.io/name=collector || true
+            echo "\n==> kubectl get events (sorted)"
+            kubectl get events --sort-by=.lastTimestamp || true
+            echo "\n==> kubectl logs for collector pods (all containers)"
+            for p in $(kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{.items[*].metadata.name}'); do
+              echo "\n---- Logs for pod: $p ----"
+              kubectl logs "$p" --all-containers=true --tail=-1 || true
+            done
             exit 1
           fi
 
