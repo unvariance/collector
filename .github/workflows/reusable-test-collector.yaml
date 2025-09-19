@@ -314,7 +314,7 @@ jobs:
           iam-role-name: github-actions-runner
           instance-type: ${{ inputs.instance-type }}
           image-type: ubuntu-24.04
-          olume-size: '40'
+          volume-size: '40'
 
   cancel-on-failure:
     needs: setup-runner
