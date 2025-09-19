@@ -84,7 +84,11 @@ jobs:
           for i in $(seq 1 90); do
             if sudo test -S /var/run/nri/nri.sock; then
               echo "✓ NRI socket present"; break; fi; sleep 1; done
-          sudo test -S /var/run/nri/nri.sock || { echo "NRI socket missing"; sudo journalctl -u k3s --no-pager -n 200 || true; exit 1; }
+          if ! sudo test -S /var/run/nri/nri.sock; then
+            echo "✗ NRI socket not found after enabling on k3s"
+            sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
 
       - name: Run NRI Integration Test
         run: |

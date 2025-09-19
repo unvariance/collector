@@ -67,6 +67,13 @@ jobs:
           source $HOME/.cargo/env
           cargo test -p resctrl --test smoke_test --release --no-run
 
+      - name: Build nri-resctrl-plugin integration tests (no-run)
+        run: |
+          source $HOME/.cargo/env
+          # Build all integration tests for nri-resctrl-plugin without running them
+          cargo test -p nri-resctrl-plugin --tests --release --no-run
+
+
       - name: Collect smoke test binary
         run: |
           set -euxo pipefail
@@ -82,6 +89,93 @@ jobs:
           path: resctrl-smoke
           if-no-files-found: error
 
+      - name: Collect nri-resctrl-plugin e2e binary
+        id: collect-plugin-bin
+        run: |
+          set -euxo pipefail
+          P_BIN=$(find target/release/deps -maxdepth 1 -type f -executable -name 'integration_test-*' | head -n 1)
+          test -n "$P_BIN" || { echo "nri-resctrl-plugin integration test binary not found"; exit 1; }
+          cp "$P_BIN" nri-resctrl-plugin-e2e
+          chmod +x nri-resctrl-plugin-e2e
+
+      - name: Upload nri-resctrl-plugin e2e binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: nri-resctrl-plugin-e2e
+          path: nri-resctrl-plugin-e2e
+          if-no-files-found: error
+
+  nri-resctrl-plugin-e2e:
+    name: NRI resctrl plugin full flow (k3s on EC2)
+    needs: [setup-runner, build-and-unit-test]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup k3s
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          disable_packaged_addons: true
+          preflight_inotify: true
+          wait_kube_system: false
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+
+      - name: Verify NRI socket
+        run: |
+          set -euo pipefail
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+          echo "=== Waiting for NRI socket at /var/run/nri/nri.sock ==="
+          for i in $(seq 1 90); do
+            if sudo test -S /var/run/nri/nri.sock; then
+              echo "✓ NRI socket present"
+              sudo ls -la /var/run/nri/nri.sock
+              break
+            fi
+            sleep 1
+          done
+          if ! sudo test -S /var/run/nri/nri.sock; then
+            echo "✗ NRI socket not found after enabling on k3s"
+            sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
+
+      - name: Download nri-resctrl-plugin e2e binary
+        uses: actions/download-artifact@v4
+        with:
+          name: nri-resctrl-plugin-e2e
+          path: ./
+
+      - name: Prepare test binary
+        run: |
+          chmod +x ./nri-resctrl-plugin-e2e || true
+
+      - name: Run plugin integration tests (excluding capacity retry)
+        env:
+          NRI_SOCKET_PATH: /var/run/nri/nri.sock
+          RUST_LOG: info
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
+          NRI_SOCKET_PATH="/var/run/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e --include-ignored --nocapture --test-threads=1 --skip test_capacity_retry_e2e
+
+      - name: Run plugin integration test (capacity retry)
+        env:
+          NRI_SOCKET_PATH: /var/run/nri/nri.sock
+          RUST_LOG: info
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          echo "Using prebuilt test binary: ./nri-resctrl-plugin-e2e"
+          NRI_SOCKET_PATH="/var/run/nri/nri.sock" sudo -E ./nri-resctrl-plugin-e2e test_capacity_retry_e2e --include-ignored --nocapture --test-threads=1
+      - name: Cleanup k3s
+        if: always()
+        run: |
+          sudo /usr/local/bin/k3s-uninstall.sh || true
+
+
   setup-runner:
     if: inputs.level == 'full-short' || inputs.level == 'full-long'
     name: Start EC2 runner (resctrl-capable)
@@ -90,6 +184,7 @@ jobs:
     outputs:
       runner-label: ${{ steps.start-runner.outputs.runner-label }}
       ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -131,7 +226,7 @@ jobs:
   stop-runner:
     if: always() && (inputs.level == 'full-short' || inputs.level == 'full-long')
     name: Stop EC2 runner
-    needs: [setup-runner, resctrl-e2e-smoke]
+    needs: [setup-runner, resctrl-e2e-smoke, nri-resctrl-plugin-e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -143,4 +238,4 @@ jobs:
           ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
           github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
           aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-
+          aws-region: ${{ needs.setup-runner.outputs.region }}

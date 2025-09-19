@@ -62,14 +62,241 @@ jobs:
       - name: Test cgroup inode assumptions
         run: |
           cargo test --package bpf --test cgroup_inode_test --no-run --verbose
+          
+          echo "Testing that the cgroup ID from BPF matches the inode number in the filesystem"
+          echo "This is critical for container identification in the collector"
+          
           TEST_BIN=$(find target/debug -name "cgroup_inode_test-*" -type f -executable | head -1)
           if [ -z "$TEST_BIN" ]; then echo "Missing test bin"; exit 1; fi
           # Run ignored tests since this one requires BPF privileges
           sudo "$TEST_BIN" --ignored
 
+  test-multi-kernel:
+    name: Test on Multiple Kernels
+    needs: [setup-runner, prepare-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
+          - kernel: '5.10-20250507.063028'
+            should_succeed: false
+            description: 'Kernel 5.10 (should fail - does not have bpf timer support)'
+          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
+          - kernel: '5.15-20250507.063028'
+            should_succeed: true
+            description: 'Kernel 5.15 (should succeed - legacy timer mode - relative time supported)'
+          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
+          - kernel: '6.1-20250507.063028'
+            should_succeed: true
+            description: 'Kernel 6.1 (should succeed - legacy timer mode - relative time supported)'
+          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
+          - kernel: '6.6-20250507.063028'
+            should_succeed: true
+            description: 'Kernel 6.6 (should succeed - intermediate timer mode - absolute time supported)'
+          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
+          - kernel: '6.12-20250507.063028'
+            should_succeed: true
+            description: 'Kernel 6.12 (should succeed - modern timer mode - CPU pinning + absolute time supported)'
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./artifacts
+        
+      - name: Copy pqrs to workspace for guest access
+        run: |
+          # Create a tools directory in the workspace
+          mkdir -p tools
+          # Copy pqrs binary to the workspace so it's accessible in the guest VM
+          cp -f /usr/local/bin/pqrs tools/
+          chmod +x tools/pqrs
+
+      - name: Provision LVH VM
+        uses: yonch/little-vm-helper@main
+        with:
+          test-name: collector-kernel-${{ matrix.kernel }}
+          image: 'complexity-test'
+          image-version: ${{ matrix.kernel }}
+          host-mount: ./
+          images-folder-parent: "/tmp"
+          cpu: 2
+          mem: 2G
+          cpu-kind: 'host,pmu=on'
+          lvh-version: "v0.0.23"
+          install-dependencies: 'true'
+          verbose: 'true'
+          cmd: |
+            # Wait for networking to be ready
+            for i in {1..5}; do curl "https://golang.org" > /dev/null 2>&1 && break || sleep 5; echo "Waiting for systemd-resolved to be ready..."; done
+            
+            git config --global --add safe.directory /host
+            uname -a
+            
+            # Check if perf events are available
+            echo "Checking perf event capabilities..."
+            ls -la /sys/bus/event_source/devices/ || echo "No perf event devices found"
+            ls -la /proc/sys/kernel/perf_event_* || echo "No perf event sysctls found"
+            cat /proc/cpuinfo | grep -i "pmu\|perf" || echo "No PMU features in cpuinfo"
+            echo "perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
+            echo 0 > /proc/sys/kernel/perf_event_paranoid
+
+            echo "available_clocksource:"
+            cat /sys/devices/system/clocksource/clocksource0/available_clocksource || echo "No available clocksource found"
+            echo "current_clocksource:"
+            cat /sys/devices/system/clocksource/clocksource0/current_clocksource || echo "No current clocksource found"
+
+            echo "timer_list:"
+            cat /proc/timer_list || echo "No timer list found"
+            echo "dmesg timer:"
+            dmesg | grep -i timer || echo "No timer found in dmesg"
+
+            echo mounts:
+            mount
+
+      - name: Test Collector on ${{ matrix.description }}
+        uses: yonch/little-vm-helper@main
+        with:
+          provision: 'false'
+          cmd: |
+            echo "Testing memory collector on kernel: ${{ matrix.description }}"
+            uname -a
+            cd /host
+            
+            # Make collector executable
+            chmod +x ./artifacts/collector
+            
+            echo "=== Testing memory collector on ${{ matrix.description }} ==="
+            echo "Kernel version: $(uname -a)"
+            echo "Expected result: ${{ matrix.should_succeed && 'SUCCESS' || 'FAILURE with kernel version error' }}"
+            echo
+            
+            # Set up test environment
+            mkdir -p /tmp/test-output
+            
+            # Run the collector and capture both stdout and stderr
+            echo "Running collector for 5 seconds..."
+            set +e  # Don't exit on error
+            RUST_LOG=debug ./artifacts/collector -d 5 --storage-type local --prefix "/tmp/test-output/metrics-" --verbose > /tmp/collector-output.log 2>&1
+            COLLECTOR_EXIT_CODE=$?
+            set -e
+            
+            echo "=== Collector Output ==="
+            cat /tmp/collector-output.log
+            echo "========================"
+            echo "Collector exit code: $COLLECTOR_EXIT_CODE"
+            echo
+            
+            # Handle empty exit code (fallback for safety)
+            if [ -z "$COLLECTOR_EXIT_CODE" ]; then
+              echo "Error: Exit code is empty (unexpected)"
+              exit 1
+            fi
+            
+            # Check if the behavior matches expectations
+            if [ "${{ matrix.should_succeed }}" = "true" ]; then
+              # For kernels 6.7+, expect success
+              if [ "$COLLECTOR_EXIT_CODE" -eq "0" ]; then
+                echo "✅ SUCCESS: Collector ran successfully on supported kernel"
+                
+                # Verify parquet files were created
+                if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
+                  echo "✅ SUCCESS: Parquet files were created"
+                  echo "Created files:"
+                  ls -la /tmp/test-output/metrics-*.parquet
+                else
+                  echo "❌ UNEXPECTED: No parquet files found despite successful run"
+                  exit 1
+                fi
+              else
+                echo "❌ UNEXPECTED: Collector failed on supported kernel (exit code: $COLLECTOR_EXIT_CODE)"
+                exit 1
+              fi
+            else
+              # For kernels < 6.7, expect failure with kernel error message
+              if [ "$COLLECTOR_EXIT_CODE" -ne "0" ]; then
+                echo "✅ EXPECTED: Collector failed on unsupported kernel (exit code: $COLLECTOR_EXIT_CODE)"
+                
+                # Check if the error message mentions kernel 6.7 requirement
+                if grep -i "kernel 6\.7" /tmp/collector-output.log; then
+                  echo "✅ SUCCESS: Error message correctly mentions kernel 6.7 requirement"
+                else
+                  echo "❌ IMPROVEMENT NEEDED: Error message should mention kernel 6.7 requirement"
+                  echo "Current error output:"
+                  cat /tmp/collector-output.log
+                  # Don't fail the test, just note the improvement needed
+                fi
+                
+                # Verify no parquet files were created
+                if ! ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
+                  echo "✅ SUCCESS: No parquet files created on unsupported kernel"
+                else
+                  echo "❌ UNEXPECTED: Parquet files were created despite failure"
+                  exit 1
+                fi
+              else
+                echo "❌ UNEXPECTED: Collector succeeded on unsupported kernel"
+                echo "This suggests the kernel version detection/error handling needs improvement"
+                exit 1
+              fi
+            fi
+            
+            echo "=== Test completed for ${{ matrix.description }} ==="
+
+      - name: Display parquet file contents
+        if: matrix.should_succeed == true
+        uses: yonch/little-vm-helper@main
+        with:
+          provision: 'false'
+          cmd: |
+            echo "=== Displaying parquet file contents for ${{ matrix.description }} ==="
+            cd /host
+            
+            # Find all parquet files in /tmp/test-output
+            if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
+              echo "Found parquet files:"
+              ls -la /tmp/test-output/metrics-*.parquet
+              echo
+              
+              # Display contents of each parquet file using pqrs from the tools directory
+              for parquet_file in /tmp/test-output/metrics-*.parquet; do
+                echo "=== Contents of $(basename $parquet_file) ==="
+                /host/tools/pqrs cat --csv "$parquet_file" || echo "Failed to read parquet file: $parquet_file"
+                echo
+              done
+            else
+              echo "No parquet files found in /tmp/test-output/"
+            fi
+            echo "=== End of parquet file contents ==="
+
+      - name: Stop qemu
+        if: always()
+        run: |
+          sudo pkill -f qemu-system-x86_64
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-test-${{ matrix.kernel }}-logs
+          path: |
+            /tmp/collector-output.log
+            /tmp/test-output/
+          if-no-files-found: ignore
+          retention-days: 5
+
   setup-runner:
     if: inputs.level != 'cheap-short'
-    name: Start EC2 runner (heavy tests)
+    name: Start EC2 runner
     runs-on: ubuntu-latest
     outputs:
       runner-label: ${{ steps.start-runner.outputs.runner-label }}
@@ -87,12 +314,20 @@ jobs:
           iam-role-name: github-actions-runner
           instance-type: ${{ inputs.instance-type }}
           image-type: ubuntu-24.04
-          market-type: spot
+          olume-size: '40'
+
+  cancel-on-failure:
+    needs: setup-runner
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Cancel workflow
+        uses: andymckay/cancel-action@a955d435292c0d409d104b57d8e78435a93a6ef1
 
   test-ebpf:
     if: inputs.level != 'cheap-short'
     name: Collector local run (parquet verification)
-    needs: [setup-runner]
+    needs: [setup-runner, prepare-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 10
     steps:
@@ -105,6 +340,35 @@ jobs:
       - name: Make collector executable
         run: chmod +x ./collector
 
+      - name: Run eBPF collector
+        run: |
+          # Run with sudo since eBPF programs require elevated privileges
+          sudo ./collector -d 10 --storage-type local --prefix "/tmp/metrics-"
+
+      - name: Verify parquet output
+        run: |
+          # Get the parquet file name based on the prefix /tmp/metrics
+          parquet_file=$(find /tmp -name "metrics-*.parquet")
+
+          # Print parquet file contents as CSV
+          echo "Parquet file contents:"
+          pqrs cat --csv $parquet_file
+
+      - name: Upload parquet file
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-parquet
+          path: /tmp/metrics-*.parquet
+          if-no-files-found: error
+
+  prepare-runner:
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 5
+    steps:
+      - name: Install awscli
+        uses: ./.github/actions/setup-awscli
+
       - name: Install pqrs
         run: |
           curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
@@ -113,23 +377,29 @@ jobs:
           sudo chmod +x /usr/local/bin/pqrs
           rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
 
-      - name: Run eBPF collector (local)
-        run: |
-          sudo ./collector -d 10 --storage-type local --prefix "/tmp/metrics-"
+      - name: Install Podman packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: podman podman-docker
+          version: 1.0
 
-      - name: Verify parquet output
+      - name: Install Podman and Docker compatibility
         run: |
-          parquet_file=$(find /tmp -name "metrics-*.parquet" | head -n1)
-          test -n "$parquet_file" || { echo "No parquet output found"; exit 1; }
-          echo "Parquet file: $parquet_file"
-          pqrs cat --csv "$parquet_file" | head -n 20 || true
+          # Verify installation
+          podman --version
+          docker --version
+          
+          # Start podman socket for Docker API compatibility
+          sudo systemctl enable --now podman.socket
+          sudo systemctl status podman.socket
+      
 
   test-ebpf-s3:
     if: inputs.level != 'cheap-short'
     name: Collector run + S3 validation
-    needs: [setup-runner]
+    needs: [setup-runner, prepare-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       AWS_REGION: ${{ secrets.AWS_REGION }}
       IRSA_BUCKET: "unvariance-collector-test-irsa"
@@ -145,107 +415,110 @@ jobs:
       - name: Make collector executable
         run: chmod +x ./collector
 
-      - name: Install awscli
-        uses: ./.github/actions/setup-awscli
-
-      - name: Install pqrs
-        run: |
-          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
-          python3 -m zipfile -e pqrs.zip .
-          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
-          sudo chmod +x /usr/local/bin/pqrs
-          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
-
+      # Test IAM role-based authentication (IRSA)
       - name: Test S3 with IAM Role Authentication
+        id: test-iam-role
         run: |
+          # Generate a unique prefix for this test
           IRSA_PREFIX=$(python3 -c "import uuid; print(uuid.uuid4())")
           echo "Using IRSA prefix: $IRSA_PREFIX"
+          echo "irsa_prefix=$IRSA_PREFIX" >> $GITHUB_OUTPUT
+          
+          # Run collector with S3 output using IAM role
+          echo "Running collector with IAM role authentication..."
           sudo -E AWS_BUCKET_NAME=${IRSA_BUCKET} RUST_LOG=debug ./collector -d 10 --storage-type s3 --prefix "${IRSA_PREFIX}/"
+          
+          # Verify the upload succeeded
+          echo "Verifying S3 upload with IAM role..."
           $AWSCLI s3 ls "s3://${IRSA_BUCKET}/${IRSA_PREFIX}/"
-          FIRST_FILE=$($AWSCLI s3 ls "s3://${IRSA_BUCKET}/${IRSA_PREFIX}/" --recursive | awk '{print $4}' | head -n1)
-          test -n "$FIRST_FILE" || { echo "No file uploaded"; exit 1; }
+          
+          # Get uploaded file(s)
+          IRSA_FILES=$($AWSCLI s3 ls "s3://${IRSA_BUCKET}/${IRSA_PREFIX}/" --recursive | awk '{print $4}')
+          if [ -z "$IRSA_FILES" ]; then
+            echo "No files found in IRSA bucket with prefix ${IRSA_PREFIX}"
+            exit 1
+          fi
+          
+          # Download and validate first file
+          FIRST_FILE=$(echo "$IRSA_FILES" | head -n 1)
+          echo "Downloading and validating file: ${FIRST_FILE}"
           $AWSCLI s3 cp "s3://${IRSA_BUCKET}/${FIRST_FILE}" /tmp/irsa-test.parquet
-          pqrs cat --csv /tmp/irsa-test.parquet | head -n 5 || true
+          
+          # Validate parquet file
+          echo "Validating parquet file structure:"
+          pqrs cat --csv /tmp/irsa-test.parquet
+          echo "IRSA test successful"
 
+      # Test Access Key-based authentication
       - name: Test S3 with Access Key Authentication
+        id: test-access-key
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
         run: |
+          # Generate a unique prefix for this test
           KEY_PREFIX=$(python3 -c "import uuid; print(uuid.uuid4())")
           echo "Using Key Auth prefix: $KEY_PREFIX"
+          echo "key_prefix=$KEY_PREFIX" >> $GITHUB_OUTPUT
+          
+          # Run collector with S3 output using access keys
+          echo "Running collector with Access Key authentication..."
           sudo -E AWS_BUCKET_NAME=${KEY_AUTH_BUCKET} RUST_LOG=debug ./collector -d 10 --storage-type s3 --prefix "${KEY_PREFIX}/"
+          
+          # Verify the upload succeeded
+          echo "Verifying S3 upload with Access Key..."
           $AWSCLI s3 ls "s3://${KEY_AUTH_BUCKET}/${KEY_PREFIX}/"
-          FIRST_FILE=$($AWSCLI s3 ls "s3://${KEY_AUTH_BUCKET}/${KEY_PREFIX}/" --recursive | awk '{print $4}' | head -n1)
-          test -n "$FIRST_FILE" || { echo "No file uploaded"; exit 1; }
+          
+          # Get uploaded file(s)
+          KEY_FILES=$($AWSCLI s3 ls "s3://${KEY_AUTH_BUCKET}/${KEY_PREFIX}/" --recursive | awk '{print $4}')
+          if [ -z "$KEY_FILES" ]; then
+            echo "No files found in Key Auth bucket with prefix ${KEY_PREFIX}"
+            exit 1
+          fi
+          
+          # Download and validate first file
+          FIRST_FILE=$(echo "$KEY_FILES" | head -n 1)
+          echo "Downloading and validating file: ${FIRST_FILE}"
           $AWSCLI s3 cp "s3://${KEY_AUTH_BUCKET}/${FIRST_FILE}" /tmp/key-auth-test.parquet
-          pqrs cat --csv /tmp/key-auth-test.parquet | head -n 5 || true
+          
+          # Validate parquet file
+          echo "Validating parquet file structure:"
+          pqrs cat --csv /tmp/key-auth-test.parquet
+          echo "Access Key test successful"
 
-  test-multi-kernel:
-    if: inputs.level == 'full-long'
-    name: Test on multiple kernels (LVH)
-    needs: [setup-runner]
-    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    timeout-minutes: 15
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3-test-parquet-files
+          path: |
+            /tmp/irsa-test.parquet
+            /tmp/key-auth-test.parquet
+          if-no-files-found: error
+
+  stop-runner:
+    name: Stop EC2 runner
+    needs: [setup-runner, test-ebpf, test-ebpf-s3, test-multi-kernel, nri-enrichment-e2e]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous jobs fail
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
         with:
-          persist-credentials: false
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region }}
 
-      - name: Download collector binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.collector-binary-artifact }}
-          path: ./artifacts
-
-      - name: Install pqrs on host and copy to tools
-        run: |
-          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
-          python3 -m zipfile -e pqrs.zip .
-          mkdir -p tools
-          cp -f pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs tools/
-          chmod +x tools/pqrs
-          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
-
-      - name: Provision LVH VM
-        uses: yonch/little-vm-helper@main
-        with:
-          test-name: collector-kernel-matrix
-          image: 'complexity-test'
-          image-version: '6.6-20250507.063028'
-          host-mount: ./
-          images-folder-parent: "/tmp"
-          cpu: 2
-          mem: 2G
-          cpu-kind: 'host,pmu=on'
-          lvh-version: "v0.0.23"
-          install-dependencies: 'true'
-          verbose: 'true'
-          cmd: |
-            uname -a
-            mount
-
-      - name: Run collector inside LVH guest
-        uses: yonch/little-vm-helper@main
-        with:
-          provision: 'false'
-          cmd: |
-            cd /host
-            chmod +x ./artifacts/collector
-            mkdir -p /tmp/test-output
-            RUST_LOG=debug ./artifacts/collector -d 5 --storage-type local --prefix "/tmp/test-output/metrics-" --verbose || exit_code=$?
-            echo "Collector exit: ${exit_code:-0}"
-            if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
-              /host/tools/pqrs cat --csv /tmp/test-output/metrics-*.parquet | head -n 10 || true
-            fi
 
   nri-enrichment-e2e:
     if: inputs.level == 'full-short' || inputs.level == 'full-long'
     name: NRI enrichment E2E (k3s)
-    needs: [setup-runner]
+    needs: [setup-runner, prepare-runner]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    timeout-minutes: 25
+    timeout-minutes: 20
     env:
       POD_NAME: nri-enrichment-test
       POD_NAMESPACE: default
@@ -264,14 +537,6 @@ jobs:
       - name: Make collector executable
         run: chmod +x ./collector
 
-      - name: Install pqrs
-        run: |
-          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
-          python3 -m zipfile -e pqrs.zip .
-          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
-          sudo chmod +x /usr/local/bin/pqrs
-          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
-
       - name: Setup k3s cluster
         uses: ./.github/actions/setup-k3s
         with:
@@ -286,9 +551,18 @@ jobs:
           for i in {1..30}; do
             if [ -S "/var/run/nri/nri.sock" ]; then
               ls -la /var/run/nri/nri.sock; break; fi; sleep 2; done
-          test -S /var/run/nri/nri.sock || { echo "NRI socket missing"; exit 1; }
+          if [ ! -S "/var/run/nri/nri.sock" ]; then
+            echo "❌ NRI socket missing; K3s/containerd may not have NRI enabled"
+            exit 1
+          fi
 
-      - name: Deploy test pod
+      - name: Install jq
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: jq
+          version: 1.0
+
+      - name: Deploy test pod (${{ env.POD_NAME }})
         run: |
           cat > pod.yaml << 'EOF'
           apiVersion: v1
@@ -305,38 +579,72 @@ jobs:
                 image: busybox:1.36
                 command: ["sh", "-c", "yes > /dev/null & yes > /dev/null & sleep 120"]
           EOF
-          envsubst < pod.yaml | kubectl apply -f -
+          kubectl apply -f pod.yaml
           kubectl wait --for=condition=Ready pod/${POD_NAME} -n ${POD_NAMESPACE} --timeout=120s
+          kubectl get pod ${POD_NAME} -n ${POD_NAMESPACE} -o wide
 
       - name: Run collector (binary on host)
         env:
           NRI_SOCKET_PATH: ${{ env.NRI_SOCKET_PATH }}
           RUST_LOG: debug
         run: |
+          echo "Running collector for 25 seconds..."
           sudo -E ./collector -d 25 --storage-type local --prefix "${OUTPUT_PREFIX}" --verbose
 
-      - name: Verify enrichment fields
+      - name: Verify enrichment fields and values
         run: |
           PARQUET=$(ls -1 ${OUTPUT_PREFIX}*.parquet | head -n1)
-          test -n "$PARQUET" || { echo "No parquet output"; exit 1; }
+          if [ -z "$PARQUET" ]; then
+            echo "No parquet output found with prefix ${OUTPUT_PREFIX}"
+            exit 1
+          fi
+          echo "Using parquet file: $PARQUET"
+          echo "Schema:"
           pqrs schema "$PARQUET"
+          # Verify fields exist
           for f in pod_name pod_namespace pod_uid container_name container_id process_name cgroup_id; do
-            pqrs schema "$PARQUET" | grep -q "$f" || { echo "Missing $f"; exit 1; }
+            if ! pqrs schema "$PARQUET" | grep -q "$f"; then
+              echo "Missing expected field: $f"
+              exit 1
+            fi
           done
+          # Filter rows for our pod and check CPU-ish process names
+          pqrs cat --json "$PARQUET" | jq -c "select(.pod_name==\"$POD_NAME\")" > /tmp/nri-rows.json || true
+          COUNT=$(wc -l < /tmp/nri-rows.json | tr -d ' ')
+          echo "Rows for pod $POD_NAME: $COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "No rows found for pod $POD_NAME; enrichment likely failed"
+            echo "Sample of all rows for debugging:"
+            pqrs sample --json --records 50 "$PARQUET" || true
+            exit 1
+          fi
+          # Verify container name matches
+          CNAMES=$(jq -r .container_name /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Container names: $CNAMES"
+          if ! echo "$CNAMES" | grep -qw "tester"; then
+            echo "Expected container_name 'tester' not found"
+            exit 1
+          fi
+          # Verify process name includes expected comm (yes)
+          COMMS=$(jq -r .process_name /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Process names: $COMMS"
+          if ! echo "$COMMS" | grep -qw "$EXPECTED_COMM"; then
+            echo "Expected process_name '$EXPECTED_COMM' not found among: $COMMS"
+            exit 1
+          fi
+          # Verify namespace
+          NSES=$(jq -r .pod_namespace /tmp/nri-rows.json | sort -u | tr '\n' ' ')
+          echo "Namespaces: $NSES"
+          if ! echo "$NSES" | grep -qw "$POD_NAMESPACE"; then
+            echo "Expected pod_namespace '$POD_NAMESPACE' not found"
+            exit 1
+          fi
+          echo "✅ NRI enrichment verified for pod $POD_NAME"
 
-  stop-runner:
-    if: always() && inputs.level != 'cheap-short'
-    name: Stop EC2 runner
-    needs: [setup-runner, test-ebpf, test-ebpf-s3, test-multi-kernel, nri-enrichment-e2e]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Stop AWS Runner
-        uses: ./.github/actions/aws-runner/cleanup
+      - name: Upload E2E parquet
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
-          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
-          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
-          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ needs.setup-runner.outputs.region }}
+          name: nri-e2e-parquet
+          path: ${{ env.OUTPUT_PREFIX }}*.parquet
+          if-no-files-found: warn
