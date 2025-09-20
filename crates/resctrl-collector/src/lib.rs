@@ -60,14 +60,20 @@ struct PodState {
     reconciled_containers: usize,
 }
 
+#[derive(Default, Clone)]
+struct PodLabels {
+    namespace: String,
+    name: String,
+}
+
 /// Internal mutable state and handlers for the collector.
 ///
 /// This isolates logic to make it easier to unit test individual handlers
 /// without having to run the full event loop and real plugins.
 pub(crate) struct ResctrlCollectorState {
     this: Arc<ResctrlCollector>,
-    pods: HashMap<String, PodState>,               // keyed by pod_uid
-    pod_labels: HashMap<String, (String, String)>, // pod_uid -> (ns, name)
+    pods: HashMap<String, PodState>,        // keyed by pod_uid
+    pod_labels: HashMap<String, PodLabels>, // pod_uid -> labels
     llc_reader: Box<dyn LlcReader + Send + Sync>,
     schema: SchemaRef,
     batch_sender: mpsc::Sender<RecordBatch>,
@@ -128,9 +134,9 @@ impl ResctrlCollectorState {
                             .map(|d| d.as_nanos() as i128)
                             .unwrap_or(0) as i64;
                         ts_b.append_value(read_ns);
-                        if let Some((ns, name)) = labels {
-                            ns_b.append_value(ns.as_str());
-                            name_b.append_value(name.as_str());
+                        if let Some(lbl) = labels {
+                            ns_b.append_value(lbl.namespace.as_str());
+                            name_b.append_value(lbl.name.as_str());
                         } else {
                             ns_b.append_null();
                             name_b.append_null();
@@ -181,10 +187,12 @@ impl ResctrlCollectorState {
     /// Handle periodic health logging.
     pub(crate) fn handle_health_timer(&self) {
         let (failed, not_reconciled) = self.compute_health_counts();
-        info!(
-            "resctrl health: pods_failed={}, pods_unreconciled={}",
-            failed, not_reconciled
-        );
+        if failed > 0 || not_reconciled > 0 {
+            info!(
+                "resctrl health: pods_failed={}, pods_unreconciled={}",
+                failed, not_reconciled
+            );
+        }
     }
 
     /// Compute health metrics for logging and tests.
@@ -239,11 +247,18 @@ impl ResctrlCollectorState {
                     ..
                 } = *boxed;
                 if !pod_uid.is_empty() {
-                    self.pod_labels.insert(pod_uid, (pod_namespace, pod_name));
+                    self.pod_labels.insert(
+                        pod_uid,
+                        PodLabels {
+                            namespace: pod_namespace,
+                            name: pod_name,
+                        },
+                    );
                 }
             }
             MetadataMessage::Remove(_cid) => {
-                // nothing to do at pod map
+                // No action here: when resctrl signals a pod removal we also drop
+                // its metadata in `handle_resctrl_event` (Removed), keeping the maps in sync.
             }
         }
     }
@@ -540,15 +555,15 @@ mod tests {
     use nri::metadata::ContainerMetadata;
     use nri_resctrl_plugin::{PodResctrlAddOrUpdate, PodResctrlRemoved};
 
-    struct FakeReader {
+    struct MockLlcReader {
         map: std::collections::HashMap<String, std::result::Result<u64, ()>>,
     }
-    impl FakeReader {
+    impl MockLlcReader {
         fn new(map: std::collections::HashMap<String, std::result::Result<u64, ()>>) -> Self {
             Self { map }
         }
     }
-    impl LlcReader for FakeReader {
+    impl LlcReader for MockLlcReader {
         fn llc_occupancy_total_bytes(&self, group_path: &str) -> anyhow::Result<u64> {
             match self.map.get(group_path) {
                 Some(Ok(v)) => Ok(*v),
@@ -558,10 +573,13 @@ mod tests {
         }
     }
 
-    fn drain_one_batch(rx: &mut tokio::sync::mpsc::Receiver<RecordBatch>) -> Option<RecordBatch> {
+    fn drain_one_record_batch(
+        rx: &mut tokio::sync::mpsc::Receiver<RecordBatch>,
+    ) -> Option<RecordBatch> {
         rx.try_recv().ok()
     }
 
+    // Verifies ready() remains false until both resctrl and metadata handlers run.
     #[tokio::test]
     async fn l0b_ready_gating_via_handlers() {
         let this = ResctrlCollector::new();
@@ -594,6 +612,7 @@ mod tests {
         assert!(this.ready());
     }
 
+    // Validates Arrow schema and that pod labels appear in emitted rows.
     #[tokio::test]
     async fn l0b_schema_and_labeling() {
         let this = ResctrlCollector::new();
@@ -626,11 +645,11 @@ mod tests {
         // Inject fake reader
         let mut map = std::collections::HashMap::new();
         map.insert("/g1".to_string(), Ok(1234u64));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map)));
 
         // Sample
         st.handle_sample_timer();
-        let batch = drain_one_batch(&mut rx).expect("expected batch");
+        let batch = drain_one_record_batch(&mut rx).expect("expected batch");
         let schema = batch.schema();
         assert_eq!(schema.field(0).name(), "start_timestamp");
         assert_eq!(schema.field(1).name(), "timestamp");
@@ -675,6 +694,7 @@ mod tests {
         assert_eq!(llc.value(0), 1234);
     }
 
+    // Ensures missing metadata yields null ns/name, then filled after metadata arrives.
     #[tokio::test]
     async fn l0b_missing_metadata_path() {
         let this = ResctrlCollector::new();
@@ -690,9 +710,9 @@ mod tests {
         }));
         let mut map = std::collections::HashMap::new();
         map.insert("/g2".to_string(), Ok(42u64));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map)));
         st.handle_sample_timer();
-        let batch = drain_one_batch(&mut rx).expect("batch");
+        let batch = drain_one_record_batch(&mut rx).expect("batch");
         let ns = batch
             .column(2)
             .as_any()
@@ -709,7 +729,7 @@ mod tests {
         // Now add metadata and sample again
         let mut map2 = std::collections::HashMap::new();
         map2.insert("/g2".to_string(), Ok(10u64));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map2)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map2)));
         st.handle_metadata_event(MetadataMessage::Add(
             "c2".into(),
             Box::new(ContainerMetadata {
@@ -725,7 +745,7 @@ mod tests {
             }),
         ));
         st.handle_sample_timer();
-        let batch2 = drain_one_batch(&mut rx).expect("batch2");
+        let batch2 = drain_one_record_batch(&mut rx).expect("batch2");
         let ns2 = batch2
             .column(2)
             .as_any()
@@ -740,6 +760,7 @@ mod tests {
         assert_eq!(name2.value(0), "p2");
     }
 
+    // Ensures that after a pod removal event, subsequent samples emit no rows for that pod.
     #[tokio::test]
     async fn l0b_removal_lifecycle() {
         let this = ResctrlCollector::new();
@@ -755,18 +776,19 @@ mod tests {
         }));
         let mut map = std::collections::HashMap::new();
         map.insert("/g3".to_string(), Ok(1u64));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map)));
         st.handle_sample_timer();
-        assert!(drain_one_batch(&mut rx).is_some());
+        assert!(drain_one_record_batch(&mut rx).is_some());
 
         // Remove the pod and sample again → no rows
         st.handle_resctrl_event(PodResctrlEvent::Removed(PodResctrlRemoved {
             pod_uid: "u3".into(),
         }));
         st.handle_sample_timer();
-        assert!(drain_one_batch(&mut rx).is_none());
+        assert!(drain_one_record_batch(&mut rx).is_none());
     }
 
+    // Ensures reader failures do not produce batches and are handled gracefully.
     #[tokio::test]
     async fn l0b_error_handling_read_failure() {
         let this = ResctrlCollector::new();
@@ -782,12 +804,13 @@ mod tests {
         }));
         let mut map = std::collections::HashMap::new();
         map.insert("/g4".to_string(), Err(()));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map)));
         st.handle_sample_timer();
         // No rows → no batch
-        assert!(drain_one_batch(&mut rx).is_none());
+        assert!(drain_one_record_batch(&mut rx).is_none());
     }
 
+    // Ensures backpressure leads to dropped batches when the channel is full.
     #[tokio::test]
     async fn l0b_backpressure_drops() {
         let this = ResctrlCollector::new();
@@ -803,18 +826,19 @@ mod tests {
         }));
         let mut map = std::collections::HashMap::new();
         map.insert("/g5".to_string(), Ok(77u64));
-        st.set_llc_reader_for_test(Box::new(FakeReader::new(map)));
+        st.set_llc_reader_for_test(Box::new(MockLlcReader::new(map)));
 
         // Two samples without draining → second should be dropped due to capacity=1
         st.handle_sample_timer();
         st.handle_sample_timer();
         // Drain at most one batch (the first)
-        let first = drain_one_batch(&mut rx);
+        let first = drain_one_record_batch(&mut rx);
         assert!(first.is_some());
         // No second batch should be present
-        assert!(drain_one_batch(&mut rx).is_none());
+        assert!(drain_one_record_batch(&mut rx).is_none());
     }
 
+    // Computes health counters: failed pods and not reconciled pods.
     #[test]
     fn l0b_health_counts() {
         let this = ResctrlCollector::new();
@@ -853,6 +877,7 @@ mod tests {
         assert_eq!(not_reconciled, 2); // uA and uB
     }
 
+    // Ticks timers under a paused runtime and ensures clean shutdown without events.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn l2_run_smoke_ticks_and_shutdown() -> anyhow::Result<()> {
         use tokio::time::{advance, Duration};
@@ -875,6 +900,7 @@ mod tests {
         Ok(())
     }
 
+    // End-to-end-ish: ready() becomes true only after both resctrl and metadata events.
     #[tokio::test(flavor = "current_thread", start_paused = true)]
     async fn l2_ready_gating_with_events() -> anyhow::Result<()> {
         use tokio::time::{advance, Duration};
