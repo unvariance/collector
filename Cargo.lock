@@ -528,10 +528,12 @@ dependencies = [
  "parquet",
  "perf_events",
  "plain",
+ "resctrl-collector",
  "testing_logger",
  "time",
  "timeslot",
  "tokio",
+ "tokio-helpers",
  "tokio-util",
  "url",
  "uuid",
@@ -2951,6 +2953,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "resctrl-collector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "humantime",
+ "log",
+ "nri",
+ "nri-resctrl-plugin",
+ "resctrl",
+ "tokio",
+ "tokio-helpers",
+ "tokio-util",
+]
+
+[[package]]
 name = "ring"
 version = "0.17.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3655,6 +3674,16 @@ dependencies = [
  "socket2",
  "tokio-macros",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "tokio-helpers"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "testing_logger",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

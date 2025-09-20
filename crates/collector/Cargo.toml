@@ -34,6 +34,8 @@ chrono = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 nri = { workspace = true }
+resctrl-collector = { workspace = true }
+tokio-helpers = { workspace = true }
 
 [dev-dependencies]
 testing_logger = "0.1"

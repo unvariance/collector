@@ -15,6 +15,8 @@ members = [
     "crates/nri-init",
     "crates/resctrl",
     "crates/nri-resctrl-plugin",
+    "crates/resctrl-collector",
+    "crates/tokio-helpers",
 ]
 
 [workspace.dependencies]
@@ -26,6 +28,8 @@ bpf-sync-timer = { path = "crates/bpf-sync-timer" }
 nri = { path = "crates/nri" }
 resctrl = { path = "crates/resctrl" }
 nri-resctrl-plugin = { path = "crates/nri-resctrl-plugin" }
+resctrl-collector = { path = "crates/resctrl-collector" }
+tokio-helpers = { path = "crates/tokio-helpers" }
 
 libbpf-rs = "0.24.8"
 plain = "0.2"
@@ -68,3 +72,4 @@ tempfile = "3"
 kube = { version = "0.99.0", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24.0", features = ["latest"] }
 serde_json = "1"
+humantime = "2"

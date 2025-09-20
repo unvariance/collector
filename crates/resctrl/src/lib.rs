@@ -74,6 +74,53 @@ impl<P: FsProvider> Resctrl<P> {
         Self { fs, cfg }
     }
 
+    /// Read LLC occupancy for a monitor group across all present domains.
+    ///
+    /// The `group_path` should be an absolute path to a monitor group under
+    /// the resctrl mount, e.g. `/sys/fs/resctrl/mon_groups/pod_<uid>`.
+    ///
+    /// Returns one reading per domain (e.g., `mon_L3_XX`) that exists for the
+    /// group. Each reading contains the domain identifier (directory name) and
+    /// the occupancy bytes parsed from the `llc_occupancy` file.
+    pub fn llc_occupancy_bytes(&self, group_path: &str) -> Result<Vec<DomainReading>> {
+        let group = PathBuf::from(group_path);
+        let mon_data = group.join("mon_data");
+        // Enumerate domain directories under mon_data
+        let domains = self
+            .fs
+            .read_child_dirs(&mon_data)
+            .map_err(|e| map_basic_fs_error(&mon_data, &e))?;
+
+        let mut out = Vec::new();
+        for d in domains {
+            // Only consider L3 domains (typical names: mon_L3_00, mon_L3_01, ...)
+            if !d.starts_with("mon_L3_") {
+                continue;
+            }
+            let dpath = mon_data.join(&d).join("llc_occupancy");
+            let s = self
+                .fs
+                .read_to_string(&dpath)
+                .map_err(|e| map_basic_fs_error(&dpath, &e))?;
+            // Trim and parse as u64 (bytes)
+            let val = s.trim().parse::<u64>().map_err(|_| Error::Io {
+                path: dpath.clone(),
+                source: io::Error::new(io::ErrorKind::InvalidData, "invalid llc_occupancy value"),
+            })?;
+            out.push(DomainReading {
+                domain_id: d,
+                bytes: val,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Convenience: sum LLC occupancy across all present domains for a group.
+    pub fn llc_occupancy_total_bytes(&self, group_path: &str) -> Result<u64> {
+        let v = self.llc_occupancy_bytes(group_path)?;
+        Ok(v.into_iter().map(|r| r.bytes).sum())
+    }
+
     // Public API
 
     /// Describe support status of resctrl on this system.
@@ -491,6 +538,13 @@ pub struct SupportInfo {
     pub mounted: bool,
     pub mount_point: Option<PathBuf>,
     pub writable: bool,
+}
+
+/// Single-domain occupancy reading
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DomainReading {
+    pub domain_id: String,
+    pub bytes: u64,
 }
 
 #[cfg(test)]
@@ -1395,5 +1449,71 @@ mod tests {
             }
             other => panic!("unexpected: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_llc_occupancy_bytes_reads_domains() {
+        let fs = MockFs::with_premounted_resctrl();
+        // Create a monitor group and mon_data structure
+        let group = PathBuf::from("/sys/fs/resctrl/mon_groups/pod_uid1");
+        fs.add_dir(&PathBuf::from("/sys/fs/resctrl/mon_groups"));
+        fs.add_dir(&group);
+        let mon_data = group.join("mon_data");
+        fs.add_dir(&mon_data);
+        let d0 = mon_data.join("mon_L3_00");
+        let d1 = mon_data.join("mon_L3_01");
+        fs.add_dir(&d0);
+        fs.add_dir(&d1);
+        fs.add_file(&d0.join("llc_occupancy"), "123\n");
+        fs.add_file(&d1.join("llc_occupancy"), "456\n");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config {
+                root: PathBuf::from("/sys/fs/resctrl"),
+                group_prefix: "pod_".into(),
+            },
+        );
+        let v = rc
+            .llc_occupancy_bytes(group.to_str().unwrap())
+            .expect("read ok");
+        assert_eq!(v.len(), 2);
+        let sum: u64 = v.iter().map(|r| r.bytes).sum();
+        assert_eq!(sum, 579);
+        let total = rc
+            .llc_occupancy_total_bytes(group.to_str().unwrap())
+            .expect("sum ok");
+        assert_eq!(total, 579);
+    }
+
+    #[test]
+    fn test_llc_occupancy_bytes_handles_non_l3_dirs() {
+        let fs = MockFs::with_premounted_resctrl();
+        let group = PathBuf::from("/sys/fs/resctrl/mon_groups/pod_uid2");
+        fs.add_dir(&PathBuf::from("/sys/fs/resctrl/mon_groups"));
+        fs.add_dir(&group);
+        let mon_data = group.join("mon_data");
+        fs.add_dir(&mon_data);
+        // Add unrelated directory which should be ignored
+        let other = mon_data.join("info");
+        fs.add_dir(&other);
+        // Add one valid L3 domain
+        let d0 = mon_data.join("mon_L3_02");
+        fs.add_dir(&d0);
+        fs.add_file(&d0.join("llc_occupancy"), "42\n");
+
+        let rc = Resctrl::with_provider(
+            fs,
+            Config {
+                root: PathBuf::from("/sys/fs/resctrl"),
+                group_prefix: "pod_".into(),
+            },
+        );
+        let v = rc
+            .llc_occupancy_bytes(group.to_str().unwrap())
+            .expect("read ok");
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].domain_id, "mon_L3_02");
+        assert_eq!(v[0].bytes, 42);
     }
 }

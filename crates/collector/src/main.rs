@@ -19,12 +19,12 @@ mod bpf_perf_to_timeslot;
 mod bpf_perf_to_trace;
 mod bpf_task_tracker;
 mod bpf_timeslot_tracker;
+mod health_server;
 mod metrics;
 mod nri_enrich_recordbatch_task;
 mod parquet_writer;
 mod parquet_writer_task;
 mod perf_event_processor;
-mod task_completion_handler;
 mod task_metadata;
 mod timeslot_data;
 mod timeslot_to_recordbatch_task;
@@ -33,9 +33,9 @@ use nri_enrich_recordbatch_task::NRIEnrichRecordBatchTask;
 use parquet_writer::{ParquetWriter, ParquetWriterConfig};
 use parquet_writer_task::ParquetWriterTask;
 use perf_event_processor::{PerfEventProcessor, ProcessorMode};
-use task_completion_handler::task_completion_handler;
 use timeslot_data::TimeslotData;
 use timeslot_to_recordbatch_task::TimeslotToRecordBatchTask;
+use tokio_helpers::task_completion_handler;
 
 /// Number of perf ring buffer pages for timeslot mode
 const TIMESLOT_PERF_RING_PAGES: u32 = 32;
@@ -83,6 +83,18 @@ struct Command {
     /// Enable trace mode (outputs individual events instead of aggregated timeslots)
     #[arg(long, default_value = "false")]
     trace: bool,
+
+    /// Enable resctrl LLC occupancy collection (1 Hz)
+    #[arg(long, default_value = "false")]
+    enable_resctrl: bool,
+
+    /// Storage filename prefix for resctrl occupancy parquet files
+    #[arg(long, default_value = "resctrl-occupancy-")]
+    resctrl_prefix: String,
+
+    /// Address to bind the health HTTP server (for readiness/liveness)
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    health_addr: String,
 }
 
 /// Duration timeout handler - exits when duration completes or cancellation token is triggered
@@ -196,7 +208,7 @@ async fn main() -> Result<()> {
     // Determine the number of available CPUs
     let num_cpus = libbpf_rs::num_possible_cpus()?;
 
-    // Compose storage prefix with node identity
+    // Compose storage prefix with node identity for main stream
     let storage_prefix = format!("{}{}", opts.prefix, node_id);
 
     // Create CPU count metadata for parquet files
@@ -212,7 +224,7 @@ async fn main() -> Result<()> {
         file_size_limit: opts.parquet_file_size,
         max_row_group_size: opts.max_row_group_size,
         storage_quota: opts.storage_quota,
-        key_value_metadata: Some(cpu_metadata),
+        key_value_metadata: Some(cpu_metadata.clone()),
     };
 
     // Create channels for the pipeline
@@ -267,7 +279,7 @@ async fn main() -> Result<()> {
         &opts.storage_type,
         &config.storage_prefix
     );
-    let writer = ParquetWriter::new(store, schema, config)?;
+    let writer = ParquetWriter::new(store.clone(), schema, config)?;
 
     // Create ParquetWriterTask with pre-configured channels
     let writer_task = ParquetWriterTask::new(writer, batch_receiver, rotate_receiver);
@@ -280,6 +292,73 @@ async fn main() -> Result<()> {
     ));
 
     debug!("Parquet writer task initialized and ready to receive data");
+
+    // Readiness provider for health server
+    let mut ready_provider: Option<Arc<dyn Fn() -> bool + Send + Sync>> = None;
+
+    // Optionally enable resctrl occupancy collection with a dedicated writer
+    if opts.enable_resctrl {
+        // Schema for occupancy
+        let occupancy_schema = resctrl_collector::create_schema();
+
+        // (delayed) writer + channel setup follows after config parsing
+
+        // Spawn the resctrl-collector loop with config from env
+        let occupancy_cfg = resctrl_collector::ResctrlCollectorConfig::from_env();
+        // Create writer and channels for occupancy using parsed config
+        // Use a separate prefix for resctrl outputs to avoid mixing files
+        let occupancy_prefix = format!("{}{}", opts.resctrl_prefix, node_id);
+        let occupancy_config = ParquetWriterConfig {
+            storage_prefix: occupancy_prefix,
+            buffer_size: opts.parquet_buffer_size,
+            file_size_limit: opts.parquet_file_size,
+            max_row_group_size: opts.max_row_group_size,
+            storage_quota: opts.storage_quota,
+            key_value_metadata: Some(cpu_metadata.clone()),
+        };
+        let (occupancy_sender, occupancy_receiver) = mpsc::channel::<RecordBatch>(64);
+        let (occupancy_rotate_tx, occupancy_rotate_rx) = mpsc::channel::<()>(1);
+        let occupancy_writer =
+            ParquetWriter::new(store.clone(), occupancy_schema, occupancy_config)?;
+        let occupancy_writer_task =
+            ParquetWriterTask::new(occupancy_writer, occupancy_receiver, occupancy_rotate_rx);
+
+        // Spawn writer task
+        task_tracker.spawn(task_completion_handler(
+            occupancy_writer_task.run(),
+            shutdown_token.clone(),
+            "ResctrlParquetWriterTask",
+        ));
+
+        // Spawn rotation handler for occupancy writer (separate signal stream)
+        task_tracker.spawn(task_completion_handler(
+            rotation_handler(occupancy_rotate_tx.clone(), shutdown_token.clone()),
+            shutdown_token.clone(),
+            "ResctrlRotationHandler",
+        ));
+
+        let occupancy_instance = resctrl_collector::ResctrlCollector::new();
+        // Set ready provider based on collector readiness
+        ready_provider = Some({
+            let occupancy_clone = occupancy_instance.clone();
+            Arc::new(move || occupancy_clone.ready())
+        });
+        task_tracker.spawn(task_completion_handler(
+            resctrl_collector::run(
+                occupancy_instance,
+                occupancy_sender,
+                shutdown_token.clone(),
+                occupancy_cfg,
+            ),
+            shutdown_token.clone(),
+            "ResctrlCollector",
+        ));
+    }
+
+    // If resctrl not enabled, default readiness is true
+    if ready_provider.is_none() {
+        ready_provider = Some(Arc::new(|| true));
+    }
 
     // Spawn duration timeout handler only if duration is non-zero
     if opts.duration > 0 {
@@ -304,6 +383,17 @@ async fn main() -> Result<()> {
         shutdown_token.clone(),
         "RotationHandler",
     ));
+
+    // Spawn health HTTP server (readiness/liveness)
+    {
+        let addr = opts.health_addr.clone();
+        let ready_fn = ready_provider.expect("ready provider");
+        task_tracker.spawn(task_completion_handler(
+            health_server::run(addr, ready_fn, shutdown_token.clone()),
+            shutdown_token.clone(),
+            "HealthServer",
+        ));
+    }
 
     // Create a BPF loader with the specified verbosity and appropriate buffer size
     let perf_ring_pages = if opts.trace {

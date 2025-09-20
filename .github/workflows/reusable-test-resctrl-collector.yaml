@@ -1,0 +1,247 @@
+name: reusable-test-collector
+
+on:
+  workflow_call:
+    inputs:
+      level:
+        description: Test level (cheap-short|perf-short|full-short|full-long)
+        required: true
+        type: string
+      collector-binary-artifact:
+        description: Name of the collector binary artifact to consume
+        required: false
+        default: collector-binary
+        type: string
+      instance-type:
+        description: EC2 instance type for heavy tests
+        required: false
+        default: m7i.metal-24xl
+        type: string
+    secrets:
+      AWS_ROLE_ARN:
+        required: false
+      REPO_ADMIN_TOKEN:
+        required: false
+      AWS_REGION:
+        required: false
+      S3_ACCESS_KEY_ID:
+        required: false
+      S3_SECRET_ACCESS_KEY:
+        required: false
+
+jobs:
+  setup-runner:
+    name: Start EC2 runner
+    runs-on: ubuntu-latest
+    outputs:
+      runner-label: ${{ steps.start-runner.outputs.runner-label }}
+      ec2-instance-id: ${{ steps.start-runner.outputs.ec2-instance-id }}
+      region: ${{ steps.start-runner.outputs.region }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Start AWS Runner
+        id: start-runner
+        uses: ./.github/actions/aws-runner
+        with:
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          iam-role-name: github-actions-runner
+          instance-type: ${{ inputs.instance-type }}
+          image-type: ubuntu-24.04
+          volume-size: '40'
+
+  cancel-on-failure:
+    needs: setup-runner
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Cancel workflow
+        uses: andymckay/cancel-action@a955d435292c0d409d104b57d8e78435a93a6ef1
+
+
+  prepare-runner:
+    needs: [setup-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout .github folder
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github
+          sparse-checkout-cone: true
+
+      - name: Install awscli
+        uses: ./.github/actions/setup-awscli
+
+      - name: Install pqrs
+        run: |
+          curl -L -o pqrs.zip https://github.com/manojkarthick/pqrs/releases/download/v0.3.2/pqrs-0.3.2-x86_64-unknown-linux-gnu.zip
+          python3 -m zipfile -e pqrs.zip .
+          sudo mv pqrs-0.3.2-x86_64-unknown-linux-gnu/bin/pqrs /usr/local/bin/
+          sudo chmod +x /usr/local/bin/pqrs
+          rm -rf pqrs.zip pqrs-0.3.2-x86_64-unknown-linux-gnu
+
+      - name: Install Podman packages
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: podman podman-docker
+          version: 1.0
+
+      - name: Install Podman and Docker compatibility
+        run: |
+          # Verify installation
+          podman --version
+          docker --version
+          
+          # Start podman socket for Docker API compatibility
+          sudo systemctl enable --now podman.socket
+          sudo systemctl status podman.socket
+
+  stop-runner:
+    name: Stop EC2 runner
+    needs: [setup-runner, resctrl-e2e-binary]
+    runs-on: ubuntu-latest
+    if: always()  # Run even if previous jobs fail
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Stop AWS Runner
+        uses: ./.github/actions/aws-runner/cleanup
+        with:
+          runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+          ec2-instance-id: ${{ needs.setup-runner.outputs.ec2-instance-id }}
+          github-token: ${{ secrets.REPO_ADMIN_TOKEN }}
+          aws-role-arn: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ needs.setup-runner.outputs.region }}
+
+  resctrl-e2e-binary:
+    name: Resctrl occupancy E2E (k3s, binary)
+    needs: [setup-runner, prepare-runner]
+    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
+    timeout-minutes: 25
+    env:
+      POD_NAMESPACE: resctrl-e2e
+      POD_NAME: stress-pod
+      OUTPUT_PREFIX: /tmp/resctrl-occupancy-
+      NRI_SOCKET_PATH: /var/run/nri/nri.sock
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download collector binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.collector-binary-artifact }}
+          path: ./
+
+      - name: Make collector executable
+        run: chmod +x ./collector
+
+      - name: Setup k3s cluster
+        uses: ./.github/actions/setup-k3s
+        with:
+          kubeconfig_path: /etc/rancher/k3s/k3s.yaml
+          preflight_inotify: true
+          disable_packaged_addons: true
+          wait_kube_system: false
+          timeout_api_server_ready_seconds: 300
+          timeout_node_ready_seconds: 300
+          timeout_kube_system_each_seconds: 10
+          max_retries_kube_system_ready: 10
+
+      - name: Ensure NRI socket exists
+        uses: ./.github/actions/nri-socket-exists
+
+      - name: Install jq (for JSON filtering)
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: jq
+          version: 1.0
+
+      - name: Generate unique UUID prefix
+        id: gen
+        run: |
+          UUID=$(python3 - << 'PY'
+          import uuid
+          print(uuid.uuid4())
+          PY
+          )
+          echo "uuid=$UUID" >> "$GITHUB_OUTPUT"
+          echo "prefix=${OUTPUT_PREFIX}${UUID}-" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy CPU-active workload
+        run: |
+          kubectl create ns ${POD_NAMESPACE} || true
+          cat > /tmp/stress-pod.yaml << EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: ${POD_NAME}
+            namespace: ${POD_NAMESPACE}
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: box
+              image: busybox:1.36
+              command: ["sh","-c","yes > /dev/null & yes > /dev/null & sleep 180"]
+          EOF
+          kubectl apply -f /tmp/stress-pod.yaml
+          kubectl wait -n ${POD_NAMESPACE} --for=condition=Ready pod/${POD_NAME} --timeout=120s
+          kubectl get pod -n ${POD_NAMESPACE} ${POD_NAME} -o wide
+
+      - name: Run collector with resctrl enabled (host binary)
+        env:
+          RUST_LOG: debug
+          RESCTRL_SAMPLING_INTERVAL: 250ms
+        run: |
+          PREFIX="${{ steps.gen.outputs.prefix }}"
+          echo "Using local prefix: ${{ steps.gen.outputs.prefix }}"
+          echo "Running collector for 30 seconds..."
+          sudo -E ./collector -d 30 --enable-resctrl --storage-type local --resctrl-prefix "$PREFIX" --verbose
+
+      - name: Verify occupancy parquet
+        run: |
+          set -euo pipefail
+          PREFIX="${{ steps.gen.outputs.prefix }}"
+          FILE=$(ls ${PREFIX}*.parquet | head -n1 || true)
+          if [ -z "${FILE}" ]; then
+            echo "No resctrl occupancy parquet files found with prefix: ${PREFIX}"
+            # Show some diagnostics
+            sudo journalctl -u k3s --no-pager -n 200 || true
+            exit 1
+          fi
+          echo "Found occupancy file: ${FILE}"
+          echo "Schema:"
+          pqrs schema "${FILE}"
+          # Basic field checks
+          for f in pod_namespace pod_name pod_uid resctrl_group llc_occupancy_bytes; do
+            if ! pqrs schema "${FILE}" | grep -q "$f"; then
+              echo "Missing expected field: $f"
+              exit 1
+            fi
+          done
+          # Ensure at least one row exists using a simple, stable method
+          ROWS=$(pqrs head "${FILE}" | wc -l | tr -d '[:space:]')
+          echo "Rows (first page): ${ROWS}"
+          test "${ROWS}" -ge 1
+
+      - name: Show sample rows for the test pod
+        run: |
+          PREFIX="${{ steps.gen.outputs.prefix }}"
+          FILE=$(ls ${PREFIX}*.parquet | head -n1)
+          echo "Sample rows for pod ${POD_NAME} in ${POD_NAMESPACE}:"
+          pqrs cat --json "${FILE}" | jq -c \
+            --arg ns "${POD_NAMESPACE}" --arg name "${POD_NAME}" \
+            'select(.pod_namespace==$ns and .pod_name==$name) | .'
+
+      - name: Upload occupancy parquet
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: resctrl-e2e-parquet
+          path: |
+            ${{ steps.gen.outputs.prefix }}*.parquet
+          if-no-files-found: warn

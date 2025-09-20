@@ -103,6 +103,7 @@ spec:
             {{- if .Values.collector.trace }}
             - --trace
             {{- end }}
+            - --health-addr=0.0.0.0:{{ .Values.collector.healthPort }}
             - --storage-type={{ .Values.storage.type }}
             - --prefix={{ .Values.storage.prefix }}
             - --parquet-buffer-size={{ .Values.collector.parquetBufferSize }}
@@ -110,6 +111,10 @@ spec:
             - --max-row-group-size={{ .Values.collector.maxRowGroupSize }}
             {{- if .Values.collector.storageQuota }}
             - --storage-quota={{ .Values.collector.storageQuota }}
+            {{- end }}
+            {{- if .Values.resctrl.enabled }}
+            - --enable-resctrl
+            - --resctrl-prefix={{ .Values.resctrl.prefix }}
             {{- end }}
           env:
             {{- if eq .Values.storage.type "s3" }}
@@ -119,11 +124,33 @@ spec:
             - name: RUST_LOG
               value: "debug"
             {{- end }}
+            {{- if .Values.resctrl.enabled }}
+            - name: RESCTRL_SAMPLING_INTERVAL
+              value: "{{ .Values.resctrl.samplingInterval }}"
+            - name: RESCTRL_MOUNT
+              value: "{{ .Values.resctrl.mountpoint }}"
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          ports:
+            - name: http-health
+              containerPort: {{ .Values.collector.healthPort }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /live
+              port: http-health
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http-health
+            initialDelaySeconds: 3
+            periodSeconds: 5
           volumeMounts:
             {{- if eq .Values.storage.type "local" }}
             - name: data-volume
@@ -141,6 +168,11 @@ spec:
               mountPath: /sys/kernel/debug/tracing
             - name: cgroup
               mountPath: /sys/fs/cgroup
+            {{- if .Values.resctrl.enabled }}
+            - name: resctrl
+              mountPath: {{ .Values.resctrl.mountpoint }}
+              readOnly: true
+            {{- end }}
       volumes:
         {{- if eq .Values.storage.type "local" }}
         - name: data-volume
@@ -177,3 +209,9 @@ spec:
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup 
+        {{- if .Values.resctrl.enabled }}
+        - name: resctrl
+          hostPath:
+            path: {{ .Values.resctrl.mountpoint }}
+            type: Directory
+        {{- end }}
