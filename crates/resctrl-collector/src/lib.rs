@@ -24,6 +24,7 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 256;
 /// Create the Arrow schema for resctrl LLC occupancy samples
 pub fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
+        Field::new("start_timestamp", DataType::Int64, false),
         Field::new("timestamp", DataType::Int64, false),
         Field::new("pod_namespace", DataType::Utf8, true),
         Field::new("pod_name", DataType::Utf8, true),
@@ -96,7 +97,7 @@ impl ResctrlCollectorState {
 
     /// Handle a periodic sampling tick: read group occupancies and emit a batch.
     pub(crate) fn handle_sample_timer(&mut self) {
-        let now_ns: i64 = SystemTime::now()
+        let start_ns: i64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as i128)
             .unwrap_or(0) as i64;
@@ -110,6 +111,7 @@ impl ResctrlCollectorState {
 
         let rows_cap = groups_to_sample.len();
         if rows_cap > 0 {
+            let mut start_ts_b = Int64Builder::with_capacity(rows_cap);
             let mut ts_b = Int64Builder::with_capacity(rows_cap);
             let mut ns_b = StringBuilder::with_capacity(rows_cap, rows_cap * 16);
             let mut name_b = StringBuilder::with_capacity(rows_cap, rows_cap * 16);
@@ -122,7 +124,13 @@ impl ResctrlCollectorState {
                 match self.llc_reader.llc_occupancy_total_bytes(&gp) {
                     Ok(total) => {
                         let labels = self.pod_labels.get(&uid).cloned();
-                        ts_b.append_value(now_ns);
+                        // Per-scan start timestamp and per-measurement read timestamp
+                        start_ts_b.append_value(start_ns);
+                        let read_ns: i64 = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as i128)
+                            .unwrap_or(0) as i64;
+                        ts_b.append_value(read_ns);
                         if let Some((ns, name)) = labels {
                             ns_b.append_value(ns.as_str());
                             name_b.append_value(name.as_str());
@@ -143,6 +151,7 @@ impl ResctrlCollectorState {
 
             if rows_appended > 0 {
                 let arrays: Vec<ArrayRef> = vec![
+                    Arc::new(start_ts_b.finish()),
                     Arc::new(ts_b.finish()),
                     Arc::new(ns_b.finish()),
                     Arc::new(name_b.finish()),
@@ -628,37 +637,38 @@ mod tests {
         st.handle_sample_timer();
         let batch = drain_one_batch(&mut rx).expect("expected batch");
         let schema = batch.schema();
-        assert_eq!(schema.field(0).name(), "timestamp");
-        assert_eq!(schema.field(1).name(), "pod_namespace");
-        assert_eq!(schema.field(2).name(), "pod_name");
-        assert_eq!(schema.field(3).name(), "pod_uid");
-        assert_eq!(schema.field(4).name(), "resctrl_group");
-        assert_eq!(schema.field(5).name(), "llc_occupancy_bytes");
+        assert_eq!(schema.field(0).name(), "start_timestamp");
+        assert_eq!(schema.field(1).name(), "timestamp");
+        assert_eq!(schema.field(2).name(), "pod_namespace");
+        assert_eq!(schema.field(3).name(), "pod_name");
+        assert_eq!(schema.field(4).name(), "pod_uid");
+        assert_eq!(schema.field(5).name(), "resctrl_group");
+        assert_eq!(schema.field(6).name(), "llc_occupancy_bytes");
 
         // Validate row contents
         assert_eq!(batch.num_rows(), 1);
         let ns = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .unwrap();
-        let name = batch
             .column(2)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        let uid = batch
+        let name = batch
             .column(3)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        let grp = batch
+        let uid = batch
             .column(4)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        let llc = batch
+        let grp = batch
             .column(5)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let llc = batch
+            .column(6)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -689,12 +699,12 @@ mod tests {
         st.handle_sample_timer();
         let batch = drain_one_batch(&mut rx).expect("batch");
         let ns = batch
-            .column(1)
+            .column(2)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
         let name = batch
-            .column(2)
+            .column(3)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
@@ -722,12 +732,12 @@ mod tests {
         st.handle_sample_timer();
         let batch2 = drain_one_batch(&mut rx).expect("batch2");
         let ns2 = batch2
-            .column(1)
+            .column(2)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
         let name2 = batch2
-            .column(2)
+            .column(3)
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
