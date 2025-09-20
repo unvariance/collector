@@ -102,14 +102,8 @@ impl ResctrlCollectorState {
             .map(|d| d.as_nanos() as i128)
             .unwrap_or(0) as i64;
 
-        // Snapshot groups to sample to avoid holding borrows
-        let groups_to_sample: Vec<(String, String)> = self
-            .pods
-            .iter()
-            .filter_map(|(uid, ps)| ps.group_path.as_ref().map(|gp| (uid.clone(), gp.clone())))
-            .collect();
-
-        let rows_cap = groups_to_sample.len();
+        // Use total pods count as a capacity hint; we'll skip pods without a group
+        let rows_cap = self.pods.len();
         if rows_cap > 0 {
             let mut start_ts_b = Int64Builder::with_capacity(rows_cap);
             let mut ts_b = Int64Builder::with_capacity(rows_cap);
@@ -120,10 +114,13 @@ impl ResctrlCollectorState {
             let mut llc_b = Int64Builder::with_capacity(rows_cap);
 
             let mut rows_appended = 0usize;
-            for (uid, gp) in groups_to_sample {
-                match self.llc_reader.llc_occupancy_total_bytes(&gp) {
+            for (uid, ps) in self.pods.iter() {
+                let Some(gp) = ps.group_path.as_ref() else {
+                    continue;
+                };
+                match self.llc_reader.llc_occupancy_total_bytes(gp.as_str()) {
                     Ok(total) => {
-                        let labels = self.pod_labels.get(&uid).cloned();
+                        let labels = self.pod_labels.get(uid);
                         // Per-scan start timestamp and per-measurement read timestamp
                         start_ts_b.append_value(start_ns);
                         let read_ns: i64 = SystemTime::now()
