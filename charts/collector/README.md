@@ -186,10 +186,6 @@ resctrl:
   prefix: "resctrl-occupancy-"
 ```
 
-Notes:
-- When enabled, the chart mounts the host resctrl filesystem into the pod and sets environment variables the collector can read.
-- The collector must run with sufficient permissions to read resctrl.
-
 ## Pod Security Standards Compatibility
 
 The Memory Collector requires access to host resources and kernel facilities, which means it's not compatible with the "restricted" Pod Security Standard. It should be compatible with the "baseline" standard if running with the minimum required capabilities, or may require the "privileged" standard when run with privileged: true.
