@@ -55,7 +55,7 @@ jobs:
             echo "level=cheap-short" >> $GITHUB_OUTPUT
           else
             # merges to main: run full-long
-            echo "level=cheap-short" >> $GITHUB_OUTPUT
+            echo "level=full-long" >> $GITHUB_OUTPUT
           fi
 
   build-collector:
@@ -108,7 +108,7 @@ jobs:
       instance-type: ${{ needs.context.outputs.level == 'perf-short' && 'c5.9xlarge' || 'm7i.metal-24xl' }}
 
   test-resctrl-collector:
-    if: needs.context.outputs.level == 'cheap-short'
+    if: needs.context.outputs.level == 'full-long'
     needs: [build-collector, context]
     uses: ./.github/workflows/reusable-test-resctrl-collector.yaml
     secrets: inherit
