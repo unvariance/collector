@@ -354,8 +354,8 @@ pub async fn run(
     cfg: ResctrlCollectorConfig,
 ) -> Result<()> {
     // Outgoing channel is provided by caller; we use try_send and drop on full
-    let (resctrl_tx, mut resctrl_rx) = mpsc::channel::<PodResctrlEvent>(cfg.channel_capacity);
-    let (meta_tx, mut meta_rx) = mpsc::channel::<MetadataMessage>(cfg.channel_capacity);
+    let (resctrl_tx, resctrl_rx) = mpsc::channel::<PodResctrlEvent>(cfg.channel_capacity);
+    let (meta_tx, meta_rx) = mpsc::channel::<MetadataMessage>(cfg.channel_capacity);
 
     // Create plugins
     let resctrl_plugin = Arc::new(ResctrlPlugin::new(
@@ -422,6 +422,48 @@ pub async fn run(
 
     task_tracker.close();
 
+    // Delegate to the common loop implementation
+    run_with_receivers(
+        this.clone(),
+        batch_sender,
+        shutdown.clone(),
+        cfg,
+        resctrl_rx,
+        meta_rx,
+        if nri_resctrl.is_some() {
+            Some(resctrl_plugin.clone())
+        } else {
+            None
+        },
+    )
+    .await?;
+
+    // Best-effort: close NRI connections
+    if let Some(nri) = nri_resctrl {
+        let _ = nri.close().await;
+    }
+    if let Some(nri) = nri_meta {
+        let _ = nri.close().await;
+    }
+
+    // Signal the cancellation token and wait for plugin tasks
+    shutdown.cancel();
+    task_tracker.wait().await;
+
+    Ok(())
+}
+
+/// Shared loop implementation used by production and tests.
+async fn run_with_receivers(
+    this: Arc<ResctrlCollector>,
+    batch_sender: mpsc::Sender<RecordBatch>,
+    shutdown: CancellationToken,
+    cfg: ResctrlCollectorConfig,
+    mut resctrl_rx: mpsc::Receiver<PodResctrlEvent>,
+    mut meta_rx: mpsc::Receiver<MetadataMessage>,
+    // When provided, enables retry handling via the given plugin
+    retry_plugin: Option<Arc<ResctrlPlugin>>,
+) -> Result<()> {
     // Internal state
     let mut state = ResctrlCollectorState::new(this.clone(), batch_sender, &cfg);
 
@@ -435,25 +477,21 @@ pub async fn run(
             _ = shutdown.cancelled() => {
                 break;
             }
-            // Periodic sample
             _ = sample_tick.tick() => {
                 state.handle_sample_timer();
             }
-            // Retry plugin work if connected
-            _ = retry_tick.tick(), if nri_resctrl.is_some() => {
-                state.handle_retry_timer(&resctrl_plugin);
+            _ = retry_tick.tick(), if retry_plugin.is_some() => {
+                // Safe to unwrap because of the guard
+                state.handle_retry_timer(retry_plugin.as_ref().unwrap());
             }
-            // Health logging
             _ = health_tick.tick() => {
                 state.handle_health_timer();
             }
-            // Resctrl events
             maybe_ev = resctrl_rx.recv() => {
                 if let Some(ev) = maybe_ev {
                     state.handle_resctrl_event(ev);
                 }
             }
-            // Metadata events
             maybe_meta = meta_rx.recv() => {
                 if let Some(msg) = maybe_meta {
                     state.handle_metadata_event(msg);
@@ -461,23 +499,8 @@ pub async fn run(
             }
         }
     }
-
-    // Best-effort: close NRI connections
-    if let Some(nri) = nri_resctrl {
-        let _ = nri.close().await;
-    }
-    if let Some(nri) = nri_meta {
-        let _ = nri.close().await;
-    }
-
     // Close the sender to signal shutdown downstream
     drop(state.batch_sender);
-
-    // Signal the cancellation token
-    shutdown.cancel();
-
-    task_tracker.wait().await;
-
     Ok(())
 }
 
@@ -488,51 +511,26 @@ pub async fn run_with_injected_receivers(
     batch_sender: mpsc::Sender<RecordBatch>,
     shutdown: CancellationToken,
     cfg: ResctrlCollectorConfig,
-    mut resctrl_rx: mpsc::Receiver<PodResctrlEvent>,
-    mut meta_rx: mpsc::Receiver<MetadataMessage>,
+    resctrl_rx: mpsc::Receiver<PodResctrlEvent>,
+    meta_rx: mpsc::Receiver<MetadataMessage>,
 ) -> Result<()> {
-    // Create dummy plugins for retry handler, but skip NRI wiring.
+    // Create dummy plugin to enable retry handler in tests.
     let resctrl_plugin = Arc::new(ResctrlPlugin::new(
         ResctrlPluginConfig::default(),
         // Unused here; create a throwaway sender to satisfy API
         tokio::sync::mpsc::channel::<PodResctrlEvent>(cfg.channel_capacity).0,
     ));
 
-    // Internal state
-    let mut state = ResctrlCollectorState::new(this.clone(), batch_sender, &cfg);
-
-    // Intervals
-    let mut sample_tick = tokio::time::interval(cfg.sample_interval);
-    let mut retry_tick = tokio::time::interval(cfg.retry_interval);
-    let mut health_tick = tokio::time::interval(cfg.health_interval);
-
-    loop {
-        tokio::select! {
-            _ = shutdown.cancelled() => {
-                break;
-            }
-            _ = sample_tick.tick() => {
-                state.handle_sample_timer();
-            }
-            _ = retry_tick.tick() => {
-                state.handle_retry_timer(&resctrl_plugin);
-            }
-            _ = health_tick.tick() => {
-                state.handle_health_timer();
-            }
-            maybe_ev = resctrl_rx.recv() => {
-                if let Some(ev) = maybe_ev {
-                    state.handle_resctrl_event(ev);
-                }
-            }
-            maybe_meta = meta_rx.recv() => {
-                if let Some(msg) = maybe_meta {
-                    state.handle_metadata_event(msg);
-                }
-            }
-        }
-    }
-    Ok(())
+    run_with_receivers(
+        this,
+        batch_sender,
+        shutdown,
+        cfg,
+        resctrl_rx,
+        meta_rx,
+        Some(resctrl_plugin),
+    )
+    .await
 }
 
 #[cfg(test)]
