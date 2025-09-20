@@ -299,50 +299,57 @@ async fn main() -> Result<()> {
     // Optionally enable resctrl occupancy collection with a dedicated writer
     if opts.enable_resctrl {
         // Schema for occupancy
-        let occ_schema = resctrl_collector::create_schema();
+        let occupancy_schema = resctrl_collector::create_schema();
 
         // (delayed) writer + channel setup follows after config parsing
 
         // Spawn the resctrl-collector loop with config from env
-        let rcfg = resctrl_collector::ResctrlCollectorConfig::from_env();
+        let occupancy_cfg = resctrl_collector::ResctrlCollectorConfig::from_env();
         // Create writer and channels for occupancy using parsed config
         // Use a separate prefix for resctrl outputs to avoid mixing files
-        let occ_prefix = format!("{}{}", opts.resctrl_prefix, node_id);
-        let occ_config = ParquetWriterConfig {
-            storage_prefix: occ_prefix,
+        let occupancy_prefix = format!("{}{}", opts.resctrl_prefix, node_id);
+        let occupancy_config = ParquetWriterConfig {
+            storage_prefix: occupancy_prefix,
             buffer_size: opts.parquet_buffer_size,
             file_size_limit: opts.parquet_file_size,
             max_row_group_size: opts.max_row_group_size,
             storage_quota: opts.storage_quota,
             key_value_metadata: Some(cpu_metadata.clone()),
         };
-        let (occ_sender, occ_receiver) = mpsc::channel::<RecordBatch>(64);
-        let (occ_rotate_tx, occ_rotate_rx) = mpsc::channel::<()>(1);
-        let occ_writer = ParquetWriter::new(store.clone(), occ_schema, occ_config)?;
-        let occ_writer_task = ParquetWriterTask::new(occ_writer, occ_receiver, occ_rotate_rx);
+        let (occupancy_sender, occupancy_receiver) = mpsc::channel::<RecordBatch>(64);
+        let (occupancy_rotate_tx, occupancy_rotate_rx) = mpsc::channel::<()>(1);
+        let occupancy_writer =
+            ParquetWriter::new(store.clone(), occupancy_schema, occupancy_config)?;
+        let occupancy_writer_task =
+            ParquetWriterTask::new(occupancy_writer, occupancy_receiver, occupancy_rotate_rx);
 
         // Spawn writer task
         task_tracker.spawn(task_completion_handler(
-            occ_writer_task.run(),
+            occupancy_writer_task.run(),
             shutdown_token.clone(),
             "ResctrlParquetWriterTask",
         ));
 
         // Spawn rotation handler for occupancy writer (separate signal stream)
         task_tracker.spawn(task_completion_handler(
-            rotation_handler(occ_rotate_tx.clone(), shutdown_token.clone()),
+            rotation_handler(occupancy_rotate_tx.clone(), shutdown_token.clone()),
             shutdown_token.clone(),
             "ResctrlRotationHandler",
         ));
 
-        let rc_instance = resctrl_collector::ResctrlCollector::new();
+        let occupancy_instance = resctrl_collector::ResctrlCollector::new();
         // Set ready provider based on collector readiness
         ready_provider = Some({
-            let rc_clone = rc_instance.clone();
-            Arc::new(move || rc_clone.ready())
+            let occupancy_clone = occupancy_instance.clone();
+            Arc::new(move || occupancy_clone.ready())
         });
         task_tracker.spawn(task_completion_handler(
-            resctrl_collector::run(rc_instance, occ_sender, shutdown_token.clone(), rcfg),
+            resctrl_collector::run(
+                occupancy_instance,
+                occupancy_sender,
+                shutdown_token.clone(),
+                occupancy_cfg,
+            ),
             shutdown_token.clone(),
             "ResctrlCollector",
         ));
