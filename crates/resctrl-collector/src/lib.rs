@@ -120,11 +120,14 @@ impl ResctrlCollectorState {
             let mut llc_b = Int64Builder::with_capacity(rows_cap);
 
             let mut rows_appended = 0usize;
-            for (uid, ps) in self.pods.iter() {
-                let Some(gp) = ps.group_path.as_ref() else {
+            for (uid, pod_state) in self.pods.iter() {
+                let Some(group_path) = pod_state.group_path.as_ref() else {
                     continue;
                 };
-                match self.llc_reader.llc_occupancy_total_bytes(gp.as_str()) {
+                match self
+                    .llc_reader
+                    .llc_occupancy_total_bytes(group_path.as_str())
+                {
                     Ok(total) => {
                         let labels = self.pod_labels.get(uid);
                         // Per-scan start timestamp and per-measurement read timestamp
@@ -142,12 +145,12 @@ impl ResctrlCollectorState {
                             name_b.append_null();
                         }
                         uid_b.append_value(uid.as_str());
-                        grp_b.append_value(gp.as_str());
+                        grp_b.append_value(group_path.as_str());
                         llc_b.append_value(total as i64);
                         rows_appended += 1;
                     }
                     Err(e) => {
-                        debug!("resctrl read failed for {}: {}", gp, e);
+                        debug!("resctrl read failed for {}: {}", group_path, e);
                     }
                 }
             }
@@ -199,11 +202,11 @@ impl ResctrlCollectorState {
     pub(crate) fn compute_health_counts(&self) -> (usize, usize) {
         let mut failed = 0usize;
         let mut not_reconciled = 0usize;
-        for (_uid, ps) in self.pods.iter() {
-            if ps.group_path.is_none() {
+        for (_uid, pod_state) in self.pods.iter() {
+            if pod_state.group_path.is_none() {
                 failed += 1;
             }
-            if ps.reconciled_containers < ps.total_containers {
+            if pod_state.reconciled_containers < pod_state.total_containers {
                 not_reconciled += 1;
             }
         }
@@ -847,30 +850,30 @@ mod tests {
         let mut st = ResctrlCollectorState::new(this, tx, &cfg);
 
         // One failed (no group), one unreconciled, one healthy
-        st.pods.insert(
-            "uA".into(),
-            PodState {
-                group_path: None,
+        st.handle_resctrl_event(PodResctrlEvent::AddOrUpdate(
+            nri_resctrl_plugin::PodResctrlAddOrUpdate {
+                pod_uid: "uA".into(),
+                group_state: ResctrlGroupState::Failed,
                 total_containers: 1,
                 reconciled_containers: 0,
             },
-        );
-        st.pods.insert(
-            "uB".into(),
-            PodState {
-                group_path: Some("/gB".into()),
+        ));
+        st.handle_resctrl_event(PodResctrlEvent::AddOrUpdate(
+            nri_resctrl_plugin::PodResctrlAddOrUpdate {
+                pod_uid: "uB".into(),
+                group_state: ResctrlGroupState::Exists("/gB".into()),
                 total_containers: 2,
                 reconciled_containers: 1,
             },
-        );
-        st.pods.insert(
-            "uC".into(),
-            PodState {
-                group_path: Some("/gC".into()),
+        ));
+        st.handle_resctrl_event(PodResctrlEvent::AddOrUpdate(
+            nri_resctrl_plugin::PodResctrlAddOrUpdate {
+                pod_uid: "uC".into(),
+                group_state: ResctrlGroupState::Exists("/gC".into()),
                 total_containers: 1,
                 reconciled_containers: 1,
             },
-        );
+        ));
 
         let (failed, not_reconciled) = st.compute_health_counts();
         assert_eq!(failed, 1);
@@ -892,8 +895,10 @@ mod tests {
             mountpoint: "/does/not/exist".into(),
         };
         let jh = tokio::spawn(run(this.clone(), tx, shutdown.clone(), cfg));
-        advance(Duration::from_millis(10)).await; // sample
-        advance(Duration::from_millis(10)).await; // health
+        // Advance time twice; after 20ms total, both sample and health
+        // timers (10ms each) have fired at least once.
+        advance(Duration::from_millis(10)).await;
+        advance(Duration::from_millis(10)).await;
         assert!(!this.ready()); // no events yet
         shutdown.cancel();
         jh.await??;
