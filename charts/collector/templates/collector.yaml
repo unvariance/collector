@@ -89,6 +89,33 @@ spec:
             - name: host-proc
               mountPath: /host/proc
               readOnly: true
+        {{- if and .Values.resctrl.enabled .Values.resctrl.autoMountHost }}
+        - name: resctrl-mount
+          image: "{{ .Values.resctrl.init.image.repository }}:{{ .Values.resctrl.init.image.tag }}"
+          imagePullPolicy: {{ .Values.resctrl.init.image.pullPolicy | default "IfNotPresent" }}
+          securityContext:
+            {{- toYaml .Values.resctrl.init.securityContext | nindent 12 }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              MP="/host/sys/fs/resctrl"
+              mkdir -p "$MP"
+              if grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]+resctrl[[:space:]]" /host/proc/mounts >/dev/null 2>&1; then
+                echo "resctrl already mounted on host"
+                exit 0
+              fi
+              echo "Mounting resctrl on host at $MP"
+              mount -t resctrl resctrl "$MP"
+          volumeMounts:
+            - name: sys-fs-root
+              mountPath: /host/sys/fs
+              mountPropagation: Bidirectional
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -173,7 +200,11 @@ spec:
             {{- if .Values.resctrl.enabled }}
             - name: resctrl
               mountPath: {{ .Values.resctrl.mountpoint }}
-              readOnly: true
+              readOnly: false
+              {{- if .Values.resctrl.autoMountHost }}
+              # Allow mount events from this container to propagate back to the host
+              mountPropagation: Bidirectional
+              {{- end }}
             {{- end }}
       volumes:
         {{- if eq .Values.storage.type "local" }}
@@ -211,9 +242,14 @@ spec:
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup 
+        - name: sys-fs-root
+          hostPath:
+            path: /sys/fs
+            type: Directory
         {{- if .Values.resctrl.enabled }}
         - name: resctrl
           hostPath:
             path: {{ .Values.resctrl.mountpoint }}
-            type: Directory
+            # Create the directory on the host if missing; may be a plain dir until mounted
+            type: DirectoryOrCreate
         {{- end }}

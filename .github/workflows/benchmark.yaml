@@ -117,7 +117,6 @@ jobs:
 
       - name: (k8s) Add Helm Repositories
         run: |
-          helm repo add unvariance https://unvariance.github.io/collector/charts
           helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
           helm repo update
 
@@ -237,7 +236,7 @@ jobs:
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
 
-      - name: (collector) Deploy Collector Helm Chart
+      - name: (collector) Deploy Collector Helm Chart (local chart)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
@@ -245,12 +244,13 @@ jobs:
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
           
           # Install the helm chart using --set for values
-          helm install ${COLLECTOR_RELEASE_NAME} unvariance/collector \
+          helm install ${COLLECTOR_RELEASE_NAME} ./charts/collector \
             --set collector.verbose=true \
             --set image.repository="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}" \
             --set storage.type=s3 \
             --set storage.prefix="${UUID_PREFIX}" \
             --set resctrl.enabled=true \
+            --set resctrl.autoMountHost=true \
             --set nri.init.image.repository=ghcr.io/unvariance/collector/nri-init \
             --set resctrl.prefix="${UUID_PREFIX}resctrl-occupancy-" \
             --set securityContext.privileged=true \

@@ -213,7 +213,34 @@ resctrl:
   # Unlike the main collector stream (which uses `storage.prefix`),
   # resctrl files use this separate prefix to avoid mixing outputs.
   prefix: "resctrl-occupancy-"
+  # If your nodes do not already have resctrl mounted, you can let the
+  # chart mount it on the host with a small privileged initContainer.
+  # This requires clusters that allow privileged pods and mount propagation.
+  autoMountHost: false
+  init:
+    image:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+      allowPrivilegeEscalation: true
+      runAsUser: 0
 ```
+
+Requirements when enabling resctrl:
+
+- Writable mount of the host resctrl filesystem into the pod: the chart mounts
+  `hostPath: /sys/fs/resctrl` at the same path inside the container with readOnly=false.
+- Capabilities: creating resctrl monitor groups and assigning tasks typically
+  requires root and `CAP_SYS_ADMIN`. You can either set `securityContext.privileged=true`
+  (as you did in CI) or ensure `securityContext.capabilities.add` includes `SYS_ADMIN` and the
+  pod runs as root (`runAsUser: 0`).
+- If you rely on the container to mount resctrl itself (plugin auto-mount), the
+  default container runtime seccomp profile may still block the `mount(2)` call.
+  Prefer pre-mounting resctrl on the node (e.g., via system configuration) or enable
+  `resctrl.autoMountHost=true` to have the chart do a host mount via a privileged initContainer.
+
 
 ## Pod Security Standards Compatibility
 
@@ -234,7 +261,7 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `serviceAccount.name` | Service account name | `""` |
 | `serviceAccount.annotations` | Service account annotations | `{}` |
 | `securityContext.privileged` | Run container as privileged | `false` |
-| `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE"]` |
+| `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE", "SYS_ADMIN"]` |
 | `securityContext.runAsUser` | User ID to run as | `0` |
 | `collector.verbose` | Enable verbose debug output | `false` |
 | `collector.duration` | Track duration in seconds (0 = unlimited) | `0` |

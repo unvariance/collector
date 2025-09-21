@@ -64,6 +64,19 @@ resctrl:
   mountpoint: "/sys/fs/resctrl"
   # Distinct object/file prefix for resctrl parquet outputs
   prefix: "resctrl-occupancy-"
+  # Optionally mount resctrl on the host before the collector starts.
+  # This requires privileged access and bidirectional mount propagation.
+  # If disabled, the collector expects /sys/fs/resctrl to already be mounted on the node.
+  autoMountHost: false
+  init:
+    image:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+      allowPrivilegeEscalation: true
+      runAsUser: 0
 
 # Storage configuration
 storage:
