@@ -131,7 +131,7 @@ nri:
   # Init container image
   init:
     image:
-      repository: ghcr.io/unvariance/nri-init
+      repository: ghcr.io/unvariance/collector/nri-init
       tag: latest
       pullPolicy: IfNotPresent
     command: ["/bin/nri-init"]
