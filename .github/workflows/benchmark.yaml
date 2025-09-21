@@ -173,8 +173,24 @@ jobs:
       - name: (collector) Pre-fetch Collector Image
         run: |
           COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          echo "Pre-fetching collector image: ${COLLECTOR_IMAGE}"
-          podman pull "${COLLECTOR_IMAGE}" || true
+          NRI_INIT_IMAGE="ghcr.io/unvariance/nri-init:latest"
+          echo "Pre-fetching collector image into containerd (k3s runtime): ${COLLECTOR_IMAGE}"
+          # Prefer pulling into containerd so k3s can use the cached image
+          if command -v ctr >/dev/null 2>&1; then
+            echo "Using ctr to pre-pull image into k8s.io namespace"
+            ctr -n k8s.io images pull "${COLLECTOR_IMAGE}" || true
+            echo "Pre-pulling NRI init image: ${NRI_INIT_IMAGE}"
+            ctr -n k8s.io images pull "${NRI_INIT_IMAGE}" || true
+          elif command -v crictl >/dev/null 2>&1; then
+            echo "Using crictl to pre-pull image"
+            crictl pull "${COLLECTOR_IMAGE}" || true
+            echo "Pre-pulling NRI init image: ${NRI_INIT_IMAGE}"
+            crictl pull "${NRI_INIT_IMAGE}" || true
+          else
+            echo "ctr/crictl not found; falling back to podman (may not be visible to k3s)"
+            podman pull "${COLLECTOR_IMAGE}" || true
+            podman pull "${NRI_INIT_IMAGE}" || true
+          fi
           echo "Pre-fetch completed"
 
       #### Wait for services to be ready
