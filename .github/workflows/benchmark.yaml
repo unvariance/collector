@@ -236,6 +236,7 @@ jobs:
             --set storage.prefix="${UUID_PREFIX}" \
             --set resctrl.enabled=true \
             --set resctrl.prefix="${UUID_PREFIX}resctrl-occupancy-" \
+            --set resctrl.samplingInterval="100ms" \
             --set storage.s3.bucket="${S3_BUCKET}" \
             --set storage.s3.region="${AWS_REGION}" \
             --set storage.s3.auth.method=secret \
