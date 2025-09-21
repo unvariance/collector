@@ -5,7 +5,30 @@ entries:
       category: Monitoring
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2025-07-11T02:51:15.195154597Z"
+    created: "2025-09-21T19:55:45.5787026Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: c9e9e81b116e0c33ff0e8199358a3caeae9ded12eb6cd8ea485a19909ac238be
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.2.0.tgz
+    version: 0.2.0
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-21T19:55:45.578064184Z"
     description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
       collecting memory subsystem metrics
     digest: 469a154f7ebc58d61acd44a425fe65f1d8942f8dfc418ed4d5ec8c9464c0ffc6
@@ -28,7 +51,7 @@ entries:
       category: Monitoring
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2025-07-11T02:51:15.194679144Z"
+    created: "2025-09-21T19:55:45.577560671Z"
     description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
       collecting memory subsystem metrics
     digest: 3da766b265c3fa2ca9e6d8eecf08017c35f9adc92be2d0d9480302db78705707
@@ -51,7 +74,7 @@ entries:
       category: Monitoring
     apiVersion: v2
     appVersion: 0.1.0
-    created: "2025-07-11T02:51:15.194177822Z"
+    created: "2025-09-21T19:55:45.577061916Z"
     description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
       collecting memory subsystem metrics
     digest: c3314a1f3522c3263bc02be35eac380dc0e60339b7f9abfd797a02ddae1f3f87
@@ -70,4 +93,4 @@ entries:
     urls:
     - https://unvariance.github.io/collector/charts/collector-0.1.0.tgz
     version: 0.1.0
-generated: "2025-07-11T02:51:15.193565234Z"
+generated: "2025-09-21T19:55:45.576399866Z"
