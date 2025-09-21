@@ -169,6 +169,23 @@ For detailed NRI setup instructions, see the [NRI Setup Guide](../../docs/nri-se
 
 Recommended production rollout: use a rolling, label-based update to enable NRI safely in batches. See the NRI guide for step-by-step commands.
 
+### Resctrl Collector (LLC Occupancy)
+
+An optional feature that samples per-pod LLC occupancy via Linux resctrl and writes Parquet files.
+
+Enable and configure via values:
+
+```yaml
+resctrl:
+  enabled: false        # Disabled by default
+  samplingInterval: "1s"
+  mountpoint: "/sys/fs/resctrl"  # Host mount path for resctrl
+  # Distinct filename/object prefix for resctrl outputs
+  # Unlike the main collector stream (which uses `storage.prefix`),
+  # resctrl files use this separate prefix to avoid mixing outputs.
+  prefix: "resctrl-occupancy-"
+```
+
 ## Pod Security Standards Compatibility
 
 The Memory Collector requires access to host resources and kernel facilities, which means it's not compatible with the "restricted" Pod Security Standard. It should be compatible with the "baseline" standard if running with the minimum required capabilities, or may require the "privileged" standard when run with privileged: true.
@@ -225,3 +242,7 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `nri.init.command` | Init command | `["/bin/nri-init"]` |
 | `nri.init.securityContext.privileged` | Run init as privileged | `true` |
 | `nri.init.resources` | Init container resources | See values.yaml |
+| `resctrl.enabled` | Enable resctrl LLC occupancy collector | `false` |
+| `resctrl.samplingInterval` | Sampling interval for resctrl collector | `"1s"` |
+| `resctrl.mountpoint` | Host mount path to mount in the pod | `"/sys/fs/resctrl"` |
+| `resctrl.prefix` | Filename/object prefix for resctrl parquet outputs | `"resctrl-occupancy-"` |

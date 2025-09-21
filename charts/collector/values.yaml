@@ -41,6 +41,8 @@ collector:
   verbose: false
   # Track duration in seconds (0 = unlimited)
   duration: 0
+  # Port for HTTP health server (/live, /ready)
+  healthPort: 8080
   # Enable trace mode to output raw telemetry events instead of 1ms aggregated data
   # This provides nanosecond-granular context switch and timer events for detailed analysis
   trace: false
@@ -52,6 +54,16 @@ collector:
   maxRowGroupSize: "1048576"
   # Maximum total bytes to write to object store (optional)
   storageQuota: null
+
+# Resctrl collector (experimental feature; disabled by default)
+resctrl:
+  enabled: false
+  # Sampling interval for LLC occupancy measurements
+  samplingInterval: "1s"
+  # Path where resctrl is mounted on the host
+  mountpoint: "/sys/fs/resctrl"
+  # Distinct object/file prefix for resctrl parquet outputs
+  prefix: "resctrl-occupancy-"
 
 # Storage configuration
 storage:
