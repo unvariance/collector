@@ -123,21 +123,17 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
             {{- /* Determine effective AppArmor profile:
-                  1) If user explicitly sets securityContext.appArmorProfile.type, use it
+                  1) If user explicitly sets securityContext.appArmorProfile, render it verbatim
                   2) Else, when resctrl.enabled is true, default to Unconfined
                   3) Otherwise, omit to use runtime default behavior
                 */ -}}
             {{- $aa := .Values.securityContext.appArmorProfile -}}
-            {{- $aatype := (default "" $aa.type) -}}
-            {{- if and (not $aatype) .Values.resctrl.enabled }}
+            {{- if and (not $aa) .Values.resctrl.enabled }}
             appArmorProfile:
               type: "Unconfined"
-            {{- else if $aatype }}
+            {{- else if $aa }}
             appArmorProfile:
-              type: {{ $aa.type | quote }}
-              {{- if eq $aa.type "Localhost" }}
-              localhostProfile: {{ $aa.localhostProfile | quote }}
-              {{- end }}
+              {{- toYaml $aa | nindent 14 }}
             {{- end }}
           args:
             {{- if .Values.collector.verbose }}
