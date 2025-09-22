@@ -215,8 +215,6 @@ spec:
               mountPath: {{ .Values.resctrl.mountpoint }}
               readOnly: false
               {{- if .Values.resctrl.autoMountHost }}
-              # Allow mount events from this container to propagate back to the host
-              # Main collector does not need to propagate mounts back; only needs to see host mounts
               # Use HostToContainer to avoid requiring privileged security context
               mountPropagation: HostToContainer
               {{- end }}
