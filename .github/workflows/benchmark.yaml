@@ -288,8 +288,8 @@ jobs:
           COLLECTOR_START_TIME=$(date +%s)
 
           # Always describe pods, regardless of wait result
-          echo "Describing collector pods:"
-          kubectl describe pods -l app.kubernetes.io/name=collector
+          echo "Getting collector pods yaml:"
+          kubectl get pods -l app.kubernetes.io/name=collector -o yaml
           
           # Only fail the job if wait failed
           if [ -n "$WAIT_STATUS" ] && [ "$WAIT_STATUS" -ne 0 ]; then
