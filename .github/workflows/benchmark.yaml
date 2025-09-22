@@ -315,6 +315,44 @@ jobs:
             echo "Collector pod not found"
           fi
 
+      - name: (diagnostics) Host and pod security/mount checks
+        run: |
+          echo "=== Host: AppArmor and resctrl mount state ==="
+          if command -v aa-status >/dev/null 2>&1; then
+            sudo aa-status || true
+          else
+            echo "aa-status not available"
+          fi
+          if [ -r /sys/module/apparmor/parameters/enabled ]; then
+            echo -n "AppArmor enabled: "; cat /sys/module/apparmor/parameters/enabled || true
+          fi
+          echo "-- host mounts for resctrl --"
+          mount | grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" || true
+          grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" /proc/mounts || true
+          ls -ld /sys/fs/resctrl || true
+          echo "-- host resctrl write test (no-op) --"
+          if [ -d /sys/fs/resctrl ]; then
+            if [ -w /sys/fs/resctrl ]; then echo "host:/sys/fs/resctrl writable"; else echo "host:/sys/fs/resctrl NOT writable"; fi
+          fi
+
+          echo "\n=== Collector pod: identity, LSMs, and resctrl mount ==="
+          POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=collector -o name | head -n1 | cut -d/ -f2)
+          if [ -z "$POD_NAME" ]; then
+            echo "Collector pod not found"; exit 0
+          fi
+          echo "-- pod user and caps --"
+          kubectl exec "$POD_NAME" -- sh -c 'id -u && id -g && umask' || true
+          echo "-- pod seccomp --"
+          kubectl exec "$POD_NAME" -- sh -c "grep '^Seccomp:' /proc/self/status || true" || true
+          echo "-- pod AppArmor profile --"
+          kubectl exec "$POD_NAME" -- sh -c 'cat /proc/self/attr/current 2>/dev/null || echo "no AppArmor attr"' || true
+          echo "-- pod resctrl mount and permissions --"
+          kubectl exec "$POD_NAME" -- sh -c 'mount | grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" || true' || true
+          kubectl exec "$POD_NAME" -- sh -c 'ls -ld /sys/fs/resctrl /sys/fs/resctrl/mon_groups 2>/dev/null || true' || true
+          kubectl exec "$POD_NAME" -- sh -c 'test -w /sys/fs/resctrl && echo "pod:/sys/fs/resctrl writable" || echo "pod:/sys/fs/resctrl NOT writable"' || true
+          echo "-- pod env of interest --"
+          kubectl exec "$POD_NAME" -- sh -c 'env | grep -E "^(RESCTRL_|RUST_LOG|STORAGE_|AWS_)" || true' || true
+
       #### Start load generator
 
       - name: (workload) Start Load Generator
@@ -706,8 +744,24 @@ jobs:
       - name: (install) Install build tools
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: build-essential
+          # Ensure a working C toolchain is present for Rust linking
+          # `build-essential` brings headers/make; `gcc` provides the compiler
+          packages: build-essential gcc
           version: 1.0
+
+      - name: (install) Ensure `cc` is available
+        run: |
+          set -e
+          if ! command -v cc >/dev/null 2>&1; then
+            if command -v gcc >/dev/null 2>&1; then
+              echo "Creating /usr/bin/cc -> /usr/bin/gcc symlink"
+              sudo ln -sf /usr/bin/gcc /usr/bin/cc
+            else
+              echo "gcc not found after installation" >&2
+              exit 1
+            fi
+          fi
+          echo "Using C compiler: $(cc --version | head -n1)"
 
       - name: (install) Install Rust and addr2line
         run: |
