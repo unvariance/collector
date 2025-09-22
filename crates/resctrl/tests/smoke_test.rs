@@ -60,12 +60,18 @@ fn resctrl_smoke() -> anyhow::Result<()> {
     }
     // Verify calling ensure_mounted again when already mounted is a no-op and succeeds
     rc_auto.ensure_mounted(true)?;
+    // Use a unique test-specific prefix to avoid clashes across tests
+    let test_prefix = format!("smk_{}_", uuid::Uuid::new_v4());
+    let rc_test = Resctrl::new(Config {
+        group_prefix: test_prefix,
+        ..Default::default()
+    });
     let uid = format!("smoke_{}", uuid::Uuid::new_v4());
 
-    let group = rc.create_group(&uid)?;
+    let group = rc_test.create_group(&uid)?;
 
     let pid = std::process::id() as i32;
-    let AssignmentResult { assigned, missing } = rc.assign_tasks(&group, &[pid])?;
+    let AssignmentResult { assigned, missing } = rc_test.assign_tasks(&group, &[pid])?;
     if assigned != 1 || missing != 0 {
         return Err(anyhow::anyhow!(
             "unexpected assignment result: assigned={}, missing={}",
@@ -74,7 +80,7 @@ fn resctrl_smoke() -> anyhow::Result<()> {
         ));
     }
 
-    let tasks = rc.list_group_tasks(&group)?;
+    let tasks = rc_test.list_group_tasks(&group)?;
     if !tasks.contains(&pid) {
         return Err(anyhow::anyhow!(
             "pid {} not found in group task list: {:?}",
@@ -91,7 +97,7 @@ fn resctrl_smoke() -> anyhow::Result<()> {
             pid, assigned
         );
     }
-    rc.delete_group(&group)?;
+    rc_test.delete_group(&group)?;
     Ok(())
 }
 
@@ -103,8 +109,12 @@ fn resctrl_group_creation_does_not_saturate_rmid_capacity() -> anyhow::Result<()
         return Ok(());
     }
 
-    // Ensure resctrl is mounted and writable.
-    let rc = Resctrl::new(Config::default());
+    // Ensure resctrl is mounted and writable. Use test-specific prefix to avoid clashes.
+    let test_prefix = format!("sat_{}_", uuid::Uuid::new_v4());
+    let rc = Resctrl::new(Config {
+        group_prefix: test_prefix,
+        ..Default::default()
+    });
     rc.ensure_mounted(true)?;
     let info = rc.detect_support()?;
     if !info.mounted || !info.writable {
