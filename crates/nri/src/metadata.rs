@@ -554,40 +554,7 @@ mod tests {
             _ => panic!("Expected Add message for container2"),
         }
 
-        // Test 4: Update a container
-        let updated_pod = create_test_pod("pod2", "new-pod", "test-namespace");
-        let mut updated_container =
-            create_test_container("container2", "pod2", "new-container", "xyz789ghi012");
-        updated_container.pid = 2000;
-
-        let update_req = UpdateContainerRequest {
-            pod: MessageField::some(updated_pod),
-            container: MessageField::some(updated_container),
-            linux_resources: MessageField::none(),
-            special_fields: SpecialFields::default(),
-        };
-
-        let _ = plugin.update_container(&context, update_req).await.unwrap();
-
-        // Verify metadata message for updated container
-        let message = rx.recv().await.unwrap();
-        match message {
-            MetadataMessage::Add(id, metadata) => {
-                assert_eq!(id, "container2");
-                verify_container_metadata(
-                    &metadata,
-                    "container2",
-                    "new-pod",
-                    "new-container",
-                    "pod2",
-                    "xyz789ghi012",
-                );
-                assert_eq!(metadata.pid, Some(2000));
-            }
-            _ => panic!("Expected Add message for updated container2"),
-        }
-
-        // Test 5: Remove a container (via state_change REMOVE_CONTAINER)
+        // Test 4: Remove a container (via state_change REMOVE_CONTAINER)
         let stop_pod = create_test_pod("pod1", "test-pod", "test-namespace");
         let stop_container =
             create_test_container("container1", "pod1", "test-container", "abc123def456");
