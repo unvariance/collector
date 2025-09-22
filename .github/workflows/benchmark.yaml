@@ -435,7 +435,8 @@ jobs:
       - name: (metrics) Ramp up load generator
         run: |
           echo "Ramping up load generator without perf record..."
-          sleep 200
+          # sleep 200
+          sleep 10
 
       - name: (hpa) Check HPA Status Before Measurements
         run: |
@@ -477,7 +478,8 @@ jobs:
           mkdir -p /tmp/perf_data
           
           STEADY_STATE_MINUTES=${STEADY_STATE_MINUTES}
-          PERF_RECORD_SECONDS=60
+          # PERF_RECORD_SECONDS=60
+          PERF_RECORD_SECONDS=3
           
           # Calculate the sleep duration (all minutes except the last one)
           if [[ $STEADY_STATE_MINUTES -gt 1 ]]; then
