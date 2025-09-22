@@ -242,6 +242,7 @@ spec:
         - name: cgroup
           hostPath:
             path: /sys/fs/cgroup 
+            type: Directory
         - name: sys-fs-root
           hostPath:
             path: /sys/fs
