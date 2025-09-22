@@ -125,6 +125,35 @@ securityContext:
   privileged: true
 ```
 
+To run on SELinux enabled systems, SELinux type and level must have
+sufficient privileges to interact with eBPF. SELinux is by default enabled
+on Fedora-based systems. See [Getting started with SELinux](https://docs.fedoraproject.org/en-US/quick-docs/selinux-getting-started/)
+in the Fedora Documentation. The default configuration allows to run with
+standard SELinux groups, and we recommend to keep it as is even on systems
+where SELinux is not enabled.
+
+More on [What is the spc_t container type, and why didn't we just run as unconfined_t?](https://danwalsh.livejournal.com/74754.html)
+
+```yaml
+podSecurityContext:
+  seLinuxOptions:
+    level: s0
+    type: spc_t
+```
+
+On systems where SELinux is not enabled, the extra POD Security Context
+options doesn't make any harm, but if you just would like to remove the
+seLinuxOptions set podSecurityContext to an empty {}.
+
+```yaml
+podSecurityContext: {}  # Empty POD securityContext
+## I have manually removed the seLinuxOptions as they are not relevant for
+## our systems. 2025-09-22 I. N. Cognito
+#  seLinuxOptions:
+#    level: s0
+#    type: spc_t
+```
+
 ### Node Selection
 
 You can customize which nodes the collector runs on using standard Kubernetes node selection:

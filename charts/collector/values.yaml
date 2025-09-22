@@ -110,6 +110,12 @@ podAnnotations: {}
 # Pod labels
 podLabels: {}
 
+# POD Security context - allow running on SELinux enabled systems (e.g. RHEL, Fedora etc.)
+podSecurityContext:
+  seLinuxOptions:
+    level: s0
+    type: spc_t  # Running as SuperPrivilegedContainer - see container securityContext for reduction of kernel capabilities
+
 # Additional environment variables
 extraEnv: []
 

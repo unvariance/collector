@@ -61,6 +61,8 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
         - name: nri-init
           image: "{{ .Values.nri.init.image.repository }}:{{ .Values.nri.init.image.tag }}"
