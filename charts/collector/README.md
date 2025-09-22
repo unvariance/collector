@@ -250,6 +250,25 @@ Requirements when enabling resctrl:
   Prefer pre-mounting resctrl on the node (e.g., via system configuration) or enable
   `resctrl.autoMountHost=true` to have the chart do a host mount via a privileged initContainer.
 
+- AppArmor defaulting: When `resctrl.enabled=true` and no AppArmor is explicitly configured,
+  the chart defaults the collector container to `appArmorProfile.type: Unconfined` to allow
+  writes under `/sys/fs/resctrl`. You can override this behavior:
+  - Force runtime default profile:
+    ```yaml
+    securityContext:
+      appArmorProfile:
+        type: RuntimeDefault
+    ```
+  - Use a node-local profile:
+    ```yaml
+    securityContext:
+      appArmorProfile:
+        type: Localhost
+        localhostProfile: my-permissive-profile
+    ```
+  - Legacy clusters (pre appArmorProfile field): add a pod annotation
+    `container.apparmor.security.beta.kubernetes.io/collector: unconfined`.
+
 
 ## Pod Security Standards Compatibility
 

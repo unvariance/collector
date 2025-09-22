@@ -122,11 +122,21 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-            {{- with .Values.securityContext.appArmorProfile }}
+            {{- /* Determine effective AppArmor profile:
+                  1) If user explicitly sets securityContext.appArmorProfile.type, use it
+                  2) Else, when resctrl.enabled is true, default to Unconfined
+                  3) Otherwise, omit to use runtime default behavior
+                */ -}}
+            {{- $aa := .Values.securityContext.appArmorProfile -}}
+            {{- $aatype := (default "" $aa.type) -}}
+            {{- if and (not $aatype) .Values.resctrl.enabled }}
             appArmorProfile:
-              type: {{ .type | quote }}
-              {{- if and .type (eq .type "Localhost") }}
-              localhostProfile: {{ .localhostProfile | quote }}
+              type: "Unconfined"
+            {{- else if $aatype }}
+            appArmorProfile:
+              type: {{ $aa.type | quote }}
+              {{- if eq $aa.type "Localhost" }}
+              localhostProfile: {{ $aa.localhostProfile | quote }}
               {{- end }}
             {{- end }}
           args:
