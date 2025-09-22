@@ -730,11 +730,8 @@ async fn test_startup_cleanup_e2e_impl() -> anyhow::Result<()> {
     }
 
     let fs = resctrl::RealFs;
-    let report_e2e = resctrl::cleanup_prefix(
-        &fs,
-        std::path::Path::new("/sys/fs/resctrl"),
-        &test_prefix,
-    )?;
+    let report_e2e =
+        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), &test_prefix)?;
     println!(
         "[integration_test] Cleanup report (test_e2e_): {:?}",
         report_e2e
@@ -965,7 +962,8 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
     }
 
     let fs = resctrl::RealFs;
-    let report_pod = resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), &test_prefix)?;
+    let report_pod =
+        resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), &test_prefix)?;
     println!("[integration_test] Cleanup report (pod_): {:?}", report_pod);
     let report_capfill =
         resctrl::cleanup_prefix(&fs, std::path::Path::new("/sys/fs/resctrl"), filler_prefix)?;
