@@ -145,9 +145,10 @@ impl Plugin for MetadataPlugin {
             req.runtime_name, req.runtime_version
         );
 
-        // Subscribe to container lifecycle events
+        // Subscribe to container lifecycle events where cgroup is guaranteed to exist
+        // Use START_CONTAINER (not CREATE) and REMOVE_CONTAINER for cleanup notifications
         let mut events = EventMask::new();
-        events.set(&[Event::CREATE_CONTAINER, Event::STOP_CONTAINER]);
+        events.set(&[Event::START_CONTAINER, Event::REMOVE_CONTAINER]);
 
         Ok(ConfigureResponse {
             events: events.raw_value(),
@@ -180,56 +181,24 @@ impl Plugin for MetadataPlugin {
     async fn create_container(
         &self,
         _ctx: &TtrpcContext,
-        req: CreateContainerRequest,
+        _req: CreateContainerRequest,
     ) -> ttrpc::Result<CreateContainerResponse> {
-        let container = &req.container;
-
-        // Convert MessageField<PodSandbox> to &PodSandbox for extract_metadata
-        let pod = req.pod.as_ref();
-
-        debug!("Container created: {}", container.id);
-        let metadata = self.extract_metadata(container, pod);
-        self.send_message(MetadataMessage::Add(
-            container.id.clone(),
-            Box::new(metadata),
-        ));
-
-        // We don't request any container adjustments
         Ok(CreateContainerResponse::default())
     }
 
     async fn update_container(
         &self,
         _ctx: &TtrpcContext,
-        req: UpdateContainerRequest,
+        _req: UpdateContainerRequest,
     ) -> ttrpc::Result<UpdateContainerResponse> {
-        let container = &req.container;
-
-        // Convert MessageField<PodSandbox> to &PodSandbox for extract_metadata
-        let pod = req.pod.as_ref();
-
-        debug!("Container updated: {}", container.id);
-        let metadata = self.extract_metadata(container, pod);
-        self.send_message(MetadataMessage::Add(
-            container.id.clone(),
-            Box::new(metadata),
-        ));
-
-        // We don't request any container updates
         Ok(UpdateContainerResponse::default())
     }
 
     async fn stop_container(
         &self,
         _ctx: &TtrpcContext,
-        req: StopContainerRequest,
+        _req: StopContainerRequest,
     ) -> ttrpc::Result<StopContainerResponse> {
-        let container_id = &req.container.id;
-
-        debug!("Container stopped/removed: {}", container_id);
-        self.send_message(MetadataMessage::Remove(container_id.clone()));
-
-        // We don't request any container updates
         Ok(StopContainerResponse::default())
     }
 
@@ -238,13 +207,38 @@ impl Plugin for MetadataPlugin {
         _ctx: &TtrpcContext,
         _req: UpdatePodSandboxRequest,
     ) -> ttrpc::Result<UpdatePodSandboxResponse> {
-        // We don't care about pod sandbox updates
-        debug!("Pod sandbox updated: {:?}", _req);
         Ok(UpdatePodSandboxResponse::default())
     }
 
     async fn shutdown(&self, _ctx: &TtrpcContext, _req: Empty) -> ttrpc::Result<Empty> {
         info!("Shutting down metadata plugin");
+        Ok(Empty::default())
+    }
+
+    async fn state_change(
+        &self,
+        _ctx: &TtrpcContext,
+        req: api::StateChangeEvent,
+    ) -> ttrpc::Result<Empty> {
+        match req.event.enum_value() {
+            Ok(Event::START_CONTAINER) => {
+                if let (Some(pod), Some(container)) = (req.pod.as_ref(), req.container.as_ref()) {
+                    let metadata = self.extract_metadata(container, Some(pod));
+                    debug!("container started: {}", container.id);
+                    self.send_message(MetadataMessage::Add(
+                        container.id.clone(),
+                        Box::new(metadata),
+                    ));
+                }
+            }
+            Ok(Event::REMOVE_CONTAINER) => {
+                if let Some(container) = req.container.as_ref() {
+                    debug!("container removed: {}", container.id);
+                    self.send_message(MetadataMessage::Remove(container.id.clone()));
+                }
+            }
+            _ => {}
+        }
         Ok(Empty::default())
     }
 }
@@ -487,16 +481,16 @@ mod tests {
 
         let configure_resp = plugin.configure(&context, configure_req).await.unwrap();
 
-        // Verify plugin subscribed to container events using EventMask
+        // Verify plugin subscribed to correct container events using EventMask
         let events = EventMask::from_raw(configure_resp.events);
         assert_ne!(events.raw_value(), 0, "Plugin should subscribe to events");
         assert!(
-            events.is_set(Event::CREATE_CONTAINER),
-            "Plugin should subscribe to container creation events"
+            events.is_set(Event::START_CONTAINER),
+            "Plugin should subscribe to container start events"
         );
         assert!(
-            events.is_set(Event::STOP_CONTAINER),
-            "Plugin should subscribe to container stop events"
+            events.is_set(Event::REMOVE_CONTAINER),
+            "Plugin should subscribe to container remove events"
         );
 
         // Test 2: Synchronize with existing containers
@@ -530,18 +524,18 @@ mod tests {
             _ => panic!("Expected Add message for container1"),
         }
 
-        // Test 3: Create a new container
+        // Test 3: Start a new container (via state_change START_CONTAINER)
         let new_pod = create_test_pod("pod2", "new-pod", "test-namespace");
         let new_container =
             create_test_container("container2", "pod2", "new-container", "xyz789ghi012");
-
-        let create_req = CreateContainerRequest {
+        let sc_req = api::StateChangeEvent {
             pod: MessageField::some(new_pod),
             container: MessageField::some(new_container),
+            event: EnumOrUnknown::new(Event::START_CONTAINER),
             special_fields: SpecialFields::default(),
         };
 
-        let _ = plugin.create_container(&context, create_req).await.unwrap();
+        let _ = plugin.state_change(&context, sc_req).await.unwrap();
 
         // Verify metadata message for created container
         let message = rx.recv().await.unwrap();
@@ -593,18 +587,19 @@ mod tests {
             _ => panic!("Expected Add message for updated container2"),
         }
 
-        // Test 5: Stop a container
+        // Test 5: Remove a container (via state_change REMOVE_CONTAINER)
         let stop_pod = create_test_pod("pod1", "test-pod", "test-namespace");
         let stop_container =
             create_test_container("container1", "pod1", "test-container", "abc123def456");
 
-        let stop_req = StopContainerRequest {
+        let sc_req = api::StateChangeEvent {
             pod: MessageField::some(stop_pod),
             container: MessageField::some(stop_container),
+            event: EnumOrUnknown::new(Event::REMOVE_CONTAINER),
             special_fields: SpecialFields::default(),
         };
 
-        let _ = plugin.stop_container(&context, stop_req).await.unwrap();
+        let _ = plugin.state_change(&context, sc_req).await.unwrap();
 
         // Verify metadata message for stopped container
         let message = rx.recv().await.unwrap();
