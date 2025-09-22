@@ -122,6 +122,13 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
+            {{- with .Values.securityContext.appArmorProfile }}
+            appArmorProfile:
+              type: {{ .type | quote }}
+              {{- if and .type (eq .type "Localhost") }}
+              localhostProfile: {{ .localhostProfile | quote }}
+              {{- end }}
+            {{- end }}
           args:
             {{- if .Values.collector.verbose }}
             - --verbose

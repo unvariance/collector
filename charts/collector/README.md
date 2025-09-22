@@ -116,6 +116,11 @@ securityContext:
       - "PERFMON"
       - "SYS_RESOURCE"
   runAsUser: 0  # Required for eBPF operations
+  # Optional: AppArmor profile for the collector container
+  # Use Unconfined when enabling resctrl if your default AppArmor blocks sysfs writes
+  appArmorProfile:
+    type: Unconfined  # or RuntimeDefault | Localhost
+    # localhostProfile: "my-loaded-profile"  # required only when type: Localhost
 ```
 
 If you encounter issues with eBPF functionality, you may need to run in privileged mode:
@@ -236,6 +241,10 @@ Requirements when enabling resctrl:
   requires root and `CAP_SYS_ADMIN`. You can either set `securityContext.privileged=true`
   (as you did in CI) or ensure `securityContext.capabilities.add` includes `SYS_ADMIN` and the
   pod runs as root (`runAsUser: 0`).
+- AppArmor: If your nodes enforce an AppArmor profile that blocks writes under `/sys/fs/resctrl`,
+  set `securityContext.appArmorProfile.type: Unconfined` for the collector container (or provide a
+  permissive Localhost profile). On older clusters that do not support the appArmorProfile field,
+  use a pod annotation: `container.apparmor.security.beta.kubernetes.io/collector: unconfined`.
 - If you rely on the container to mount resctrl itself (plugin auto-mount), the
   default container runtime seccomp profile may still block the `mount(2)` call.
   Prefer pre-mounting resctrl on the node (e.g., via system configuration) or enable
@@ -263,6 +272,7 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `securityContext.privileged` | Run container as privileged | `false` |
 | `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE", "SYS_ADMIN"]` |
 | `securityContext.runAsUser` | User ID to run as | `0` |
+| `securityContext.appArmorProfile` | AppArmor profile for the container (type: RuntimeDefault, Unconfined, Localhost) | `{}` |
 | `collector.verbose` | Enable verbose debug output | `false` |
 | `collector.duration` | Track duration in seconds (0 = unlimited) | `0` |
 | `collector.trace` | Enable trace mode to output raw telemetry events at nanosecond granularity to parquet | `false` |

@@ -34,6 +34,12 @@ securityContext:
       # To remove this, ensure kernel.perf_event_paranoid is set to 2 or below.
       - "SYS_ADMIN"
   runAsUser: 0      # Required for loading eBPF programs and writing to `kernel.timer_migration`
+  # Optional: configure AppArmor via container securityContext
+  # Set type to one of: RuntimeDefault, Unconfined, Localhost
+  # When using Localhost, set localhostProfile to the name loaded on the node
+  appArmorProfile: {}
+  #  type: Unconfined
+  #  localhostProfile: "cri-containerd.apparmor.d"
 
 # Collector configuration
 collector:
