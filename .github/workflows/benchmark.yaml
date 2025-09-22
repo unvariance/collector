@@ -10,7 +10,7 @@ on:
       image-type:
         description: 'Image type to use (ubuntu-22.04 or ubuntu-24.04)'
         required: false
-        default: 'ubuntu-22.04'
+        default: 'ubuntu-24.04'
         type: string
       pidstat-period:
         description: 'Collection frequency for pidstat in seconds'
