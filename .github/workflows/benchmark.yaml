@@ -39,6 +39,16 @@ permissions:
   actions: write
 
 jobs:
+  build-collector:
+    name: Build collector (amd64)
+    uses: ./.github/workflows/build-component-artifacts.yaml
+    with:
+      runner: ubuntu-24.04
+      component: collector
+      push: false
+      upload-image-artifact: true
+      upload-binary-artifact: true
+
   setup-runner:
     name: Start EC2 runner
     runs-on: ubuntu-latest
@@ -73,7 +83,7 @@ jobs:
           volume-size: '40'
 
   run-workload:
-    needs: [setup-runner]
+    needs: [setup-runner, build-collector]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: ${{ fromJSON(needs.setup-runner.outputs.timeout-minutes) }}
     outputs:
@@ -88,6 +98,8 @@ jobs:
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       PIDSTAT_PERIOD: ${{ inputs.pidstat-period || '1' }}
       STEADY_STATE_MINUTES: ${{ inputs.steady-state-minutes || '1' }}
+      IMAGE_REPOSITORY: ${{ needs.build-collector.outputs.image_repo }}
+      IMAGE_TAG: ${{ needs.build-collector.outputs.image_tag }}
     steps:
       - name: Create HOME directory
         run: |
@@ -169,28 +181,29 @@ jobs:
       - name: (install) Install awscli
         uses: ./.github/actions/setup-awscli
 
-      - name: (collector) Pre-fetch Collector Image
+      - name: (images) Download collector image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-collector.outputs.image_artifact }}
+          path: collector-image
+
+      - name: (images) Import collector image into k3s
         run: |
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          NRI_INIT_IMAGE="ghcr.io/unvariance/nri-init:latest"
-          echo "Pre-fetching collector image into containerd (k3s runtime): ${COLLECTOR_IMAGE}"
-          # Prefer pulling into containerd so k3s can use the cached image
-          if command -v ctr >/dev/null 2>&1; then
-            echo "Using ctr to pre-pull image into k8s.io namespace"
-            ctr -n k8s.io images pull "${COLLECTOR_IMAGE}" || true
-            echo "Pre-pulling NRI init image: ${NRI_INIT_IMAGE}"
-            ctr -n k8s.io images pull "${NRI_INIT_IMAGE}" || true
-          elif command -v crictl >/dev/null 2>&1; then
-            echo "Using crictl to pre-pull image"
-            crictl pull "${COLLECTOR_IMAGE}" || true
-            echo "Pre-pulling NRI init image: ${NRI_INIT_IMAGE}"
-            crictl pull "${NRI_INIT_IMAGE}" || true
-          else
-            echo "ctr/crictl not found; falling back to podman (may not be visible to k3s)"
-            podman pull "${COLLECTOR_IMAGE}" || true
-            podman pull "${NRI_INIT_IMAGE}" || true
-          fi
-          echo "Pre-fetch completed"
+          set -euxo pipefail
+          echo "Importing built collector image into k3s containerd..."
+          k3s ctr images import collector-image/image.tar
+          echo "Showing images present in k3s containerd (k8s.io namespace):"
+          k3s ctr -n k8s.io images ls | sed -n '1,200p' || true
+      
+      - name: (binary) Download collector binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-collector.outputs.binary_artifact }}
+          path: collector-bin
+
+      - name: (binary) Make collector binary executable
+        run: |
+          chmod +x collector-bin/collector || true
 
       #### Wait for services to be ready
 
@@ -246,7 +259,8 @@ jobs:
           # Install the helm chart using --set for values
           helm install ${COLLECTOR_RELEASE_NAME} ./charts/collector \
             --set collector.verbose=true \
-            --set image.repository="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}" \
+            --set image.repository="${IMAGE_REPOSITORY}" \
+            --set image.tag="${IMAGE_TAG}" \
             --set storage.type=s3 \
             --set storage.prefix="${UUID_PREFIX}" \
             --set resctrl.enabled=true \
@@ -438,31 +452,21 @@ jobs:
         run: |
           # Create directory for trace output
           mkdir -p /tmp/trace_data
-          
+
           TRACE_DURATION="${{ inputs.trace-duration || '10' }}"
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          
-          echo "Starting trace collection for ${TRACE_DURATION} seconds..."
-          
-          # Run collector in trace mode using podman with sudo for BPF access
-          sudo podman run --rm \
-            --privileged \
-            --network host \
-            --pid host \
-            --volume /tmp/trace_data:/tmp/trace_data \
-            --volume /sys:/sys \
-            --volume /proc:/proc:ro \
-            --volume /dev:/dev:ro \
-            --user 0 \
-            "${COLLECTOR_IMAGE}" \
+
+          echo "Starting trace collection for ${TRACE_DURATION} seconds using local collector binary..."
+
+          # Run collector binary in trace mode with sudo for BPF access
+          sudo ./collector-bin/collector \
             --trace \
             --prefix "/tmp/trace_data/trace-" \
             --duration "${TRACE_DURATION}" \
             --parquet-file-size 4000000000 \
             --storage-type local
-          
+
           echo "Trace collection completed"
-          
+
           # List trace files
           echo "Generated trace files:"
           ls -la /tmp/trace_data/
