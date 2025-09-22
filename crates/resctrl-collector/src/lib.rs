@@ -30,6 +30,8 @@ pub fn create_schema() -> SchemaRef {
         Field::new("pod_name", DataType::Utf8, true),
         Field::new("pod_uid", DataType::Utf8, true),
         Field::new("resctrl_group", DataType::Utf8, true),
+        Field::new("total_containers", DataType::Int64, false),
+        Field::new("reconciled_containers", DataType::Int64, false),
         Field::new("llc_occupancy_bytes", DataType::Int64, false),
     ]))
 }
@@ -117,6 +119,8 @@ impl ResctrlCollectorState {
             let mut name_b = StringBuilder::with_capacity(rows_cap, rows_cap * 16);
             let mut uid_b = StringBuilder::with_capacity(rows_cap, rows_cap * 16);
             let mut grp_b = StringBuilder::with_capacity(rows_cap, rows_cap * 24);
+            let mut total_b = Int64Builder::with_capacity(rows_cap);
+            let mut reconciled_b = Int64Builder::with_capacity(rows_cap);
             let mut llc_b = Int64Builder::with_capacity(rows_cap);
 
             let mut rows_appended = 0usize;
@@ -146,6 +150,8 @@ impl ResctrlCollectorState {
                         }
                         uid_b.append_value(uid.as_str());
                         grp_b.append_value(group_path.as_str());
+                        total_b.append_value(pod_state.total_containers as i64);
+                        reconciled_b.append_value(pod_state.reconciled_containers as i64);
                         llc_b.append_value(total as i64);
                         rows_appended += 1;
                     }
@@ -163,6 +169,8 @@ impl ResctrlCollectorState {
                     Arc::new(name_b.finish()),
                     Arc::new(uid_b.finish()),
                     Arc::new(grp_b.finish()),
+                    Arc::new(total_b.finish()),
+                    Arc::new(reconciled_b.finish()),
                     Arc::new(llc_b.finish()),
                 ];
                 let batch = match RecordBatch::try_new(self.schema.clone(), arrays) {
@@ -660,7 +668,9 @@ mod tests {
         assert_eq!(schema.field(3).name(), "pod_name");
         assert_eq!(schema.field(4).name(), "pod_uid");
         assert_eq!(schema.field(5).name(), "resctrl_group");
-        assert_eq!(schema.field(6).name(), "llc_occupancy_bytes");
+        assert_eq!(schema.field(6).name(), "total_containers");
+        assert_eq!(schema.field(7).name(), "reconciled_containers");
+        assert_eq!(schema.field(8).name(), "llc_occupancy_bytes");
 
         // Validate row contents
         assert_eq!(batch.num_rows(), 1);
@@ -684,8 +694,18 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
-        let llc = batch
+        let total = batch
             .column(6)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let reconciled = batch
+            .column(7)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let llc = batch
+            .column(8)
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -694,6 +714,8 @@ mod tests {
         assert_eq!(name.value(0), "p");
         assert_eq!(uid.value(0), "u1");
         assert_eq!(grp.value(0), "/g1");
+        assert_eq!(total.value(0), 1);
+        assert_eq!(reconciled.value(0), 1);
         assert_eq!(llc.value(0), 1234);
     }
 
