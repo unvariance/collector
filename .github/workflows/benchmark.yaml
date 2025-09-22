@@ -303,6 +303,19 @@ jobs:
           kubectl get pods -l app.kubernetes.io/name=collector
           kubectl logs -l app.kubernetes.io/name=collector -c collector --tail=10
 
+      - name: (diagnostics) List cgroup directories (host and collector)
+        run: |
+          echo "=== Host: list all cgroup directories ==="
+          sudo find /sys/fs/cgroup -xdev -type d | sort || true
+
+          echo "\n=== Collector pod: list all cgroup directories ==="
+          POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=collector -o name | head -n1 | cut -d/ -f2)
+          if [ -n "$POD_NAME" ]; then
+            kubectl exec "$POD_NAME" -- sh -c 'find /sys/fs/cgroup -xdev -type d | sort' || true
+          else
+            echo "Collector pod not found"
+          fi
+
       #### Start load generator
 
       - name: (workload) Start Load Generator
