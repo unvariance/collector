@@ -511,12 +511,6 @@ jobs:
           path: system_metrics/
           retention-days: 28
 
-      - name: (collector) Rotate Parquet via SIGUSR1
-        run: |
-          kubectl exec -n default $(kubectl get pods -l app.kubernetes.io/name=collector -o name | cut -d/ -f2) -- /bin/sh -c "kill -USR1 1"
-          # brief delay to allow rotation to complete without triggering restarts
-          sleep 5
-
       - name: (collector) Print Collector Logs
         run: |
           kubectl logs -l app.kubernetes.io/name=collector || true
