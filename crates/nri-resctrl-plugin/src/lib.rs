@@ -78,7 +78,7 @@ impl Default for ResctrlPluginConfig {
         Self {
             group_prefix: "pod_".to_string(),
             cleanup_on_start: true,
-            max_reconcile_passes: 10,
+            max_reconcile_passes: 1,
             concurrency_limit: 1,
             auto_mount: true,
         }
