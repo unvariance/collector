@@ -1,0 +1,1127 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://unvariance.github.io/collector/nri-resctrl-plugin/">
+      
+      
+        <link rel="prev" href="../noise-generators/">
+      
+      
+        <link rel="next" href="../nri-setup/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
+    
+    
+      
+        <title>NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup - Unvariance collector docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.e53b48f4.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#nri-resctrl-plugin-events-counters-retries-and-cleanup" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Unvariance collector docs" class="md-header__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Unvariance collector docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Unvariance collector docs" class="md-nav__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Unvariance collector docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Collector Benchmark Results
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bpf-sync-timer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Shared Sync Timer Integration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Collector Telemetry Strategy
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RMID Tracking Design
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Devlog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../noise-generators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Synthetic Noise Generators
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#event-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Model
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-pod-counters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-Pod Counters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retries
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cleanup Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-and-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing and CI
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing and CI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#test-inventory-and-deltas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Test Inventory and Deltas
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runbooks
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runbooks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-mocked-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local (mocked) tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-e2e-on-a-resctrl-capable-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardware E2E on a resctrl-capable host
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nri-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NRI (Node Resource Interface) Setup Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pipeline Implementation Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resctrl-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Linux Resource Control (resctrl) Operations Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s3-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    S3 Testing for Memory Collector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_13_1" id="__nav_13_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Decisions
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_13_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13_1">
+            <span class="md-nav__icon md-icon"></span>
+            Decisions
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2024-12-21-container-notifications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2024-12-21: Notifications for container lifecycle events
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-01-02-aws-test-runners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-01-02: AWS test runners
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-02-18-getting-cmt-measurements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-02-18: Collecting Intel CMT Measurements
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Ci
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Ci
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/aws-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AWS Setup for CI Testing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#event-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      Event Model
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-pod-counters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Per-Pod Counters
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#retries" class="md-nav__link">
+    <span class="md-ellipsis">
+      Retries
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cleanup-behavior" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cleanup Behavior
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#testing-and-ci" class="md-nav__link">
+    <span class="md-ellipsis">
+      Testing and CI
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Testing and CI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#test-inventory-and-deltas" class="md-nav__link">
+    <span class="md-ellipsis">
+      Test Inventory and Deltas
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runbooks" class="md-nav__link">
+    <span class="md-ellipsis">
+      Runbooks
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Runbooks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#local-mocked-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      Local (mocked) tests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hardware-e2e-on-a-resctrl-capable-host" class="md-nav__link">
+    <span class="md-ellipsis">
+      Hardware E2E on a resctrl-capable host
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="nri-resctrl-plugin-events-counters-retries-and-cleanup">NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup</h1>
+<h2 id="overview">Overview</h2>
+<p>The NRI resctrl plugin manages per-pod resctrl groups under <code>/sys/fs/resctrl</code> and assigns container tasks into the appropriate pod group. It emits events to report pod group state and reconciliation progress.</p>
+<h2 id="event-model">Event Model</h2>
+<ul>
+<li>AddOrUpdate</li>
+<li>Payload: <code>{ pod_uid, group_state, total_containers, reconciled_containers }</code></li>
+<li><code>group_state</code>:<ul>
+<li><code>Exists(path)</code>: resctrl pod group exists at <code>path</code></li>
+<li><code>Failed</code>: group creation failed (e.g., ENOSPC/RMID exhaustion)</li>
+</ul>
+</li>
+<li>Removed</li>
+<li>Payload: <code>{ pod_uid }</code></li>
+<li>Emitted when a pod is removed; the plugin deletes its resctrl group (best effort).</li>
+</ul>
+<p>Events are emitted on:
+- Initial synchronize: one <code>AddOrUpdate</code> per pod (initially reporting <code>total_containers = 0</code> and <code>reconciled_containers = 0</code>), followed by an event whenever either counter changes.
+- Pod sandbox lifecycle events (<code>RUN_POD_SANDBOX</code>, <code>REMOVE_POD_SANDBOX</code>).
+- Container create/update/remove transitions that change the counters or the pod group state.</p>
+<h2 id="per-pod-counters">Per-Pod Counters</h2>
+<ul>
+<li><code>total_containers</code>: number of known containers for the pod</li>
+<li><code>reconciled_containers</code>: number of containers whose PIDs have been assigned to the pod group</li>
+</ul>
+<p>Counters increment whenever a container becomes known, increment again when it reconciles successfully, and decrement on removal.</p>
+<h2 id="retries">Retries</h2>
+<ul>
+<li><code>retry_group_creation(pod_uid)</code></li>
+<li>Attempts to create the failed group again</li>
+<li>On success, transitions <code>group_state</code> to <code>Exists(path)</code> and emits AddOrUpdate</li>
+<li>On capacity error (ENOSPC), returns <code>Error::Capacity</code> and emits no event</li>
+<li><code>retry_container_reconcile(container_id)</code></li>
+<li>Re-runs PID assignment for a specific container</li>
+<li>Emits AddOrUpdate only if the container transitions to Reconciled (improving counts)</li>
+<li><code>retry_all_once()</code></li>
+<li>Attempts a single pass across all failed pods and partial containers</li>
+<li>Stops group-creation retries on the first capacity error encountered in this pass</li>
+</ul>
+<h2 id="cleanup-behavior">Cleanup Behavior</h2>
+<ul>
+<li>On startup synchronize, when <code>cleanup_on_start=true</code> and resctrl is mounted:</li>
+<li>Removes only resctrl groups at the root that start with the configured <code>group_prefix</code></li>
+<li>Removes only top-level <code>mon_groups</code> under the resctrl root that start with the prefix</li>
+<li>Does not traverse into per-group <code>mon_groups</code></li>
+<li>Emits no pod events for cleanup-only activity</li>
+</ul>
+<h2 id="testing-and-ci">Testing and CI</h2>
+<ul>
+<li>Mocked unit/integration tests (default):</li>
+<li>Use an in-memory filesystem provider and test PID source for determinism</li>
+<li>Cover startup cleanup, synchronize counts, late-container reconcile, sandbox lifecycle, capacity failures, and retry flows</li>
+<li>Hardware/KIND E2E (optional):</li>
+<li>Run on an EC2 runner with a KIND cluster configured for NRI</li>
+<li>Validates that groups are created, tasks are assigned, counts improve, and cleanup occurs on pod removal</li>
+<li>Tests are <code>#[ignore]</code> by default; CI enables them with <code>cargo test -- --ignored</code></li>
+<li>CI wiring uses the orchestrator <code>.github/workflows/ci.yaml</code>, which invokes the reusable workflow <code>.github/workflows/reusable-test-resctrl.yaml</code> to run mocked tests on GitHub-hosted runners and execute the hardware/K3s jobs on EC2 when enabled.</li>
+</ul>
+<h3 id="test-inventory-and-deltas">Test Inventory and Deltas</h3>
+<ul>
+<li><code>src/lib.rs</code> mocked tests (existing) cover auto-mount true/false, startup cleanup, retry flows, and now verify PID assignment via <code>list_group_tasks</code> in addition to event sequencing.</li>
+<li><code>tests/integration_test.rs::test_plugin_full_flow</code> (new) drives a live KIND cluster: pre/post registration pods, <code>kubectl debug</code> ephemeral container addition, and pod removal cleanup.</li>
+<li><code>src/lib.rs::test_cleanup_on_start_removes_only_prefix</code> (existing) covers startup cleanup with a mocked filesystem.</li>
+<li><code>tests/integration_test.rs::test_startup_cleanup_e2e</code> (new) validates <code>cleanup_on_start</code> behavior against the real resctrl filesystem.</li>
+<li><code>tests/integration_test.rs::test_capacity_retry_e2e</code> (new) exercises RMID exhaustion, retry flows, and PID verification on hardware.</li>
+</ul>
+<h2 id="runbooks">Runbooks</h2>
+<h3 id="local-mocked-tests">Local (mocked) tests</h3>
+<pre><code>cargo test -p nri-resctrl-plugin -- --nocapture
+</code></pre>
+<h3 id="hardware-e2e-on-a-resctrl-capable-host">Hardware E2E on a resctrl-capable host</h3>
+<p>1) Ensure <code>/sys/fs/resctrl</code> is mountable and you have CAP_SYS_ADMIN
+2) Create a KIND cluster with NRI enabled and host mounts:</p>
+<pre><code>kind create cluster --config - &lt;&lt;'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  extraMounts:
+  - hostPath: /tmp/nri
+    containerPath: /var/run/nri
+  - hostPath: /tmp/nri-conf
+    containerPath: /etc/nri/conf.d
+  - hostPath: /tmp/nri-plugins
+    containerPath: /opt/nri/plugins
+containerdConfigPatches:
+- |-
+  [plugins.&quot;io.containerd.nri.v1.nri&quot;]
+    disable = false
+    disable_connections = false
+    socket_path = &quot;/var/run/nri/nri.sock&quot;
+    plugin_config_path = &quot;/etc/nri/conf.d&quot;
+    plugin_path = &quot;/opt/nri/plugins&quot;
+EOF
+</code></pre>
+<p>3) Build and run integration tests against the KIND NRI socket:</p>
+<pre><code>export NRI_SOCKET_PATH=/tmp/nri/nri.sock
+cargo test -p nri-resctrl-plugin --test integration_test -- --ignored --nocapture
+</code></pre>
+<p>The test <code>test_plugin_full_flow</code> creates pods before and after plugin registration, exercises an ephemeral container via <code>kubectl debug</code> (when available), and deletes pods to validate <code>Removed</code> events and cleanup.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>

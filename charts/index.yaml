@@ -1,0 +1,119 @@
+apiVersion: v1
+entries:
+  collector:
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-23T13:35:21.657120644Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: b4f42e1a3626d4b12b7745bbf93bd862c161d081c4314e785f886000b30f6bc2
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.3.0.tgz
+    version: 0.3.0
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-23T13:35:21.656521295Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: c9e9e81b116e0c33ff0e8199358a3caeae9ded12eb6cd8ea485a19909ac238be
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.2.0.tgz
+    version: 0.2.0
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-23T13:35:21.655943025Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: 469a154f7ebc58d61acd44a425fe65f1d8942f8dfc418ed4d5ec8c9464c0ffc6
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.1.2.tgz
+    version: 0.1.2
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-23T13:35:21.655448531Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: 3da766b265c3fa2ca9e6d8eecf08017c35f9adc92be2d0d9480302db78705707
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.1.1.tgz
+    version: 0.1.1
+  - annotations:
+      category: Monitoring
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2025-09-23T13:35:21.654946734Z"
+    description: A Helm chart for the Unvariance Collector, an eBPF-based tool for
+      collecting memory subsystem metrics
+    digest: c3314a1f3522c3263bc02be35eac380dc0e60339b7f9abfd797a02ddae1f3f87
+    home: https://github.com/unvariance/collector
+    keywords:
+    - ebpf
+    - memory
+    - metrics
+    - parquet
+    maintainers:
+    - name: Unvariance Collector Team
+    name: collector
+    sources:
+    - https://github.com/unvariance/collector
+    type: application
+    urls:
+    - https://unvariance.github.io/collector/charts/collector-0.1.0.tgz
+    version: 0.1.0
+generated: "2025-09-23T13:35:21.654319654Z"

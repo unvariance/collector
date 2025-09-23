@@ -1,0 +1,1435 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://unvariance.github.io/collector/nri-setup/">
+      
+      
+        <link rel="prev" href="../nri-resctrl-plugin/">
+      
+      
+        <link rel="next" href="../pipeline-implementation/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.20">
+    
+    
+      
+        <title>NRI (Node Resource Interface) Setup Guide - Unvariance collector docs</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.e53b48f4.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#nri-node-resource-interface-setup-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Unvariance collector docs" class="md-header__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Unvariance collector docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              NRI (Node Resource Interface) Setup Guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Unvariance collector docs" class="md-nav__button md-logo" aria-label="Unvariance collector docs" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Unvariance collector docs
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Home
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmark/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Collector Benchmark Results
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../bpf-sync-timer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Shared Sync Timer Integration
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../collection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Memory Collector Telemetry Strategy
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    RMID Tracking Design
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../devlog/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Devlog
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../noise-generators/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Synthetic Noise Generators
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../nri-resctrl-plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    NRI Resctrl Plugin: Events, Counters, Retries, and Cleanup
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    NRI (Node Resource Interface) Setup Guide
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    NRI (Node Resource Interface) Setup Guide
+    
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    <span class="md-ellipsis">
+      Background
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Background">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#k3s-versions-and-nri" class="md-nav__link">
+    <span class="md-ellipsis">
+      K3s Versions and NRI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kind-versions-and-nri" class="md-nav__link">
+    <span class="md-ellipsis">
+      KIND Versions and NRI
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-nri-init-container-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the NRI Init Container Works
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#operating-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Operating Modes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Operating Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-detection-only-default-safest" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Detection Only (Default, Safest)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-configure-without-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Configure Without Restart
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-full-setup-with-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Full Setup with Restart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-deployment-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Production Deployment Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Production Deployment Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-rolling-update-safest" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended: Rolling Update (Safest)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-nri-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manual NRI Setup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring-nri-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring NRI Status
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring NRI Status">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#check-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Check Logs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-log-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Log Messages
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security Considerations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-improvements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Future Improvements
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pipeline-implementation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Pipeline Implementation Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../resctrl-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Linux Resource Control (resctrl) Operations Guide
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../s3-testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    S3 Testing for Memory Collector
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13" >
+        
+          
+          <label class="md-nav__link" for="__nav_13" id="__nav_13_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Architecture
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13">
+            <span class="md-nav__icon md-icon"></span>
+            Architecture
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_13_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_13_1" id="__nav_13_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Decisions
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_13_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_13_1">
+            <span class="md-nav__icon md-icon"></span>
+            Decisions
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2024-12-21-container-notifications/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2024-12-21: Notifications for container lifecycle events
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-01-02-aws-test-runners/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-01-02: AWS test runners
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/decisions/2025-02-18-getting-cmt-measurements/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    2025-02-18: Collecting Intel CMT Measurements
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_14" id="__nav_14_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Ci
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_14">
+            <span class="md-nav__icon md-icon"></span>
+            Ci
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ci/aws-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    AWS Setup for CI Testing
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      Overview
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    <span class="md-ellipsis">
+      Background
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Background">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#k3s-versions-and-nri" class="md-nav__link">
+    <span class="md-ellipsis">
+      K3s Versions and NRI
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kind-versions-and-nri" class="md-nav__link">
+    <span class="md-ellipsis">
+      KIND Versions and NRI
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-nri-init-container-works" class="md-nav__link">
+    <span class="md-ellipsis">
+      How the NRI Init Container Works
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration Options
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#operating-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      Operating Modes
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Operating Modes">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-detection-only-default-safest" class="md-nav__link">
+    <span class="md-ellipsis">
+      1. Detection Only (Default, Safest)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-configure-without-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      2. Configure Without Restart
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-full-setup-with-restart" class="md-nav__link">
+    <span class="md-ellipsis">
+      3. Full Setup with Restart
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#production-deployment-strategy" class="md-nav__link">
+    <span class="md-ellipsis">
+      Production Deployment Strategy
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Production Deployment Strategy">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-rolling-update-safest" class="md-nav__link">
+    <span class="md-ellipsis">
+      Recommended: Rolling Update (Safest)
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#manual-nri-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      Manual NRI Setup
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#monitoring-nri-status" class="md-nav__link">
+    <span class="md-ellipsis">
+      Monitoring NRI Status
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Monitoring NRI Status">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#check-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      Check Logs
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-log-messages" class="md-nav__link">
+    <span class="md-ellipsis">
+      Expected Log Messages
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      Security Considerations
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#future-improvements" class="md-nav__link">
+    <span class="md-ellipsis">
+      Future Improvements
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="nri-node-resource-interface-setup-guide">NRI (Node Resource Interface) Setup Guide</h1>
+<h2 id="overview">Overview</h2>
+<p>The Memory Collector uses Node Resource Interface (NRI) to access pod and container metadata in Kubernetes. This guide explains how to enable NRI support for the collector.</p>
+<h2 id="background">Background</h2>
+<p>NRI support in containerd begins with containerd 1.7 (initially experimental) and is enabled-by-default starting with containerd 2.0. This has important implications for environments on older runtimes:</p>
+<ul>
+<li>NOTE: containerd 1.6.x and earlier do not include the NRI plugin at all. No configuration can enable NRI on 1.6.x — you must upgrade to containerd &gt;= 1.7 to use NRI.</li>
+</ul>
+<p>NRI is disabled by default in containerd 1.7.x, which affects many Kubernetes distributions:</p>
+<ul>
+<li><strong>K3s</strong>: See the K3s version matrix below (some releases use containerd 2.0 with NRI enabled by default; older lines use 1.7.x with NRI disabled)</li>
+<li><strong>Ubuntu LTS</strong>: 24.04, 22.04, 20.04 ship containerd 1.7.x or older (NRI disabled)</li>
+<li><strong>Cloud Providers</strong>: Most managed Kubernetes services use containerd 1.7.x (NRI disabled)</li>
+</ul>
+<p>Without NRI enabled, the collector cannot access pod and container metadata, limiting its ability to correlate performance metrics with specific workloads.</p>
+<p>If the init container detects containerd &lt; 1.7, it skips NRI configuration with a clear warning. Set <code>nri.failIfUnavailable=true</code> if you prefer the pod to fail fast in that case.</p>
+<h3 id="k3s-versions-and-nri">K3s Versions and NRI</h3>
+<p>K3s adopted containerd 2.0 (which enables NRI by default) beginning in February 2025 for specific release lines. Earlier versions continue to use containerd 1.7.x (where NRI is disabled by default).</p>
+<ul>
+<li>NRI enabled by default (via containerd 2.0):</li>
+<li>K3s <code>v1.31.6+</code> (starting with <code>v1.31.6+k3s1</code>)</li>
+<li>K3s <code>v1.32.2+</code> (starting with <code>v1.32.2+k3s1</code>)</li>
+<li>No backports to older minors: the <code>v1.30.x</code>, <code>v1.29.x</code>, and <code>v1.28.x</code> release lines remain on containerd 1.7.x (NRI disabled by default).</li>
+<li>Prior to the above cutovers (e.g., K3s <code>v1.31.0–v1.31.5</code>, <code>v1.32.0–v1.32.1</code>), containerd 1.7.x is used and NRI must be explicitly enabled.</li>
+</ul>
+<p>What this means for K3s clusters:</p>
+<ul>
+<li>If your cluster runs one of the versions with containerd 2.0 (see above), NRI is already enabled by default and no configuration is required.</li>
+<li>If your cluster runs any other supported K3s version (including all of <code>v1.30.x</code> and older minors, and early <code>v1.31</code>/<code>v1.32</code> patch releases), you need to enable NRI explicitly (use this guide or upgrade to a containerd 2.0-based K3s patch).</li>
+</ul>
+<h3 id="kind-versions-and-nri">KIND Versions and NRI</h3>
+<p>NRI status by KIND release:</p>
+<ul>
+<li>KIND <code>v0.27.0+</code>: NRI enabled by default (via containerd 2.x)</li>
+<li>KIND <code>v0.26.0</code> and earlier: NRI not enabled by default</li>
+</ul>
+<p>Note: Unlike K3s (which adopted containerd 2.0 only in select release lines), each KIND release supports multiple Kubernetes versions. When KIND <code>v0.27.0</code> adopted containerd 2.0, it applied across all Kubernetes versions you can deploy with that KIND release.</p>
+<p>In summary: To get NRI enabled by default in KIND, use <code>v0.27.0</code> or later.</p>
+<h2 id="how-the-nri-init-container-works">How the NRI Init Container Works</h2>
+<p>The collector Helm chart includes an init container that:</p>
+<ol>
+<li><strong>Checks NRI availability</strong>: Looks for the NRI socket at <code>/var/run/nri/nri.sock</code></li>
+<li><strong>Reports status</strong>: Logs whether NRI is enabled or disabled</li>
+<li><strong>Configures containerd</strong> (optional): Updates containerd configuration to enable NRI</li>
+<li><strong>Restarts containerd</strong> (optional): Applies the configuration by restarting the service</li>
+</ol>
+<h2 id="configuration-options">Configuration Options</h2>
+<p>The NRI feature is controlled by Helm values:</p>
+<pre><code class="language-yaml">nri:
+  configure: false         # Default: detection-only (safest)
+  restart: false           # Restart containerd to apply changes
+  failIfUnavailable: false # Fail pod if NRI cannot be enabled/detected
+  init:
+    image:
+      repository: ghcr.io/unvariance/nri-init
+      tag: latest
+      pullPolicy: IfNotPresent
+    command: [&quot;/bin/nri-init&quot;]
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+</code></pre>
+<h3 id="operating-modes">Operating Modes</h3>
+<h4 id="1-detection-only-default-safest">1. Detection Only (Default, Safest)</h4>
+<pre><code class="language-bash">helm install collector ./charts/collector
+</code></pre>
+<ul>
+<li>Checks and reports NRI status only</li>
+<li>No system changes; collector runs without metadata if NRI is disabled</li>
+</ul>
+<p>Optional: fail fast when NRI is unavailable</p>
+<pre><code class="language-bash">helm install collector ./charts/collector \
+  --set nri.failIfUnavailable=true
+</code></pre>
+<h4 id="2-configure-without-restart">2. Configure Without Restart</h4>
+<pre><code class="language-bash">helm install collector ./charts/collector \
+  --set nri.configure=true \
+  --set nri.restart=false
+</code></pre>
+<ul>
+<li>Updates containerd configuration</li>
+<li>Does NOT restart containerd</li>
+<li>Prepares nodes for manual restart during maintenance</li>
+</ul>
+<p>The chart uses an init container binary. You can override the image/tag if needed:</p>
+<pre><code class="language-bash">helm install collector ./charts/collector \
+  --set nri.init.image.repository=ghcr.io/unvariance/nri-init \
+  --set nri.init.image.tag=latest \
+  --set nri.init.image.pullPolicy=IfNotPresent
+</code></pre>
+<h4 id="3-full-setup-with-restart">3. Full Setup with Restart</h4>
+<pre><code class="language-bash">helm install collector ./charts/collector \
+  --set nri.configure=true \
+  --set nri.restart=true
+</code></pre>
+<ul>
+<li>Updates containerd configuration</li>
+<li>Restarts containerd immediately</li>
+<li><strong>WARNING</strong>: May temporarily disrupt container management</li>
+</ul>
+<h2 id="production-deployment-strategy">Production Deployment Strategy</h2>
+<h3 id="recommended-rolling-update-safest">Recommended: Rolling Update (Safest)</h3>
+<ol>
+<li>
+<p><strong>Initial Deploy (Default)</strong>: Detection-only to assess environment
+   <code>bash
+   helm install collector ./charts/collector</code>
+   Review init logs to confirm status:
+   <code>bash
+   kubectl logs -n &lt;namespace&gt; &lt;collector-pod&gt; -c nri-init</code></p>
+</li>
+<li>
+<p><strong>Label a first batch of nodes</strong>
+   <code>bash
+   kubectl label node node1 nri-update=batch1
+   kubectl label node node2 nri-update=batch1</code></p>
+</li>
+<li>
+<p><strong>Enable NRI for batch1</strong> (configure and restart only on labeled nodes)
+   <code>bash
+   helm upgrade collector ./charts/collector \
+     --set nri.configure=true \
+     --set nri.restart=true \
+     --set nodeSelector.nri-update=batch1</code></p>
+</li>
+<li>
+<p><strong>Verify NRI</strong> on batch1 before proceeding
+   <code>bash
+   kubectl get pods -o wide | grep collector
+   kubectl exec -n &lt;namespace&gt; &lt;collector-pod-on-batch1&gt; -- ls -la /var/run/nri/nri.sock</code></p>
+</li>
+<li>
+<p><strong>Roll forward</strong>: relabel next set (e.g., batch2) and repeat step 3
+   <code>bash
+   kubectl label node node3 nri-update=batch2
+   helm upgrade collector ./charts/collector \
+     --set nri.configure=true \
+     --set nri.restart=true \
+     --set nodeSelector.nri-update=batch2</code></p>
+</li>
+<li>
+<p><strong>Finish</strong>: when all nodes are updated, optionally remove the selector to return to normal scheduling
+   <code>bash
+   helm upgrade collector ./charts/collector --reuse-values --set nodeSelector={}</code></p>
+</li>
+</ol>
+<h3 id="manual-nri-setup">Manual NRI Setup</h3>
+<p>If you prefer manual configuration:</p>
+<ol>
+<li>
+<p><strong>Edit containerd config</strong>:
+   <code>toml
+   # /etc/containerd/config.toml
+   [plugins."io.containerd.nri.v1.nri"]
+     disable = false
+     socket_path = "/var/run/nri/nri.sock"</code></p>
+</li>
+<li>
+<p><strong>Restart containerd</strong>:
+   <code>bash
+   systemctl restart containerd</code></p>
+</li>
+<li>
+<p><strong>Deploy collector</strong> without NRI configuration:
+   <code>bash
+   helm install collector ./charts/collector \
+     --set nri.configure=false</code></p>
+</li>
+</ol>
+<h2 id="monitoring-nri-status">Monitoring NRI Status</h2>
+<h3 id="check-logs">Check Logs</h3>
+<pre><code class="language-bash"># View all collector pods' init container logs
+kubectl logs -l app.kubernetes.io/name=collector -c nri-init
+</code></pre>
+<h3 id="expected-log-messages">Expected Log Messages</h3>
+<p>These examples reflect the init binary's actual log strings.</p>
+<p><strong>NRI Enabled</strong>:</p>
+<pre><code>INFO Starting NRI initialization check
+INFO Configuration: configure=false, restart=false
+INFO NRI socket found at /var/run/nri/nri.sock
+INFO NRI configuration is disabled (configure=false)
+INFO Completed: configured=false, restarted=false, socket=true
+INFO nri-init done
+</code></pre>
+<p><strong>NRI Disabled (configure=false)</strong>:</p>
+<pre><code>INFO Starting NRI initialization check
+INFO Configuration: configure=false, restart=false
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO NRI configuration is disabled (configure=false)
+INFO Completed: configured=false, restarted=false, socket=false
+INFO nri-init done
+</code></pre>
+<p><strong>NRI Configured (restart=false)</strong>:</p>
+<pre><code>INFO Starting NRI initialization check
+INFO Configuration: configure=true, restart=false
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO Updating containerd NRI configuration at /etc/containerd/config.toml
+INFO Completed: configured=true, restarted=false, socket=false
+INFO nri-init done
+</code></pre>
+<p>Note: If the configuration is already present, you may see:</p>
+<pre><code>INFO Containerd NRI configuration already up to date
+</code></pre>
+<p><strong>NRI Enabled After Restart</strong>:</p>
+<pre><code>INFO Starting NRI initialization check
+INFO Configuration: configure=true, restart=true
+WARN NRI socket not found at /var/run/nri/nri.sock
+INFO Updating containerd NRI configuration at /etc/containerd/config.toml
+INFO Issued restart via systemctl for containerd
+INFO NRI socket became available
+INFO Completed: configured=true, restarted=true, socket=true
+INFO nri-init done
+</code></pre>
+<h2 id="security-considerations">Security Considerations</h2>
+<p>The init container requires privileged access to:
+- Modify containerd configuration files
+- Restart system services (when enabled)
+- Access host filesystem paths</p>
+<p>These permissions are only used during initialization and are not required by the main collector container.</p>
+<h2 id="future-improvements">Future Improvements</h2>
+<ul>
+<li><strong>Containerd 2.0</strong>: NRI is enabled by default (no configuration needed)</li>
+<li><strong>Automated detection</strong>: Future versions may auto-detect safe restart windows</li>
+<li><strong>Gradual rollout</strong>: Built-in support for phased node updates</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      <script id="__config" type="application/json">{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.973d3a69.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.f55a23d4.min.js"></script>
+      
+    
+  </body>
+</html>
