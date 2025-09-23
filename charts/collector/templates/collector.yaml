@@ -259,6 +259,5 @@ spec:
         - name: resctrl
           hostPath:
             path: {{ .Values.resctrl.mountpoint }}
-            # Create the directory on the host if missing; may be a plain dir until mounted
             type: DirectoryOrCreate
         {{- end }}
