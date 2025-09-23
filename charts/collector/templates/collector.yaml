@@ -209,15 +209,10 @@ spec:
               mountPath: /sys/kernel/debug/tracing
             - name: cgroup
               mountPath: /sys/fs/cgroup
-              mountPropagation: HostToContainer
             {{- if .Values.resctrl.enabled }}
             - name: resctrl
               mountPath: {{ .Values.resctrl.mountpoint }}
               readOnly: false
-              {{- if .Values.resctrl.autoMountHost }}
-              # Use HostToContainer to avoid requiring privileged security context
-              mountPropagation: HostToContainer
-              {{- end }}
             {{- end }}
       volumes:
         {{- if eq .Values.storage.type "local" }}
