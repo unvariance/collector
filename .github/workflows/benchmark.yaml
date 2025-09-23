@@ -265,7 +265,6 @@ jobs:
             --set storage.prefix="${UUID_PREFIX}" \
             --set resctrl.enabled=true \
             --set resctrl.autoMountHost=true \
-            --set securityContext.privileged=true \
             --set nri.init.image.repository=ghcr.io/unvariance/collector/nri-init \
             --set resctrl.prefix="${UUID_PREFIX}resctrl-occupancy-" \
             --set resctrl.samplingInterval="100ms" \
