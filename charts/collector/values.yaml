@@ -34,6 +34,9 @@ securityContext:
       # To remove this, ensure kernel.perf_event_paranoid is set to 2 or below.
       - "SYS_ADMIN"
   runAsUser: 0      # Required for loading eBPF programs and writing to `kernel.timer_migration`
+  # Optional: configure AppArmor via container securityContext
+  # If empty, defaults to Unconfined when resctrl.enabled=true
+  appArmorProfile: {}
 
 # Collector configuration
 collector:
@@ -64,6 +67,19 @@ resctrl:
   mountpoint: "/sys/fs/resctrl"
   # Distinct object/file prefix for resctrl parquet outputs
   prefix: "resctrl-occupancy-"
+  # Optionally mount resctrl on the host before the collector starts.
+  # This requires privileged access and bidirectional mount propagation.
+  # If disabled, the collector expects /sys/fs/resctrl to already be mounted on the node.
+  autoMountHost: false
+  init:
+    image:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+      allowPrivilegeEscalation: true
+      runAsUser: 0
 
 # Storage configuration
 storage:
@@ -131,7 +147,7 @@ nri:
   # Init container image
   init:
     image:
-      repository: ghcr.io/unvariance/nri-init
+      repository: ghcr.io/unvariance/collector/nri-init
       tag: latest
       pullPolicy: IfNotPresent
     command: ["/bin/nri-init"]

@@ -265,7 +265,16 @@ pub fn compute_full_cgroup_path(
         let runtime = parts[1]; // e.g., "cri-containerd"
         let container_id = parts[2]; // e.g., "cafb..."
         let full_parent = ensure_cgroup_prefix(pod_cgroup_parent);
-        return format!("{}/{}-{}.scope", full_parent, runtime, container_id);
+
+        // Detect cgroup hierarchy style:
+        // - systemd driver: path contains ".slice" segments and containers are
+        //   named like "<runtime>-<id>.scope"
+        // - cgroupfs driver: path uses "kubepods/.../pod<uid>/<id>" without .slice
+        if full_parent.contains(".slice") {
+            return format!("{}/{}-{}.scope", full_parent, runtime, container_id);
+        } else {
+            return format!("{}/{}", full_parent, container_id);
+        }
     }
 
     // Fallback: return container path (already absolute) with the cgroup prefix if missing

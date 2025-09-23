@@ -78,7 +78,7 @@ impl Default for ResctrlPluginConfig {
         Self {
             group_prefix: "pod_".to_string(),
             cleanup_on_start: true,
-            max_reconcile_passes: 10,
+            max_reconcile_passes: 1,
             concurrency_limit: 1,
             auto_mount: true,
         }
@@ -794,7 +794,7 @@ mod tests {
         let cfg = ResctrlPluginConfig::default();
         assert_eq!(cfg.group_prefix, "pod_");
         assert!(cfg.cleanup_on_start);
-        assert_eq!(cfg.max_reconcile_passes, 10);
+        assert_eq!(cfg.max_reconcile_passes, 1);
         assert_eq!(cfg.concurrency_limit, 1);
         assert!(cfg.auto_mount);
     }

@@ -10,7 +10,7 @@ on:
       image-type:
         description: 'Image type to use (ubuntu-22.04 or ubuntu-24.04)'
         required: false
-        default: 'ubuntu-22.04'
+        default: 'ubuntu-24.04'
         type: string
       pidstat-period:
         description: 'Collection frequency for pidstat in seconds'
@@ -39,6 +39,16 @@ permissions:
   actions: write
 
 jobs:
+  build-collector:
+    name: Build collector (amd64)
+    uses: ./.github/workflows/build-component-artifacts.yaml
+    with:
+      runner: ubuntu-24.04
+      component: collector
+      push: false
+      upload-image-artifact: true
+      upload-binary-artifact: true
+
   setup-runner:
     name: Start EC2 runner
     runs-on: ubuntu-latest
@@ -73,7 +83,7 @@ jobs:
           volume-size: '40'
 
   run-workload:
-    needs: [setup-runner]
+    needs: [setup-runner, build-collector]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: ${{ fromJSON(needs.setup-runner.outputs.timeout-minutes) }}
     outputs:
@@ -88,6 +98,8 @@ jobs:
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
       PIDSTAT_PERIOD: ${{ inputs.pidstat-period || '1' }}
       STEADY_STATE_MINUTES: ${{ inputs.steady-state-minutes || '1' }}
+      IMAGE_REPOSITORY: ${{ needs.build-collector.outputs.image_repo }}
+      IMAGE_TAG: ${{ needs.build-collector.outputs.image_tag }}
     steps:
       - name: Create HOME directory
         run: |
@@ -117,7 +129,6 @@ jobs:
 
       - name: (k8s) Add Helm Repositories
         run: |
-          helm repo add unvariance https://unvariance.github.io/collector/charts
           helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
           helm repo update
 
@@ -170,12 +181,29 @@ jobs:
       - name: (install) Install awscli
         uses: ./.github/actions/setup-awscli
 
-      - name: (collector) Pre-fetch Collector Image
+      - name: (images) Download collector image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-collector.outputs.image_artifact }}
+          path: collector-image
+
+      - name: (images) Import collector image into k3s
         run: |
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          echo "Pre-fetching collector image: ${COLLECTOR_IMAGE}"
-          podman pull "${COLLECTOR_IMAGE}" || true
-          echo "Pre-fetch completed"
+          set -euxo pipefail
+          echo "Importing built collector image into k3s containerd..."
+          k3s ctr images import collector-image/image.tar
+          echo "Showing images present in k3s containerd (k8s.io namespace):"
+          k3s ctr -n k8s.io images ls | sed -n '1,200p' || true
+      
+      - name: (binary) Download collector binary artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-collector.outputs.binary_artifact }}
+          path: collector-bin
+
+      - name: (binary) Make collector binary executable
+        run: |
+          chmod +x collector-bin/collector || true
 
       #### Wait for services to be ready
 
@@ -221,7 +249,7 @@ jobs:
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
 
-      - name: (collector) Deploy Collector Helm Chart
+      - name: (collector) Deploy Collector Helm Chart (local chart)
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
@@ -229,11 +257,17 @@ jobs:
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
           
           # Install the helm chart using --set for values
-          helm install ${COLLECTOR_RELEASE_NAME} unvariance/collector \
+          helm install ${COLLECTOR_RELEASE_NAME} ./charts/collector \
             --set collector.verbose=true \
-            --set image.repository="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}" \
+            --set image.repository="${IMAGE_REPOSITORY}" \
+            --set image.tag="${IMAGE_TAG}" \
             --set storage.type=s3 \
             --set storage.prefix="${UUID_PREFIX}" \
+            --set resctrl.enabled=true \
+            --set resctrl.autoMountHost=true \
+            --set nri.init.image.repository=ghcr.io/unvariance/collector/nri-init \
+            --set resctrl.prefix="${UUID_PREFIX}resctrl-occupancy-" \
+            --set resctrl.samplingInterval="100ms" \
             --set storage.s3.bucket="${S3_BUCKET}" \
             --set storage.s3.region="${AWS_REGION}" \
             --set storage.s3.auth.method=secret \
@@ -253,8 +287,8 @@ jobs:
           COLLECTOR_START_TIME=$(date +%s)
 
           # Always describe pods, regardless of wait result
-          echo "Describing collector pods:"
-          kubectl describe pods -l app.kubernetes.io/name=collector
+          echo "Getting collector pods yaml:"
+          kubectl get pods -l app.kubernetes.io/name=collector -o yaml
           
           # Only fail the job if wait failed
           if [ -n "$WAIT_STATUS" ] && [ "$WAIT_STATUS" -ne 0 ]; then
@@ -281,6 +315,57 @@ jobs:
         run: |
           kubectl get pods -l app.kubernetes.io/name=collector
           kubectl logs -l app.kubernetes.io/name=collector -c collector --tail=10
+
+      - name: (diagnostics) List cgroup directories (host and collector)
+        run: |
+          echo "=== Host: list all cgroup directories ==="
+          sudo find /sys/fs/cgroup -xdev -type d | sort || true
+
+          echo "\n=== Collector pod: list all cgroup directories ==="
+          POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=collector -o name | head -n1 | cut -d/ -f2)
+          if [ -n "$POD_NAME" ]; then
+            kubectl exec "$POD_NAME" -- sh -c 'find /sys/fs/cgroup -xdev -type d | sort' || true
+          else
+            echo "Collector pod not found"
+          fi
+
+      - name: (diagnostics) Host and pod security/mount checks
+        run: |
+          echo "=== Host: AppArmor and resctrl mount state ==="
+          if command -v aa-status >/dev/null 2>&1; then
+            sudo aa-status || true
+          else
+            echo "aa-status not available"
+          fi
+          if [ -r /sys/module/apparmor/parameters/enabled ]; then
+            echo -n "AppArmor enabled: "; cat /sys/module/apparmor/parameters/enabled || true
+          fi
+          echo "-- host mounts for resctrl --"
+          mount | grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" || true
+          grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" /proc/mounts || true
+          ls -ld /sys/fs/resctrl || true
+          echo "-- host resctrl write test (no-op) --"
+          if [ -d /sys/fs/resctrl ]; then
+            if [ -w /sys/fs/resctrl ]; then echo "host:/sys/fs/resctrl writable"; else echo "host:/sys/fs/resctrl NOT writable"; fi
+          fi
+
+          echo "\n=== Collector pod: identity, LSMs, and resctrl mount ==="
+          POD_NAME=$(kubectl get pods -l app.kubernetes.io/name=collector -o name | head -n1 | cut -d/ -f2)
+          if [ -z "$POD_NAME" ]; then
+            echo "Collector pod not found"; exit 0
+          fi
+          echo "-- pod user and caps --"
+          kubectl exec "$POD_NAME" -- sh -c 'id -u && id -g && umask' || true
+          echo "-- pod seccomp --"
+          kubectl exec "$POD_NAME" -- sh -c "grep '^Seccomp:' /proc/self/status || true" || true
+          echo "-- pod AppArmor profile --"
+          kubectl exec "$POD_NAME" -- sh -c 'cat /proc/self/attr/current 2>/dev/null || echo "no AppArmor attr"' || true
+          echo "-- pod resctrl mount and permissions --"
+          kubectl exec "$POD_NAME" -- sh -c 'mount | grep -E "[[:space:]]/sys/fs/resctrl[[:space:]]" || true' || true
+          kubectl exec "$POD_NAME" -- sh -c 'ls -ld /sys/fs/resctrl /sys/fs/resctrl/mon_groups 2>/dev/null || true' || true
+          kubectl exec "$POD_NAME" -- sh -c 'test -w /sys/fs/resctrl && echo "pod:/sys/fs/resctrl writable" || echo "pod:/sys/fs/resctrl NOT writable"' || true
+          echo "-- pod env of interest --"
+          kubectl exec "$POD_NAME" -- sh -c 'env | grep -E "^(RESCTRL_|RUST_LOG|STORAGE_|AWS_)" || true' || true
 
       #### Start load generator
 
@@ -366,31 +451,21 @@ jobs:
         run: |
           # Create directory for trace output
           mkdir -p /tmp/trace_data
-          
+
           TRACE_DURATION="${{ inputs.trace-duration || '10' }}"
-          COLLECTOR_IMAGE="${{ inputs.collector-repository || 'ghcr.io/unvariance/collector/collector' }}"
-          
-          echo "Starting trace collection for ${TRACE_DURATION} seconds..."
-          
-          # Run collector in trace mode using podman with sudo for BPF access
-          sudo podman run --rm \
-            --privileged \
-            --network host \
-            --pid host \
-            --volume /tmp/trace_data:/tmp/trace_data \
-            --volume /sys:/sys \
-            --volume /proc:/proc:ro \
-            --volume /dev:/dev:ro \
-            --user 0 \
-            "${COLLECTOR_IMAGE}" \
+
+          echo "Starting trace collection for ${TRACE_DURATION} seconds using local collector binary..."
+
+          # Run collector binary in trace mode with sudo for BPF access
+          sudo ./collector-bin/collector \
             --trace \
             --prefix "/tmp/trace_data/trace-" \
             --duration "${TRACE_DURATION}" \
             --parquet-file-size 4000000000 \
             --storage-type local
-          
+
           echo "Trace collection completed"
-          
+
           # List trace files
           echo "Generated trace files:"
           ls -la /tmp/trace_data/
@@ -477,14 +552,22 @@ jobs:
           path: system_metrics/
           retention-days: 28
 
-      - name: (collector) Send SIGINT to Collector
-        run: |
-          kubectl exec -n default $(kubectl get pods -l app.kubernetes.io/name=collector -o name | cut -d/ -f2) -- /bin/sh -c "kill -INT 1"
-          sleep 10
-
       - name: (collector) Print Collector Logs
         run: |
           kubectl logs -l app.kubernetes.io/name=collector || true
+
+      - name: (collector) Describe Collectors Pre-Uninstall
+        run: |
+          echo "-- Our collector pods (name, restartCount, startedAt) --"
+          kubectl get pods -l app.kubernetes.io/name=collector -o wide || true
+          kubectl get pods -l app.kubernetes.io/name=collector -o jsonpath='{range .items[*]}{.metadata.name}{" restartCount="}{.status.containerStatuses[0].restartCount}{" startedAt="}{.status.containerStatuses[0].state.running.startedAt}{"\n"}{end}' || true
+
+          echo "-- Describe our collector pods --"
+          kubectl describe pods -l app.kubernetes.io/name=collector || true
+
+          echo "-- OpenTelemetry Collector pods (baseline) --"
+          kubectl get pods -l app.kubernetes.io/name=opentelemetry-collector -o wide || true
+          kubectl describe pods -l app.kubernetes.io/name=opentelemetry-collector || true
 
       - name: (collector) Uninstall Collector Helm Chart
         run: |
@@ -540,6 +623,41 @@ jobs:
         with:
           name: collector-parquet-results
           path: /tmp/collector-parquet.parquet
+          retention-days: 28
+
+      - name: (collector) Get Resctrl Parquet Files
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+        run: |
+          UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
+          RESCTRL_PREFIX="${UUID_PREFIX}resctrl-occupancy-"
+
+          echo "Checking for resctrl files with prefix ${RESCTRL_PREFIX} in S3 bucket ${S3_BUCKET}"
+          S3_FILES=$(aws s3 ls "s3://${S3_BUCKET}/${RESCTRL_PREFIX}" --recursive || echo "")
+
+          if [ -z "$S3_FILES" ]; then
+            echo "No resctrl files found with prefix ${RESCTRL_PREFIX} in bucket ${S3_BUCKET}"
+            exit 1
+          else
+            echo "Found resctrl files with prefix ${RESCTRL_PREFIX}:"
+            echo "$S3_FILES"
+
+            mkdir -p /tmp/resctrl-parquet
+            echo "$S3_FILES" | awk '{print $4}' | while read -r key; do
+              echo "Downloading s3://${S3_BUCKET}/${key}"
+              aws s3 cp "s3://${S3_BUCKET}/${key}" /tmp/resctrl-parquet/
+            done
+
+            echo "Downloaded resctrl files:"
+            ls -la /tmp/resctrl-parquet/ || true
+          fi
+
+      - name: (collector) Upload Resctrl Results as Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: resctrl-parquet-results
+          path: /tmp/resctrl-parquet/
           retention-days: 28
 
       - name: (trace) Upload Trace Results as Artifacts
@@ -630,8 +748,24 @@ jobs:
       - name: (install) Install build tools
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: build-essential
+          # Ensure a working C toolchain is present for Rust linking
+          # `build-essential` brings headers/make; `gcc` provides the compiler
+          packages: build-essential gcc
           version: 1.0
+
+      - name: (install) Ensure `cc` is available
+        run: |
+          set -e
+          if ! command -v cc >/dev/null 2>&1; then
+            if command -v gcc >/dev/null 2>&1; then
+              echo "Creating /usr/bin/cc -> /usr/bin/gcc symlink"
+              sudo ln -sf /usr/bin/gcc /usr/bin/cc
+            else
+              echo "gcc not found after installation" >&2
+              exit 1
+            fi
+          fi
+          echo "Using C compiler: $(cc --version | head -n1)"
 
       - name: (install) Install Rust and addr2line
         run: |

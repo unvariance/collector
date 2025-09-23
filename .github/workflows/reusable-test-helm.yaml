@@ -119,9 +119,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        trace-mode: [false, true]
+        output-mode: [aggregate, trace, resctrl]
     env:
-      RELEASE_NAME: collector-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
+      RELEASE_NAME: collector-${{ matrix.output-mode }}
       S3_BUCKET: "unvariance-collector-test-irsa"  # Same bucket used in IAM role testing
       AWS_REGION: ${{ secrets.AWS_REGION }}
       KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -131,7 +131,7 @@ jobs:
       IMAGE_TAG: ${{ inputs.collector-image-tag || 'latest' }}
       NRI_INIT_REPOSITORY: ${{ inputs.nri-init-image-repo }}
       NRI_INIT_TAG: ${{ inputs.nri-init-tag || 'latest' }}
-      TRACE_MODE: ${{ matrix.trace-mode }}
+      OUTPUT_MODE: ${{ matrix.output-mode }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -167,17 +167,27 @@ jobs:
       - name: Deploy Collector Helm Chart
         run: |
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
-          
-          # Create values override file
+
+          # Derive trace flag from output mode
+          case "${OUTPUT_MODE}" in
+            trace)
+              TRACE_FLAG=true
+              ;;
+            *)
+              TRACE_FLAG=false
+              ;;
+          esac
+
+          # Create values override file common to all modes
           cat > values-override.yaml << EOF
           image:
             repository: "${IMAGE_REPOSITORY}"
             tag: "${IMAGE_TAG}"
-            
+
           collector:
             verbose: true
-            trace: ${TRACE_MODE}
-          
+            trace: ${TRACE_FLAG}
+
           storage:
             type: "s3"
             prefix: "${UUID_PREFIX}"
@@ -186,18 +196,29 @@ jobs:
               region: "${AWS_REGION}"
               auth:
                 method: "iam"  # Using IAM role
-          
+
           nri:
             init:
               image:
                 repository: "${NRI_INIT_REPOSITORY}"
                 tag: "${NRI_INIT_TAG}"
           EOF
-          
+
+          # For resctrl mode, enable resctrl and ensure outputs share the UUID prefix
+          if [ "${OUTPUT_MODE}" = "resctrl" ]; then
+            cat >> values-override.yaml << EOF
+          resctrl:
+            enabled: true
+            autoMountHost: true
+            prefix: "resctrl-occupancy-${UUID_PREFIX}"
+          EOF
+          fi
+
           # Print the values being used
           echo "Using image: ${IMAGE_REPOSITORY}:${IMAGE_TAG}"
-          
-          # Install the helm chart
+          echo "Output mode: ${OUTPUT_MODE} (trace=${TRACE_FLAG})"
+
+          # Install/upgrade the helm chart
           helm upgrade --install ${RELEASE_NAME} ./charts/collector -f values-override.yaml
 
       - name: Wait for Collector Pods to be Ready
@@ -243,16 +264,21 @@ jobs:
       - name: Check for Files in S3
         run: |
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}"
-          echo "Checking for files with prefix ${UUID_PREFIX} in S3 bucket ${S3_BUCKET}"
+          if [ "${OUTPUT_MODE}" = "resctrl" ]; then
+            SEARCH_PREFIX="resctrl-occupancy-${UUID_PREFIX}"
+          else
+            SEARCH_PREFIX="${UUID_PREFIX}"
+          fi
+          echo "Checking for files with prefix ${SEARCH_PREFIX} in S3 bucket ${S3_BUCKET}"
           
           # List files with the UUID prefix
-          S3_FILES=$(aws s3 ls "s3://${S3_BUCKET}/${UUID_PREFIX}" --recursive || echo "")
+          S3_FILES=$(aws s3 ls "s3://${S3_BUCKET}/${SEARCH_PREFIX}" --recursive || echo "")
           
           if [ -z "$S3_FILES" ]; then
-            echo "No files found with prefix ${UUID_PREFIX} in bucket ${S3_BUCKET}"
+            echo "No files found with prefix ${SEARCH_PREFIX} in bucket ${S3_BUCKET}"
             exit 1
           else
-            echo "Found files with prefix ${UUID_PREFIX}:"
+            echo "Found files with prefix ${SEARCH_PREFIX}:"
             echo "$S3_FILES"
             
             # Get the first file path
@@ -272,7 +298,7 @@ jobs:
       - name: Upload Test Results
         uses: actions/upload-artifact@v4
         with:
-          name: helm-chart-test-results-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
+          name: helm-chart-test-results-${{ matrix.output-mode }}
           path: /tmp/test-parquet.parquet
           if-no-files-found: warn
 
@@ -283,12 +309,12 @@ jobs:
     if: always()  # Run even if helm-chart-deployment fails
     strategy:
       matrix:
-        trace-mode: [false, true]
+        output-mode: [aggregate, trace, resctrl]
     steps:
       - name: Download Artifacts
         uses: actions/download-artifact@v4
         with:
-          name: helm-chart-test-results-${{ matrix.trace-mode == true && 'trace' || 'aggregated' }}
+          name: helm-chart-test-results-${{ matrix.output-mode }}
           path: parquet-data
 
       - name: Install pqrs
@@ -302,7 +328,7 @@ jobs:
 
       - name: Verify Parquet File Schema and Contents
         run: |
-          echo "Verifying Parquet files for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode..."
+          echo "Verifying Parquet files for ${{ matrix.output-mode }} mode..."
           
           # Find the parquet file
           PARQUET_FILE=$(find parquet-data -name "*.parquet" -type f | head -n 1)
@@ -328,18 +354,21 @@ jobs:
           pqrs schema "$PARQUET_FILE" > schema.txt
           cat schema.txt
           
-          # Define field lists for different modes
-          if [ "${{ matrix.trace-mode }}" = "true" ]; then
-            echo "Setting up trace mode field verification..."
-            REQUIRED_FIELDS=("pid" "timestamp" "cpu_id" "is_context_switch" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses" "next_tgid")
-          else
-            echo "Setting up aggregated mode field verification..."
-            REQUIRED_FIELDS=("pid" "start_time" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses")
-          fi
-
-          # NRI enrichment fields are expected in both modes (nullable)
-          ENRICH_FIELDS=("pod_name" "pod_namespace" "pod_uid" "container_name" "container_id")
-          REQUIRED_FIELDS+=("${ENRICH_FIELDS[@]}")
+          # Define field lists for different output modes
+          case "${{ matrix.output-mode }}" in
+            trace)
+              echo "Setting up trace mode field verification..."
+              REQUIRED_FIELDS=("pid" "timestamp" "cpu_id" "is_context_switch" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses" "next_tgid" "pod_name" "pod_namespace" "pod_uid" "container_name" "container_id")
+              ;;
+            aggregate)
+              echo "Setting up aggregate mode field verification..."
+              REQUIRED_FIELDS=("pid" "start_time" "cgroup_id" "cache_references" "cycles" "instructions" "llc_misses" "pod_name" "pod_namespace" "pod_uid" "container_name" "container_id")
+              ;;
+            resctrl)
+              echo "Setting up resctrl mode field verification..."
+              REQUIRED_FIELDS=("start_timestamp" "timestamp" "pod_namespace" "pod_name" "pod_uid" "resctrl_group" "llc_occupancy_bytes")
+              ;;
+          esac
           
           # Verify all required fields are present in schema (including NRI enrichment)
           echo "Verifying required fields in schema..."
@@ -352,37 +381,35 @@ jobs:
             fi
           done
           
-          # Sample records and verify content using JSON output
-          echo "Sampling records with JSON output..."
-          pqrs sample --records 100 --json "$PARQUET_FILE" > sample.json
-          
-          # Verify field values - check that each field has at least 2 different values
-          echo "Verifying field values have sufficient diversity..."
-          
-          # Define fields that should only warn (VM might not support these performance counters)
-          WARN_ONLY_FIELDS=("cache_references" "llc_misses")
-          
-          for field in "${REQUIRED_FIELDS[@]}"; do
-            echo "Checking field: $field"
-            
-            # Extract all values for this field and count unique values
-            UNIQUE_VALUES=$(jq -r ".${field} // null" sample.json | sort -u | wc -l)
-            echo "  Unique values in $field: $UNIQUE_VALUES"
-            
-            if [ "$UNIQUE_VALUES" -lt 2 ]; then
-              # Check if this field should only warn (performance counters that might not be supported on VM)
-              if [[ " ${WARN_ONLY_FIELDS[*]} " =~ " ${field} " ]]; then
-                echo "  WARNING: Field '$field' has less than 2 different values ($UNIQUE_VALUES) - this might indicate VM doesn't support this performance counter"
+          # For aggregate/trace, perform a light diversity check; skip for resctrl
+          if [ "${{ matrix.output-mode }}" != "resctrl" ]; then
+            echo "Sampling records with JSON output..."
+            pqrs sample --records 100 --json "$PARQUET_FILE" > sample.json
+
+            echo "Verifying field values have sufficient diversity..."
+            # Fields that should only warn (VM might not support these performance counters)
+            WARN_ONLY_FIELDS=("cache_references" "llc_misses")
+
+            for field in "${REQUIRED_FIELDS[@]}"; do
+              echo "Checking field: $field"
+              UNIQUE_VALUES=$(jq -r ".${field} // null" sample.json | sort -u | wc -l)
+              echo "  Unique values in $field: $UNIQUE_VALUES"
+              if [ "$UNIQUE_VALUES" -lt 2 ]; then
+                if [[ " ${WARN_ONLY_FIELDS[*]} " =~ " ${field} " ]]; then
+                  echo "  WARNING: Field '$field' has <2 different values ($UNIQUE_VALUES)"
+                else
+                  echo "  ERROR: Field '$field' has <2 different values ($UNIQUE_VALUES)"
+                  exit 1
+                fi
               else
-                echo "  ERROR: Field '$field' has less than 2 different values ($UNIQUE_VALUES)"
-                exit 1
+                echo "  ✓ Field '$field' has sufficient diversity"
               fi
-            else
-              echo "  ✓ Field '$field' has sufficient diversity"
-            fi
-          done
-          
-          echo "Parquet file verification completed successfully for ${{ matrix.trace-mode == true && 'trace' || 'aggregated' }} mode"
+            done
+          else
+            echo "Skipping diversity checks for resctrl mode"
+          fi
+
+          echo "Parquet file verification completed successfully for ${{ matrix.output-mode }} mode"
 
 
   stop-runner:

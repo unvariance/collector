@@ -115,7 +115,9 @@ securityContext:
       - "BPF"
       - "PERFMON"
       - "SYS_RESOURCE"
+      - "SYS_ADMIN" # can disable if kernel.perf_event_paranoid <= 2
   runAsUser: 0  # Required for eBPF operations
+  appArmorProfile: {} # uses Unconfinded when resctrl.enabled=true, Kubernetes default otherwise
 ```
 
 If you encounter issues with eBPF functionality, you may need to run in privileged mode:
@@ -213,7 +215,32 @@ resctrl:
   # Unlike the main collector stream (which uses `storage.prefix`),
   # resctrl files use this separate prefix to avoid mixing outputs.
   prefix: "resctrl-occupancy-"
+  # If your nodes do not already have resctrl mounted, you can let the
+  # chart mount it on the host with a small privileged initContainer.
+  # This requires clusters that allow privileged pods and mount propagation.
+  autoMountHost: false
+  init:
+    image:
+      repository: busybox
+      tag: "1.36"
+      pullPolicy: IfNotPresent
+    securityContext:
+      privileged: true
+      allowPrivilegeEscalation: true
+      runAsUser: 0
 ```
+
+Requirements when enabling resctrl:
+
+- Writable mount of the host resctrl filesystem into the pod: the chart mounts
+  `hostPath: /sys/fs/resctrl` at the same path inside the container with readOnly=false.
+  `resctrl.autoMountHost: true` lets the chart mount resctrl on the host if missing. This requires
+  privileged access.
+- AppArmor: If your nodes enforce an AppArmor profile that blocks writes under `/sys/fs/resctrl`,
+  set `securityContext.appArmorProfile.type: Unconfined` for the collector container (or provide a
+  permissive Localhost profile). When `resctrl.enabled=true` and no AppArmor is explicitly configured,
+  the chart defaults the collector container to `appArmorProfile.type: Unconfined` to allow
+  writes under `/sys/fs/resctrl`.
 
 ## Pod Security Standards Compatibility
 
@@ -234,8 +261,9 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `serviceAccount.name` | Service account name | `""` |
 | `serviceAccount.annotations` | Service account annotations | `{}` |
 | `securityContext.privileged` | Run container as privileged | `false` |
-| `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE"]` |
+| `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE", "SYS_ADMIN"]` |
 | `securityContext.runAsUser` | User ID to run as | `0` |
+| `securityContext.appArmorProfile` | AppArmor profile for the container (type: RuntimeDefault, Unconfined, Localhost) | `{}` |
 | `collector.verbose` | Enable verbose debug output | `false` |
 | `collector.duration` | Track duration in seconds (0 = unlimited) | `0` |
 | `collector.trace` | Enable trace mode to output raw telemetry events at nanosecond granularity to parquet | `false` |
