@@ -117,7 +117,11 @@ securityContext:
       - "SYS_RESOURCE"
       - "SYS_ADMIN" # can disable if kernel.perf_event_paranoid <= 2
   runAsUser: 0  # Required for eBPF operations
-  appArmorProfile: {} # uses Unconfinded when resctrl.enabled=true, Kubernetes default otherwise
+  # Optional AppArmor profile (unset by default). When unset and
+  # resctrl.enabled=true, the chart defaults the container to Unconfined.
+  # Example:
+  # appArmorProfile:
+  #   type: RuntimeDefault
 ```
 
 If you encounter issues with eBPF functionality, you may need to run in privileged mode:
@@ -263,7 +267,7 @@ The Memory Collector requires access to host resources and kernel facilities, wh
 | `securityContext.privileged` | Run container as privileged | `false` |
 | `securityContext.capabilities.add` | Add capabilities to the container | `["BPF", "PERFMON", "SYS_RESOURCE", "SYS_ADMIN"]` |
 | `securityContext.runAsUser` | User ID to run as | `0` |
-| `securityContext.appArmorProfile` | AppArmor profile for the container (type: RuntimeDefault, Unconfined, Localhost) | `{}` |
+| `securityContext.appArmorProfile` | Optional AppArmor profile for the container (type: RuntimeDefault, Unconfined, Localhost). When unset and `resctrl.enabled=true`, defaults to Unconfined. | not set |
 | `collector.verbose` | Enable verbose debug output | `false` |
 | `collector.duration` | Track duration in seconds (0 = unlimited) | `0` |
 | `collector.trace` | Enable trace mode to output raw telemetry events at nanosecond granularity to parquet | `false` |
