@@ -204,6 +204,19 @@ jobs:
                 tag: "${NRI_INIT_TAG}"
           EOF
 
+          # For trace mode, increase memory limits to 3x chart defaults
+          if [ "${OUTPUT_MODE}" = "trace" ]; then
+            # Chart defaults: limits.memory=350Mi, requests.memory=250Mi
+            # Use 3x to avoid OOM during trace runs: 1050Mi / 750Mi
+            cat >> values-override.yaml << EOF
+          resources:
+            limits:
+              memory: 1050Mi
+            requests:
+              memory: 750Mi
+          EOF
+          fi
+
           # For resctrl mode, enable resctrl and ensure outputs share the UUID prefix
           if [ "${OUTPUT_MODE}" = "resctrl" ]; then
             cat >> values-override.yaml << EOF
