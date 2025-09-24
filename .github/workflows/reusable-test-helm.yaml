@@ -164,6 +164,17 @@ jobs:
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
 
+      - name: Raise perf_event mlock limit (trace only)
+        if: ${{ matrix.output-mode == 'trace' }}
+        run: |
+          set -euxo pipefail
+          echo "Before: kernel.perf_event_mlock_kb=$(sysctl -n kernel.perf_event_mlock_kb)"
+          # Increase limit to 1 GiB to accommodate large per-CPU perf ring buffers
+          (sysctl -w kernel.perf_event_mlock_kb=1048576) || (sudo sysctl -w kernel.perf_event_mlock_kb=1048576)
+          # Loosen paranoid if needed (non-fatal if already permissive)
+          (sysctl -w kernel.perf_event_paranoid=2 || true) || (sudo sysctl -w kernel.perf_event_paranoid=2 || true)
+          echo "After:  kernel.perf_event_mlock_kb=$(sysctl -n kernel.perf_event_mlock_kb)"
+
       - name: Deploy Collector Helm Chart
         run: |
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
