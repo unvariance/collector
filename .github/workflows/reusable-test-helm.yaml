@@ -408,7 +408,7 @@ jobs:
           # For aggregate/trace, perform a light diversity check; skip for resctrl
           if [ "${{ matrix.output-mode }}" != "resctrl" ]; then
             echo "Sampling records with JSON output..."
-            pqrs sample --records 100 --json "$PARQUET_FILE" > sample.json
+            pqrs sample --records 1000 --json "$PARQUET_FILE" > sample.json
 
             echo "Verifying field values have sufficient diversity..."
             # Fields that should only warn (VM might not support these performance counters)
