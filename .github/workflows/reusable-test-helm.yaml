@@ -164,6 +164,17 @@ jobs:
           echo "Using UUID prefix: $UUID"
           echo "uuid=$UUID" >> $GITHUB_OUTPUT
 
+      - name: Raise perf_event mlock limit (trace only)
+        if: ${{ matrix.output-mode == 'trace' }}
+        run: |
+          set -euxo pipefail
+          echo "Before: kernel.perf_event_mlock_kb=$(sysctl -n kernel.perf_event_mlock_kb)"
+          # Increase limit to 1 GiB to accommodate large per-CPU perf ring buffers
+          (sysctl -w kernel.perf_event_mlock_kb=1048576) || (sudo sysctl -w kernel.perf_event_mlock_kb=1048576)
+          # Loosen paranoid if needed (non-fatal if already permissive)
+          (sysctl -w kernel.perf_event_paranoid=2 || true) || (sudo sysctl -w kernel.perf_event_paranoid=2 || true)
+          echo "After:  kernel.perf_event_mlock_kb=$(sysctl -n kernel.perf_event_mlock_kb)"
+
       - name: Deploy Collector Helm Chart
         run: |
           UUID_PREFIX="${{ steps.generate-uuid.outputs.uuid }}-"
@@ -203,6 +214,19 @@ jobs:
                 repository: "${NRI_INIT_REPOSITORY}"
                 tag: "${NRI_INIT_TAG}"
           EOF
+
+          # For trace mode, increase memory limits to 3x chart defaults
+          if [ "${OUTPUT_MODE}" = "trace" ]; then
+            # Chart defaults: limits.memory=350Mi, requests.memory=250Mi
+            # Use 3x to avoid OOM during trace runs: 1050Mi / 750Mi
+            cat >> values-override.yaml << EOF
+          resources:
+            limits:
+              memory: 1050Mi
+            requests:
+              memory: 750Mi
+          EOF
+          fi
 
           # For resctrl mode, enable resctrl and ensure outputs share the UUID prefix
           if [ "${OUTPUT_MODE}" = "resctrl" ]; then
@@ -384,7 +408,7 @@ jobs:
           # For aggregate/trace, perform a light diversity check; skip for resctrl
           if [ "${{ matrix.output-mode }}" != "resctrl" ]; then
             echo "Sampling records with JSON output..."
-            pqrs sample --records 100 --json "$PARQUET_FILE" > sample.json
+            pqrs sample --records 1000 --json "$PARQUET_FILE" > sample.json
 
             echo "Verifying field values have sufficient diversity..."
             # Fields that should only warn (VM might not support these performance counters)
