@@ -6,7 +6,7 @@ on:
       instance-type:
         description: EC2 instance type
         required: false
-        default: m7i.xlarge
+        default: m7i.metal-24xl
         type: string
       collector-image-artifact:
         description: Name of collector image artifact to use
