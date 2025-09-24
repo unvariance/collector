@@ -38,14 +38,25 @@ jobs:
       short-sha: ${{ steps.sha.outputs.SHORT_SHA }}
       is-pr: ${{ github.event_name == 'pull_request' }}
       level: ${{ steps.level.outputs.level }}
+      run-multi-kernel-tests: ${{ steps.changed.outputs.any_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Compute short SHA
         id: sha
         run: |
           SHORT_SHA=$(git rev-parse --short=7 ${{ github.sha }})
           echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+      - name: Detect changes in eBPF-related crates
+        id: changed
+        uses: tj-actions/changed-files@v45
+        with:
+          files: |
+            crates/bpf/**
+            crates/bpf-sync-timer/**
+            crates/per_events/**
       - name: Select level
         id: level
         run: |
@@ -106,6 +117,7 @@ jobs:
       level: ${{ needs.context.outputs.level }}
       collector-binary-artifact: collector-binary
       instance-type: ${{ needs.context.outputs.level == 'perf-short' && 'c5.9xlarge' || 'm7i.metal-24xl' }}
+      run-multi-kernel-tests: ${{ needs.context.outputs["run-multi-kernel-tests"] == 'true' }}
 
   test-resctrl-collector:
     if: needs.context.outputs.level == 'full-long'

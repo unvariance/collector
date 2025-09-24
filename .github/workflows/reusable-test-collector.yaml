@@ -17,6 +17,11 @@ on:
         required: false
         default: m7i.metal-24xl
         type: string
+      run-multi-kernel-tests:
+        description: Whether to run multi-kernel tests (requires QEMU/LVH capable runner)
+        required: false
+        default: false
+        type: boolean
     secrets:
       AWS_ROLE_ARN:
         required: false
@@ -72,228 +77,13 @@ jobs:
           sudo "$TEST_BIN" --ignored
 
   test-multi-kernel:
-    name: Test on Multiple Kernels
     needs: [setup-runner, prepare-runner]
-    runs-on: ${{ needs.setup-runner.outputs.runner-label }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          - kernel: '5.10-20250507.063028'
-            should_succeed: false
-            description: 'Kernel 5.10 (should fail - does not have bpf timer support)'
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          - kernel: '5.15-20250507.063028'
-            should_succeed: true
-            description: 'Kernel 5.15 (should succeed - legacy timer mode - relative time supported)'
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          - kernel: '6.1-20250507.063028'
-            should_succeed: true
-            description: 'Kernel 6.1 (should succeed - legacy timer mode - relative time supported)'
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          - kernel: '6.6-20250507.063028'
-            should_succeed: true
-            description: 'Kernel 6.6 (should succeed - intermediate timer mode - absolute time supported)'
-          # renovate: datasource=docker depName=quay.io/lvh-images/complexity-test
-          - kernel: '6.12-20250507.063028'
-            should_succeed: true
-            description: 'Kernel 6.12 (should succeed - modern timer mode - CPU pinning + absolute time supported)'
-    timeout-minutes: 5
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-
-      - name: Download collector binary
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.collector-binary-artifact }}
-          path: ./artifacts
-        
-      - name: Copy pqrs to workspace for guest access
-        run: |
-          # Create a tools directory in the workspace
-          mkdir -p tools
-          # Copy pqrs binary to the workspace so it's accessible in the guest VM
-          cp -f /usr/local/bin/pqrs tools/
-          chmod +x tools/pqrs
-
-      - name: Provision LVH VM
-        uses: yonch/little-vm-helper@main
-        with:
-          test-name: collector-kernel-${{ matrix.kernel }}
-          image: 'complexity-test'
-          image-version: ${{ matrix.kernel }}
-          host-mount: ./
-          images-folder-parent: "/tmp"
-          cpu: 2
-          mem: 2G
-          cpu-kind: 'host,pmu=on'
-          lvh-version: "v0.0.23"
-          install-dependencies: 'true'
-          verbose: 'true'
-          cmd: |
-            # Wait for networking to be ready
-            for i in {1..5}; do curl "https://golang.org" > /dev/null 2>&1 && break || sleep 5; echo "Waiting for systemd-resolved to be ready..."; done
-            
-            git config --global --add safe.directory /host
-            uname -a
-            
-            # Check if perf events are available
-            echo "Checking perf event capabilities..."
-            ls -la /sys/bus/event_source/devices/ || echo "No perf event devices found"
-            ls -la /proc/sys/kernel/perf_event_* || echo "No perf event sysctls found"
-            cat /proc/cpuinfo | grep -i "pmu\|perf" || echo "No PMU features in cpuinfo"
-            echo "perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
-            echo 0 > /proc/sys/kernel/perf_event_paranoid
-
-            echo "available_clocksource:"
-            cat /sys/devices/system/clocksource/clocksource0/available_clocksource || echo "No available clocksource found"
-            echo "current_clocksource:"
-            cat /sys/devices/system/clocksource/clocksource0/current_clocksource || echo "No current clocksource found"
-
-            echo "timer_list:"
-            cat /proc/timer_list || echo "No timer list found"
-            echo "dmesg timer:"
-            dmesg | grep -i timer || echo "No timer found in dmesg"
-
-            echo mounts:
-            mount
-
-      - name: Test Collector on ${{ matrix.description }}
-        uses: yonch/little-vm-helper@main
-        with:
-          provision: 'false'
-          cmd: |
-            echo "Testing memory collector on kernel: ${{ matrix.description }}"
-            uname -a
-            cd /host
-            
-            # Make collector executable
-            chmod +x ./artifacts/collector
-            
-            echo "=== Testing memory collector on ${{ matrix.description }} ==="
-            echo "Kernel version: $(uname -a)"
-            echo "Expected result: ${{ matrix.should_succeed && 'SUCCESS' || 'FAILURE with kernel version error' }}"
-            echo
-            
-            # Set up test environment
-            mkdir -p /tmp/test-output
-            
-            # Run the collector and capture both stdout and stderr
-            echo "Running collector for 5 seconds..."
-            set +e  # Don't exit on error
-            RUST_LOG=debug ./artifacts/collector -d 5 --storage-type local --prefix "/tmp/test-output/metrics-" --verbose > /tmp/collector-output.log 2>&1
-            COLLECTOR_EXIT_CODE=$?
-            set -e
-            
-            echo "=== Collector Output ==="
-            cat /tmp/collector-output.log
-            echo "========================"
-            echo "Collector exit code: $COLLECTOR_EXIT_CODE"
-            echo
-            
-            # Handle empty exit code (fallback for safety)
-            if [ -z "$COLLECTOR_EXIT_CODE" ]; then
-              echo "Error: Exit code is empty (unexpected)"
-              exit 1
-            fi
-            
-            # Check if the behavior matches expectations
-            if [ "${{ matrix.should_succeed }}" = "true" ]; then
-              # For kernels 6.7+, expect success
-              if [ "$COLLECTOR_EXIT_CODE" -eq "0" ]; then
-                echo "✅ SUCCESS: Collector ran successfully on supported kernel"
-                
-                # Verify parquet files were created
-                if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
-                  echo "✅ SUCCESS: Parquet files were created"
-                  echo "Created files:"
-                  ls -la /tmp/test-output/metrics-*.parquet
-                else
-                  echo "❌ UNEXPECTED: No parquet files found despite successful run"
-                  exit 1
-                fi
-              else
-                echo "❌ UNEXPECTED: Collector failed on supported kernel (exit code: $COLLECTOR_EXIT_CODE)"
-                exit 1
-              fi
-            else
-              # For kernels < 6.7, expect failure with kernel error message
-              if [ "$COLLECTOR_EXIT_CODE" -ne "0" ]; then
-                echo "✅ EXPECTED: Collector failed on unsupported kernel (exit code: $COLLECTOR_EXIT_CODE)"
-                
-                # Check if the error message mentions kernel 6.7 requirement
-                if grep -i "kernel 6\.7" /tmp/collector-output.log; then
-                  echo "✅ SUCCESS: Error message correctly mentions kernel 6.7 requirement"
-                else
-                  echo "❌ IMPROVEMENT NEEDED: Error message should mention kernel 6.7 requirement"
-                  echo "Current error output:"
-                  cat /tmp/collector-output.log
-                  # Don't fail the test, just note the improvement needed
-                fi
-                
-                # Verify no parquet files were created
-                if ! ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
-                  echo "✅ SUCCESS: No parquet files created on unsupported kernel"
-                else
-                  echo "❌ UNEXPECTED: Parquet files were created despite failure"
-                  exit 1
-                fi
-              else
-                echo "❌ UNEXPECTED: Collector succeeded on unsupported kernel"
-                echo "This suggests the kernel version detection/error handling needs improvement"
-                exit 1
-              fi
-            fi
-            
-            echo "=== Test completed for ${{ matrix.description }} ==="
-
-      - name: Display parquet file contents
-        if: matrix.should_succeed == true
-        uses: yonch/little-vm-helper@main
-        with:
-          provision: 'false'
-          cmd: |
-            echo "=== Displaying parquet file contents for ${{ matrix.description }} ==="
-            cd /host
-            
-            # Find all parquet files in /tmp/test-output
-            if ls /tmp/test-output/metrics-*.parquet >/dev/null 2>&1; then
-              echo "Found parquet files:"
-              ls -la /tmp/test-output/metrics-*.parquet
-              echo
-              
-              # Display contents of each parquet file using pqrs from the tools directory
-              for parquet_file in /tmp/test-output/metrics-*.parquet; do
-                echo "=== Contents of $(basename $parquet_file) ==="
-                /host/tools/pqrs cat --csv "$parquet_file" || echo "Failed to read parquet file: $parquet_file"
-                echo
-              done
-            else
-              echo "No parquet files found in /tmp/test-output/"
-            fi
-            echo "=== End of parquet file contents ==="
-
-      - name: Stop qemu
-        if: always()
-        run: |
-          sudo pkill -f qemu-system-x86_64
-
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-test-${{ matrix.kernel }}-logs
-          path: |
-            /tmp/collector-output.log
-            /tmp/test-output/
-          if-no-files-found: ignore
-          retention-days: 5
-
+    if: inputs.run-multi-kernel-tests == true
+    uses: ./.github/workflows/reusable-test-multi-kernel-collector.yaml
+    with:
+      runner-label: ${{ needs.setup-runner.outputs.runner-label }}
+      collector-binary-artifact: ${{ inputs.collector-binary-artifact }}
+      
   setup-runner:
     if: inputs.level != 'cheap-short'
     name: Start EC2 runner
