@@ -137,4 +137,4 @@ jobs:
       nri-init-image-repo: ${{ needs.build-nri-init.outputs.image_repo }}
       nri-init-tag: ${{ needs.build-nri-init.outputs.image_tag }}
       nri-init-image-artifact: ${{ needs.build-nri-init.outputs.image_artifact }}
-      instance-type: m7i.xlarge
+      instance-type: m7i.metal-24xl
