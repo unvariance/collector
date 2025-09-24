@@ -122,7 +122,7 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
             {{- /* Determine effective AppArmor profile:
-                  1) If user explicitly sets securityContext.appArmorProfile, render it verbatim
+                  1) If user explicitly sets securityContext.appArmorProfile, it is rendered verbatim with securityContext above
                   2) Else, when resctrl.enabled is true, default to Unconfined
                   3) Otherwise, omit to use runtime default behavior
                 */ -}}
@@ -130,9 +130,6 @@ spec:
             {{- if and (not $aa) .Values.resctrl.enabled }}
             appArmorProfile:
               type: "Unconfined"
-            {{- else if $aa }}
-            appArmorProfile:
-              {{- toYaml $aa | nindent 14 }}
             {{- end }}
           args:
             {{- if .Values.collector.verbose }}

@@ -34,9 +34,10 @@ securityContext:
       # To remove this, ensure kernel.perf_event_paranoid is set to 2 or below.
       - "SYS_ADMIN"
   runAsUser: 0      # Required for loading eBPF programs and writing to `kernel.timer_migration`
-  # Optional: configure AppArmor via container securityContext
-  # If empty, defaults to Unconfined when resctrl.enabled=true
-  appArmorProfile: {}
+  # Optional: configure AppArmor via container securityContext. Not set by default.
+  # When unset and resctrl.enabled=true, the chart adds appArmorProfile.type=Unconfined.
+  # appArmorProfile:
+  #   type: RuntimeDefault
 
 # Collector configuration
 collector:
