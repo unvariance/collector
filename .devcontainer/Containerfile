@@ -29,6 +29,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     kmod \
     r-base \
+    bc \
     && rm -rf /var/lib/apt/lists/*
 
 RUN ln -s /usr/bin/clang-19 /usr/bin/clang
