@@ -790,7 +790,8 @@ async fn test_capacity_retry_e2e() -> anyhow::Result<()> {
         },
         tx,
     ));
-    let (nri, _join_handle) = NRI::new(socket, plugin.clone(), "resctrl-plugin-capacity", "10").await?;
+    let (nri, _join_handle) =
+        NRI::new(socket, plugin.clone(), "resctrl-plugin-capacity", "10").await?;
     nri.register().await?;
 
     // Wait for initial synchronization: drain events until channel is quiet for 1s
