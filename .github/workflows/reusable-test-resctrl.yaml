@@ -96,7 +96,7 @@ jobs:
 
   nri-resctrl-plugin-e2e:
     name: NRI resctrl plugin full flow (k3s on EC2)
-    needs: [setup-runner, build]
+    needs: [setup-runner, build, resctrl-e2e-smoke]
     runs-on: ${{ needs.setup-runner.outputs.runner-label }}
     timeout-minutes: 20
     steps:
@@ -125,6 +125,30 @@ jobs:
       - name: Prepare test binary
         run: |
           chmod +x ./nri-resctrl-plugin-e2e || true
+
+      - name: Wait for resctrl RMID GC (mon_groups creatable)
+        shell: bash
+        run: |
+          echo "Ensuring resctrl RMIDs are garbage-collected before tests..."
+          MON_GROUPS="/sys/fs/resctrl/mon_groups"
+          if [ ! -d "$MON_GROUPS" ]; then
+            echo "resctrl mon_groups directory not found at $MON_GROUPS"
+            exit 1
+          fi
+          # Try to create and remove a dummy mon_group every second for up to 20 seconds
+          for i in $(seq 1 20); do
+            name="gha-gc-check-$RANDOM-$(date +%s)"
+            dir="$MON_GROUPS/$name"
+            if sudo mkdir "$dir" 2>/dev/null; then
+              echo "Successfully created $dir on attempt $i"
+              # Clean up immediately after success
+              sudo rmdir "$dir" || sudo rm -rf "$dir" || true
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Failed to create a mon_group directory after 20 seconds; RMIDs may still be exhausted."
+          exit 1
 
       - name: Run plugin integration tests (excluding capacity retry)
         env:
