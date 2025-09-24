@@ -117,7 +117,7 @@ jobs:
       level: ${{ needs.context.outputs.level }}
       collector-binary-artifact: collector-binary
       instance-type: ${{ needs.context.outputs.level == 'perf-short' && 'c5.9xlarge' || 'm7i.metal-24xl' }}
-      run-multi-kernel-tests: ${{ needs.context.outputs["run-multi-kernel-tests"] == 'true' }}
+      run-multi-kernel-tests: ${{ needs.context.outputs.run-multi-kernel-tests == 'true' }}
 
   test-resctrl-collector:
     if: needs.context.outputs.level == 'full-long'
