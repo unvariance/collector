@@ -21,7 +21,7 @@ library(tidyr)
 
 # Parse command line arguments
 args <- commandArgs(trailingOnly = TRUE)
-input_file <- if(length(args) >= 1) args[1] else "collector-parquet.parquet"
+input_file <- if(length(args) >= 1) args[1] else "scripts/collector-parquet.parquet"
 start_time_offset <- if(length(args) >= 2) as.numeric(args[2]) else 110  # Default to 110 seconds after start
 window_size <- if(length(args) >= 3) as.numeric(args[3]) else 1  # Default to 1 second window
 output_file <- if(length(args) >= 4) args[4] else "memory_usage"
@@ -35,6 +35,16 @@ BYTES_PER_GB <- 1073741824
 NS_PER_SEC <- 1e9
 # Nanoseconds in a millisecond
 NS_PER_MS <- 1e6
+
+# Derive application/workload name from Kubernetes pod name by stripping replica/hash suffixes
+derive_app_name <- function(pod_name) {
+  if (is.na(pod_name) || pod_name == "") return(NA_character_)
+  # First try: remove two trailing dash-separated tokens (deployment pattern)
+  app <- sub("-[a-z0-9]+-[a-z0-9]+$", "", pod_name)
+  # If nothing changed, try removing a single trailing token (statefulset pattern)
+  if (identical(app, pod_name)) app <- sub("-[a-z0-9]+$", "", pod_name)
+  app
+}
 
 # Function to load and process parquet data
 load_and_process_parquet <- function(file_path, time_offset_pct, window_size_pct) {
@@ -69,9 +79,20 @@ load_and_process_parquet <- function(file_path, time_offset_pct, window_size_pct
   window_data$ms_bucket <- as.integer((window_data$relative_time_ns - window_start_ns) / NS_PER_MS)
   
   # Replace NULL process names with "kernel" for better visualization
+  if (!"process_name" %in% names(window_data)) {
+    window_data$process_name <- NA_character_
+  }
   window_data$process_name[is.na(window_data$process_name)] <- "kernel"
+
+  # If pod_name annotation is present, derive workload name from pod and prefer it for labeling
+  if (!"pod_name" %in% names(window_data)) {
+    window_data$pod_name <- NA_character_
+  }
+  workload <- vapply(window_data$pod_name, derive_app_name, FUN.VALUE = character(1))
+  # Prefer workload name when available, otherwise keep the original process name
+  window_data$process_name <- ifelse(!is.na(workload) & workload != "", workload, window_data$process_name)
   
-  # Ensure process_name is a factor with ordered levels based on total memory usage (LLC misses + cache references)
+  # Ensure process_name (workload-preferred) is a factor with ordered levels based on total memory usage
   process_totals <- window_data %>%
     group_by(process_name) %>%
     summarise(
